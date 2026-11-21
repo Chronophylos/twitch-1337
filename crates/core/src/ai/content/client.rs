@@ -1,4 +1,4 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -14,6 +14,7 @@ use crate::APP_USER_AGENT;
 use crate::ai::content::detect::{Bucket, detect};
 use crate::settings::ai::AiMedia;
 use crate::util::http::{BodyError, read_capped};
+use crate::util::net::{is_blocked_host_literal, is_non_public_ip};
 use crate::util::truncate_response;
 
 static SSRF_BYPASS: AtomicBool = AtomicBool::new(false);
@@ -173,7 +174,7 @@ impl Resolve for SsrfSafeResolver {
                 && !host_trusted
                 && let Some(a) = addrs
                     .iter()
-                    .find(|a| is_blocked_ip(a.ip()) && !trusted.matches_ip(a.ip()))
+                    .find(|a| is_non_public_ip(a.ip()) && !trusted.matches_ip(a.ip()))
             {
                 return Err(Box::new(BlockedTarget {
                     target: a.ip().to_string(),
@@ -493,69 +494,6 @@ fn collapse_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn is_blocked_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_broadcast()
-                || v4.is_unspecified()
-                || v4.is_documentation()
-                || v4.is_multicast()
-                || is_cgnat(v4)
-                // 0.0.0.0/8 "this network"
-                || a == 0
-                // 198.18.0.0/15 benchmarking
-                || (a == 198 && (b & 0xFE) == 18)
-                // 240.0.0.0/4 reserved (incl. broadcast)
-                || a >= 240
-        }
-        IpAddr::V6(v6) => {
-            let seg = v6.segments();
-            let embedded = |hi: u16, lo: u16| {
-                let [h1, h2] = hi.to_be_bytes();
-                let [l1, l2] = lo.to_be_bytes();
-                is_blocked_ip(IpAddr::V4(Ipv4Addr::new(h1, h2, l1, l2)))
-            };
-            v6.is_loopback()
-                || v6.is_unique_local()
-                || v6.is_unicast_link_local()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || v6
-                    .to_ipv4_mapped()
-                    .is_some_and(|v4| is_blocked_ip(IpAddr::V4(v4)))
-                // NAT64 well-known prefix 64:ff9b::/96, v4 in the low 32 bits
-                || (seg[..6] == [0x64, 0xff9b, 0, 0, 0, 0] && embedded(seg[6], seg[7]))
-                // 6to4 2002::/16, v4 in bits 16..48
-                || (seg[0] == 0x2002 && embedded(seg[1], seg[2]))
-        }
-    }
-}
-
-/// 100.64.0.0/10: carrier-grade NAT, also Tailscale's tailnet range.
-fn is_cgnat(v4: Ipv4Addr) -> bool {
-    let [a, b, ..] = v4.octets();
-    a == 100 && (b & 0xC0) == 64
-}
-
-/// Matches on the parsed `Host`, not `host_str()`: the latter brackets IPv6
-/// (`"[::1]"`), which never parses as an `IpAddr`, and hyper skips the custom
-/// resolver for IP literals, so this is the only guard they get.
-fn is_blocked_host_literal(url: &reqwest::Url) -> bool {
-    match url.host() {
-        None => true,
-        Some(Host::Ipv4(v4)) => is_blocked_ip(v4.into()),
-        Some(Host::Ipv6(v6)) => is_blocked_ip(v6.into()),
-        Some(Host::Domain(host)) => {
-            let host = host.to_ascii_lowercase();
-            host == "localhost" || host.ends_with(".localhost")
-        }
-    }
-}
-
 #[expect(clippy::expect_used, reason = "const CSS selectors are valid")]
 pub(crate) fn extract_readable_text(html: &str) -> String {
     let doc = Html::parse_document(html);
@@ -719,47 +657,6 @@ mod tests {
             &url("http://[fd00::5]:8080/results"),
             &trusted
         ));
-    }
-
-    #[test]
-    fn blocks_extra_special_v4_ranges() {
-        for (blocked, outside) in [
-            ("0.1.2.3", "1.0.0.1"),
-            ("224.0.0.1", "223.255.255.255"),
-            ("239.255.255.255", "223.255.255.254"),
-            ("198.18.0.1", "198.17.255.255"),
-            ("198.19.255.255", "198.20.0.0"),
-            ("240.0.0.1", "8.8.8.8"),
-            ("255.255.255.255", "9.9.9.9"),
-        ] {
-            assert!(is_blocked_ip(ip(blocked)), "{blocked}");
-            assert!(!is_blocked_ip(ip(outside)), "{outside}");
-        }
-    }
-
-    #[test]
-    fn blocks_extra_special_v6_ranges() {
-        assert!(is_blocked_ip(ip("ff02::1")));
-        assert!(!is_blocked_ip(ip("fe00::1")));
-        // NAT64 well-known prefix with embedded v4.
-        assert!(is_blocked_ip(ip("64:ff9b::7f00:1")));
-        assert!(is_blocked_ip(ip("64:ff9b::a00:1")));
-        assert!(!is_blocked_ip(ip("64:ff9b::808:808")));
-        assert!(!is_blocked_ip(ip("64:ff9a::7f00:1")));
-        // 6to4 with embedded v4 in bits 16..48.
-        assert!(is_blocked_ip(ip("2002:7f00:1::1")));
-        assert!(is_blocked_ip(ip("2002:6440:1::1")));
-        assert!(!is_blocked_ip(ip("2002:808:808::1")));
-        assert!(!is_blocked_ip(ip("2003:7f00:1::1")));
-    }
-
-    #[test]
-    fn blocks_cgnat_range() {
-        assert!(is_blocked_ip("100.64.0.1".parse().expect("ip")));
-        assert!(is_blocked_ip("100.127.255.254".parse().expect("ip")));
-        assert!(!is_blocked_ip("100.128.0.1".parse().expect("ip")));
-        assert!(!is_blocked_ip("100.63.255.255".parse().expect("ip")));
-        assert!(is_blocked_ip("::ffff:100.64.0.1".parse().expect("ip")));
     }
 
     #[tokio::test]

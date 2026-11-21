@@ -53,6 +53,15 @@ client_secret = "your_client_secret"
 # [dhl]
 # api_key = "your_dhl_api_key_here"
 
+# Optional: ipinfo.io enrichment for Aurora's lookup_network tool. The tool
+# itself runs on keyless RDAP and is always available; with a token, IP
+# lookups also return city/region/country, ASN/org and hostname. The token
+# is a secret and the entire config surface. There is no dashboard toggle.
+# Adding or removing the section needs a restart.
+# Get a token at https://ipinfo.io/signup.
+# [ipinfo]
+# token = "your_ipinfo_token_here"
+
 # Optional: CubeCoders AMP game-server panel. Presence enables `!servers`
 # (list online servers, `!servers <name>` for details). Create a dedicated
 # AMP user whose role allows only `Instances.*`. url needs http:// or

@@ -203,6 +203,10 @@ where
             crate::pronouns::PronounsClient::new()
                 .wrap_err("build pronouns HTTP client for command composition")?,
         );
+        let rdap = Arc::new(
+            crate::rdap::RdapClient::new()
+                .wrap_err("build RDAP HTTP client for command composition")?,
+        );
 
         command_list.push(Arc::new(ai::command::AiCommand::new(
             ai::command::AiCommandDeps {
@@ -217,6 +221,8 @@ where
                 repology,
                 pronouns,
                 dhl: services.dhl.clone(),
+                rdap,
+                ipinfo: services.ipinfo.clone(),
                 command_catalog: services.command_catalog.clone(),
                 emote_tracker: services.emote_tracker.clone(),
                 langfuse: services.langfuse.clone(),

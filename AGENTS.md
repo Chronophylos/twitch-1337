@@ -4,7 +4,7 @@ Guide for coding agents working in this repo. Claude Code loads it through `CLAU
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), game servers (`!servers [name]`, AMP), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb`), spoiler check (`!spoiler`, decision model), alerts (earthquake + solar flare + Earth-directed CME monitors, passive, configured at `/settings → Alerts`), version (`!v`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`).
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), network lookups (AI tool, RDAP + optional ipinfo), game servers (`!servers [name]`, AMP), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb`), spoiler check (`!spoiler`, decision model), alerts (earthquake + solar flare + Earth-directed CME monitors, passive, configured at `/settings → Alerts`), version (`!v`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`).
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
@@ -190,7 +190,7 @@ preserve the `GIT_SHA` / build-number injection (Justfile `build` recipe).
 
 ## Config
 
-`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[dhl]` (api_key only, optional), `[amp]` (url/username/password, optional), `[finnhub]` (api_key only, optional), `[langfuse]` (public/secret keys, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
+`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[dhl]` (api_key only, optional), `[ipinfo]` (token only, optional), `[amp]` (url/username/password, optional), `[finnhub]` (api_key only, optional), `[langfuse]` (public/secret keys, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
 
 Adding a knob: a secret, or something that must exist before the dashboard, goes in `config.toml.example` + loader; anything runtime-tunable goes in the settings schema + a dashboard card. Never both. Legacy hoisted keys were migrated once via sentinels (`.ai_migrated_v2`, `.config_migrated_v3`, `.schedules_migrated_v3`); edits to migrated legacy keys are ignored.
 
@@ -266,6 +266,18 @@ All apply live — no restart. The Germany bounding box is a const in
 There is no `settings.ron` section and no dashboard toggle — AI tools have no
 per-tool toggles, unlike Aviationstack, which backs commands. Adding or
 removing the key needs a bot restart.
+
+`[ipinfo]` holds only `token` (`SecretString`) and is optional; an empty
+token fails startup validation. Aurora's `lookup_network` tool (IP, AS
+number and domain ownership) runs on keyless RDAP via `rdap.org` and is
+registered on every Aurora turn whether or not the section exists; Grok never
+gets it. With a token, IP lookups also carry ipinfo's city/region/country,
+ASN/org and hostname; without it they return RDAP data only. Non-public input
+(private, loopback, link-local, CGNAT, multicast, documentation and reserved
+ranges, private-use ASNs, special-use TLDs) is refused before any request,
+using the same `util::net::is_non_public_ip` classifier as the web fetcher's
+SSRF guard. No `settings.ron` section, no dashboard toggle. Adding or removing
+the section needs a bot restart.
 
 `[amp]` holds `url`, `username`, `password` (`SecretString`) for the homelab
 CubeCoders AMP controller and is optional. Its presence registers `!servers`;

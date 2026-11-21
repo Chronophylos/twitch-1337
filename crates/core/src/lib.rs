@@ -15,10 +15,12 @@ pub mod dhl;
 pub mod doener;
 pub mod emote_tracker;
 pub mod finnhub;
+pub mod ipinfo;
 pub mod lifecycle;
 pub mod llm_factory;
 pub mod ping;
 pub mod pronouns;
+pub mod rdap;
 pub mod repology;
 pub mod schedule;
 pub mod settings;
@@ -94,6 +96,10 @@ pub struct Services {
     /// DHL tracking client backing Aurora's `track_shipment`. `None` when
     /// `[dhl]` is absent from config.toml, which hides the tool entirely.
     pub dhl: Option<Arc<crate::dhl::DhlClient>>,
+    /// ipinfo client enriching Aurora's `lookup_network` IP results with
+    /// geo, ASN and hostname. `None` when `[ipinfo]` is absent; the tool
+    /// then answers from RDAP alone.
+    pub ipinfo: Option<Arc<crate::ipinfo::IpinfoClient>>,
     /// AMP game-server panel client backing `!servers`. `None` when `[amp]`
     /// is absent from config.toml, which leaves the command unregistered.
     pub amp: Option<Arc<crate::amp::AmpClient>>,

@@ -47,10 +47,17 @@ const MAX_TOOL_CALLS_PER_ROUND: usize = 8;
 /// shared by every viewer, so one turn must not be able to spend it.
 const MAX_SHIPMENT_LOOKUPS_PER_TURN: usize = 3;
 
+/// `lookup_network` calls per turn. RDAP is keyless but rate-limited per
+/// client IP and the ipinfo free tier is a monthly quota, so one turn must
+/// not be able to loop the tool.
+const MAX_NETWORK_LOOKUPS_PER_TURN: usize = 3;
+
 const WEB_BUDGET_EXHAUSTED: &str = "web_budget_exhausted: this turn's web_search/read_url \
      limit is used up; answer with what you already have";
 const SHIPMENT_BUDGET_EXHAUSTED: &str = "shipment_budget_exhausted: this turn's \
      track_shipment limit is used up; answer with what you already have";
+const NETWORK_BUDGET_EXHAUSTED: &str = "network_budget_exhausted: this turn's \
+     lookup_network limit is used up; answer with what you already have";
 
 /// Per-turn call quota for one paid or rate-limited tool family.
 struct CallBudget {
@@ -147,6 +154,8 @@ pub struct TurnRunner {
     pub(crate) mouths: Arc<crate::twitch::mouth::MouthRouter>,
     pub(crate) echo: Arc<crate::twitch::echo::EchoGuard>,
     dhl: Option<Arc<crate::dhl::DhlClient>>,
+    rdap: Arc<crate::rdap::RdapClient>,
+    ipinfo: Option<Arc<crate::ipinfo::IpinfoClient>>,
     command_catalog: crate::ai::commands_tool::CatalogCell,
     emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     recap: Option<Arc<RecapHandle>>,
@@ -174,6 +183,8 @@ impl TurnRunner {
             mouths: deps.mouths,
             echo: deps.echo,
             dhl: deps.dhl,
+            rdap: deps.rdap,
+            ipinfo: deps.ipinfo,
             command_catalog: deps.command_catalog,
             emote_tracker: deps.emote_tracker,
             recap: deps.recap,
@@ -471,6 +482,7 @@ impl TurnRunner {
             tools.push(crate::ai::tarot_tool::tarot_tool());
             tools.push(crate::ai::flight_tool::plan_flight_tool());
             tools.push(crate::ai::packages_tool::search_packages_tool());
+            tools.push(crate::ai::network_tool::lookup_network_tool());
             if self.dhl.is_some() {
                 tools.push(crate::ai::dhl_tool::track_shipment_tool());
             }
@@ -512,6 +524,7 @@ impl TurnRunner {
                 // forced opening search included.
                 let web_budget = CallBudget::new(self.web.as_ref().map_or(0, AiWeb::max_rounds));
                 let shipment_budget = CallBudget::new(MAX_SHIPMENT_LOOKUPS_PER_TURN);
+                let network_budget = CallBudget::new(MAX_NETWORK_LOOKUPS_PER_TURN);
                 let prior_rounds = if grok_alias
                     && let Some(w) = &self.web
                     && web_budget.try_consume()
@@ -549,8 +562,11 @@ impl TurnRunner {
                     doener: self.doener.as_ref(),
                     repology: self.repology.as_ref(),
                     dhl: self.dhl.as_deref(),
+                    rdap: self.rdap.as_ref(),
+                    ipinfo: self.ipinfo.as_deref(),
                     web_budget: &web_budget,
                     shipment_budget: &shipment_budget,
+                    network_budget: &network_budget,
                     command_catalog: &self.command_catalog,
                     emote_tracker: self.emote_tracker.as_ref(),
                     trace: &trace,
@@ -638,8 +654,9 @@ impl TurnRunner {
 /// (web_search/read_url) when web tools are configured, the on-demand
 /// `search_emotes` tool when the emote provider is active, the always-on
 /// doener_index and list_commands tools, the Aurora-only draw_tarot and plan_flight tools, or the
-/// Aurora-only search_packages tool. A name outside `registered_tools` runs
-/// nothing, so a model can't reach a tool this turn never offered it.
+/// Aurora-only search_packages and lookup_network tools. A name outside
+/// `registered_tools` runs nothing, so a model can't reach a tool this turn
+/// never offered it.
 struct V2Executor<'a> {
     /// Names of the tool definitions sent with this turn's request.
     registered_tools: &'a HashSet<String>,
@@ -649,10 +666,14 @@ struct V2Executor<'a> {
     doener: &'a crate::doener::DoeneratlasClient,
     repology: &'a crate::repology::RepologyClient,
     dhl: Option<&'a crate::dhl::DhlClient>,
+    rdap: &'a crate::rdap::RdapClient,
+    ipinfo: Option<&'a crate::ipinfo::IpinfoClient>,
     /// `web_search` + `read_url` quota (`ai.web.max_rounds`).
     web_budget: &'a CallBudget,
     /// `track_shipment` quota ([`MAX_SHIPMENT_LOOKUPS_PER_TURN`]).
     shipment_budget: &'a CallBudget,
+    /// `lookup_network` quota ([`MAX_NETWORK_LOOKUPS_PER_TURN`]).
+    network_budget: &'a CallBudget,
     command_catalog: &'a crate::ai::commands_tool::CatalogCell,
     emote_tracker: Option<&'a Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     trace: &'a TraceIds,
@@ -692,6 +713,13 @@ impl ToolExecutor for V2Executor<'_> {
                 Some(c) => crate::ai::dhl_tool::execute_track_shipment(c, call).await,
                 None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
             };
+        }
+        if call.name == crate::ai::network_tool::LOOKUP_NETWORK_TOOL_NAME {
+            if !self.network_budget.try_consume() {
+                return ToolResultMessage::for_call(call, NETWORK_BUDGET_EXHAUSTED.to_string());
+            }
+            return crate::ai::network_tool::execute_lookup_network(self.rdap, self.ipinfo, call)
+                .await;
         }
         if call.name == crate::ai::emote_stats_tool::EMOTE_STATS_TOOL_NAME {
             return match self.emote_tracker {
@@ -853,8 +881,9 @@ mod turn_tests {
         /// Sleep past the per-round timeout so `run_agent` gives up.
         Hang,
         Provider(u16),
-        /// First round: `n` distinct `web_search` calls. Later rounds: text.
-        WebSearches(usize),
+        /// First round: `n` distinct calls to the named tool, each with a
+        /// `query` argument (`AS3320`, `AS3321`, ...). Later rounds: text.
+        Calls(&'static str, usize),
     }
 
     #[async_trait]
@@ -880,15 +909,15 @@ mod turn_tests {
                     status: *status,
                     body: "nope".into(),
                 }),
-                Answer::WebSearches(_) if !first_round => {
+                Answer::Calls(..) if !first_round => {
                     Ok(ToolChatCompletionResponse::Message("fertig".into()))
                 }
-                Answer::WebSearches(n) => Ok(ToolChatCompletionResponse::ToolCalls {
+                Answer::Calls(name, n) => Ok(ToolChatCompletionResponse::ToolCalls {
                     calls: (0..*n)
                         .map(|i| ToolCall {
-                            id: format!("ws{i}"),
-                            name: "web_search".into(),
-                            arguments: serde_json::json!({ "query": format!("frage {i}") }),
+                            id: format!("call{i}"),
+                            name: (*name).into(),
+                            arguments: serde_json::json!({ "query": format!("AS{}", 3320 + i) }),
                             arguments_parse_error: None,
                         })
                         .collect(),
@@ -913,6 +942,16 @@ mod turn_tests {
         answer: Answer,
         timeout_secs: u64,
         web: Option<(String, usize)>,
+    ) -> Fixture {
+        fixture_with(answer, timeout_secs, web, "http://127.0.0.1:1").await
+    }
+
+    /// `rdap_base` points `lookup_network` at a wiremock RDAP server.
+    async fn fixture_with(
+        answer: Answer,
+        timeout_secs: u64,
+        web: Option<(String, usize)>,
+        rdap_base: &str,
     ) -> Fixture {
         crate::install_crypto_provider();
         let dir = TempDir::new().unwrap();
@@ -990,6 +1029,11 @@ mod turn_tests {
                 MouthIdentities::default(),
             )),
             dhl: None,
+            rdap: Arc::new(crate::rdap::RdapClient::with_base_url(
+                reqwest::Client::new(),
+                rdap_base,
+            )),
+            ipinfo: None,
             command_catalog: Default::default(),
             emote_tracker: None,
             recap: None,
@@ -1181,7 +1225,7 @@ mod turn_tests {
             .mount(&searx)
             .await;
         let f = fixture_with_web(
-            Answer::WebSearches(6),
+            Answer::Calls("web_search", 6),
             30,
             Some((format!("{}/search", searx.uri()), 2)),
         )
@@ -1205,5 +1249,77 @@ mod turn_tests {
                 .count(),
             4
         );
+    }
+
+    /// Security audit M1: a turn must not be able to loop `lookup_network`.
+    /// Calls past the per-turn budget never reach RDAP and come back as the
+    /// budget-exhausted result, one per call id.
+    #[tokio::test]
+    async fn network_lookups_past_the_turn_budget_are_not_run() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let rdap = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "objectClassName": "autnum",
+                "name": "SOME-AS",
+            })))
+            .mount(&rdap)
+            .await;
+        let f = fixture_with(
+            Answer::Calls(crate::ai::network_tool::LOOKUP_NETWORK_TOOL_NAME, 5),
+            30,
+            None,
+            &rdap.uri(),
+        )
+        .await;
+
+        let out = f
+            .runner
+            .run_turn(input(Agent::Aurora, "wem gehören diese fünf AS?"))
+            .await
+            .unwrap();
+
+        assert!(matches!(out, TurnOutcome::Reply { .. }), "got {out:?}");
+        assert_eq!(
+            rdap.received_requests().await.unwrap().len(),
+            MAX_NETWORK_LOOKUPS_PER_TURN
+        );
+        let calls = f.llm.calls.lock().unwrap();
+        let results = &calls[1].prior_rounds[0].results;
+        assert_eq!(results.len(), 5);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|r| r.content == NETWORK_BUDGET_EXHAUSTED)
+                .count(),
+            5 - MAX_NETWORK_LOOKUPS_PER_TURN
+        );
+    }
+
+    /// `lookup_network` is keyless, so Aurora always gets it; Grok never.
+    #[tokio::test]
+    async fn lookup_network_is_aurora_only() {
+        let aurora = fixture(Answer::Text("moin".into()), 30).await;
+        aurora
+            .runner
+            .run_turn(input(Agent::Aurora, "hi"))
+            .await
+            .unwrap();
+        let grok = fixture(Answer::Text("yep".into()), 30).await;
+        grok.runner
+            .run_turn(input(Agent::Grok, "hi"))
+            .await
+            .unwrap();
+
+        let offered = |f: &Fixture| {
+            f.llm.calls.lock().unwrap()[0]
+                .tools
+                .iter()
+                .any(|t| t.name == crate::ai::network_tool::LOOKUP_NETWORK_TOOL_NAME)
+        };
+        assert!(offered(&aurora));
+        assert!(!offered(&grok));
     }
 }
