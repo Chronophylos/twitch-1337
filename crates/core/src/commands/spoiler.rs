@@ -74,6 +74,10 @@ where
         "!spoiler"
     }
 
+    fn aliases(&self) -> &[&'static str] {
+        &["!sp"]
+    }
+
     fn description(&self) -> &str {
         "Prüft, ob ein Link ein Spiel spoilert"
     }

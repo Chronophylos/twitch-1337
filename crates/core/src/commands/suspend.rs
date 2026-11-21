@@ -79,6 +79,10 @@ where
         "!suspend"
     }
 
+    fn aliases(&self) -> &[&'static str] {
+        &["!sus"]
+    }
+
     fn description(&self) -> &str {
         "Command zeitweise stummschalten"
     }
@@ -177,6 +181,10 @@ where
 
     fn name(&self) -> &str {
         "!unsuspend"
+    }
+
+    fn aliases(&self) -> &[&'static str] {
+        &["!unsus"]
     }
 
     fn description(&self) -> &str {
