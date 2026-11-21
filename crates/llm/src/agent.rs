@@ -66,10 +66,7 @@ pub enum AgentOutcome {
 }
 
 /// Drive a tool-calling conversation to completion.
-#[instrument(
-    skip(client, executor, request),
-    fields(model = %request.model, max_rounds = opts.max_rounds),
-)]
+#[instrument(skip_all, fields(gen_ai.request.model = %request.model))]
 pub async fn run_agent<E: ToolExecutor + ?Sized>(
     client: &dyn LlmClient,
     mut request: ToolChatCompletionRequest,

@@ -139,10 +139,11 @@ pub struct OllamaClient {
 }
 
 const DEFAULT_BASE_URL: &str = "http://localhost:11434";
+/// `gen_ai.provider.name` span attribute; matches `AiProvider::Ollama`'s name.
+const PROVIDER_NAME: &str = "ollama";
 
 impl OllamaClient {
     /// Creates a new Ollama API client.
-    #[instrument]
     pub fn new(base_url: Option<&str>, user_agent: &str) -> Result<Self> {
         let base_url = base_url.unwrap_or(DEFAULT_BASE_URL).trim_end_matches('/');
 
@@ -270,7 +271,10 @@ impl OllamaClient {
 
 #[async_trait]
 impl LlmClient for OllamaClient {
-    #[instrument(skip(self, request))]
+    #[instrument(
+        skip_all,
+        fields(gen_ai.provider.name = PROVIDER_NAME, gen_ai.request.model = %request.model),
+    )]
     async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
         let rec = crate::observe::GenerationInProgress::start(
             request.model.clone(),
@@ -281,7 +285,10 @@ impl LlmClient for OllamaClient {
         result
     }
 
-    #[instrument(skip(self, request))]
+    #[instrument(
+        skip_all,
+        fields(gen_ai.provider.name = PROVIDER_NAME, gen_ai.request.model = %request.model),
+    )]
     async fn chat_completion_with_tools(
         &self,
         request: ToolChatCompletionRequest,

@@ -99,7 +99,7 @@ field syntax needs literals, so spans and logs rely on this table).
 
 |Name|Meaning|Metric label|
 |---|---|---|
-|`gen_ai.provider.name`|AI provider|yes|
+|`gen_ai.provider.name`|AI provider; values are `AiProvider` names (`open_router`, `open_ai`, `open_ai_compatible`, `ollama`)|yes|
 |`gen_ai.request.model`|upstream model id|yes|
 |`gen_ai.operation.name`|`chat`, `execute_tool`, …|yes|
 |`gen_ai.tool.name`|tool called by the model|yes|

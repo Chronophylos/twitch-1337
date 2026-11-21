@@ -51,7 +51,7 @@ where
     }
 }
 
-#[instrument(skip(privmsg, sender), fields(user = %privmsg.sender.login))]
+#[instrument(skip_all, fields(twitch.user.login = %privmsg.sender.login))]
 pub(crate) async fn flight_command<T, L>(
     privmsg: &PrivmsgMessage,
     sender: &Arc<ChatSender<T, L>>,

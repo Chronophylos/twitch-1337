@@ -217,6 +217,7 @@ impl LlmRegistry {
                     .or(prof.provider.openai_compat_base_url()),
                 APP_USER_AGENT,
                 prof.provider.is_openrouter(),
+                prof.provider.as_str(),
             )?))
         } else {
             Ok(Arc::new(OllamaClient::new(

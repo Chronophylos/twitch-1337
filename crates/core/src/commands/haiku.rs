@@ -141,7 +141,10 @@ where
         ExecutionClass::Background
     }
 
-    #[instrument(skip(self, ctx))]
+    #[instrument(
+        skip_all,
+        fields(bot.command.name = "!haiku", twitch.user.login = %ctx.privmsg.sender.login),
+    )]
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         ctx.cancellation.check()?;
         let user = &ctx.privmsg.sender.login;
