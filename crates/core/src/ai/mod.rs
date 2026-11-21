@@ -7,7 +7,6 @@ pub mod doener_tool;
 pub mod emote_stats_tool;
 pub mod emote_tool;
 pub mod flight_tool;
-pub mod langfuse;
 pub mod memory;
 pub mod model_catalog;
 pub mod network_tool;

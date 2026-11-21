@@ -34,13 +34,18 @@ A trace is one unit of work started by one stimulus.
 Child spans: `handler` (a broadcast consumer acting on an `irc.message`,
 `bot.handler`), `command` (one command run under the `commands` handler,
 `bot.command.name`; a background command keeps it after the handoff),
+`turn` (one Turn: an agent's LLM work for one request, opened by
+`observability::with_turn` with `ai.agent`, `ai.profile`,
+`ai.turn.session_id` and the speaker's `twitch.user.login`),
 `http.client` (outbound HTTP, `otel.kind = client`), `persist.write` (file
 persistence), `chat` (LLM call), `execute_tool` (tool execution).
 
-An `!ai` message is one tree: `irc.message` → `handler` → `command` → the
-Turn's spans. The root ends when the last handler and command holding it
-finish, so anything that outlives one handler run keeps `Inbound::msg`, never
-the `Inbound`.
+An `!ai` message is one tree: `irc.message` → `handler` → `command` → `turn`
+→ `chat` / `execute_tool` → `http.client`. The root ends when the last
+handler and command holding it finish, so anything that outlives one handler
+run keeps `Inbound::msg`, never the `Inbound`. The dreamer, recap, `!news` /
+`!tldr` and `!haiku` LLM runs are Turns too; dreamer and recap have no
+speaker.
 
 Outbound HTTP goes through `util::http::SendTraced` (`send_traced`, or
 `send_traced_dynamic` for a URL a viewer or the model supplied), never
@@ -98,6 +103,7 @@ Nothing on the per-message path logs at `info`.
 |`/logs` ring|`info`, fixed|
 |OTel logs → Loki|`observability.otel.logs_filter` (settings, live); default `debug` for our crates, `warn` for dependencies|
 |OTel traces → Tempo|`observability.otel.traces_filter` (settings, live); default `info` for our crates|
+|Langfuse|Turn trees: the `turn` span and every span inside it, whatever `traces_filter` says|
 
 The OTel sinks exist only with `[otel]` in config.toml (endpoint, optional
 `auth_header`; restart to add or remove). Until then, and without it, their
@@ -106,6 +112,21 @@ with `hyper=off,reqwest=off,h2=off,opentelemetry=off`: those targets sit on
 the export path, and exporting their events would feed back into itself.
 Resource attributes on every signal: `service.name = twitch-1337`,
 `service.version` = BUILD_NUM, `vcs.ref.head.revision` = GIT_SHA.
+
+Langfuse is a second span sink on the same tracer provider, on with
+`[langfuse]` and independent of `[otel]` (ADR-0013 decision 5). The traces
+layer runs behind `traces_filter` *or* `[turn]=info` (spans only), so Turn
+trees are traced even when `traces_filter` is narrowed or `[otel]` is absent.
+Langfuse gets only the Turn's spans, never its ancestors: its copy of the
+`turn` span has no parent, so Langfuse shows the Turn as the trace root (same
+trace id as in Tempo), and every copy carries `langfuse.user.id` (the
+speaker's login, `<agent>` without one) and `langfuse.session.id`
+(`ai.turn.session_id`); the `turn` copy adds `langfuse.trace.name` and
+`langfuse.trace.tags`. The collector still gets the Turn inside its
+`irc.message` trace. A span only the `[turn]` arm let through skips the
+collector, and its collector children hang under its nearest ancestor the
+collector gets, so `traces_filter` keeps meaning what it says. Export failure
+handling matches the collector's.
 
 Every sink redacts: stdout and the `/logs` ring pass every line, and the OTel
 processors every log body, string attribute, span attribute, span event and
@@ -157,10 +178,13 @@ field syntax needs literals, so spans and logs rely on this table).
 |`gen_ai.operation.name`|`chat`, `execute_tool`, …|yes|
 |`gen_ai.tool.name`|tool called by the model; `unknown` when it names a tool the request did not offer|yes|
 |`gen_ai.usage.input_tokens` / `output_tokens`|token counts|no (value)|
+|`gen_ai.usage.cost`|billed USD of a `chat` call when the provider reports it (OpenRouter); OTel attribute only|no (value)|
+|`gen_ai.prompt` / `gen_ai.completion`|`chat` input messages (JSON `[{role, content}]`) and output (text, or JSON `[{name, arguments}]` of the tool calls); OTel attributes only, never on stdout or the ring, set only when the span is exported|**no**|
+|`gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`|`execute_tool` input (the call's JSON arguments) and output (the result text), set by `llm::execute_tool`; OTel attributes only, set only when the span is exported|**no**|
 |`gen_ai.token.type`|token direction of an `llm.tokens` count: `input`, `output`|yes|
 |`http.request.method`, `http.response.status_code`, `http.route`|HTTP, client and server|yes (`url.full` no)|
 |`server.address`|upstream host; `dynamic` for a URL a viewer or the model supplied (`read_url`, link resolution)|yes|
-|`error.type`|error variant name; for HTTP the status code (`503`) or the failure class (`timeout`, `connect`, `decode`, `body`, `TooLarge`, …)|yes|
+|`error.type`|error variant name; `cancelled` for a `chat` call its caller dropped (a timeout); for HTTP the status code (`503`) or the failure class (`timeout`, `connect`, `decode`, `body`, `TooLarge`, …)|yes|
 |`twitch.channel`|channel login|yes|
 |`twitch.user.id` / `twitch.user.login`|chatter|**no**|
 |`twitch.message.id`|IRC message id|**no**|
@@ -173,6 +197,8 @@ field syntax needs literals, so spans and logs rely on this table).
 |`memory.kind`|Memory / Scratch file kind: `soul`, `lore`, `character_sheet`, `scratch`|yes|
 |`ai.turn.session_id`|Turn session nonce (Langfuse session)|**no**|
 |`ai.turn.outcome`|how a Turn ended: `reply`, `notice`, `silent`|yes|
+|`langfuse.user.id` / `langfuse.session.id`|on every span sent to Langfuse: the Turn's speaker login (`<agent>` without one) and `ai.turn.session_id`; never on the collector's copy|**no**|
+|`langfuse.trace.name` / `langfuse.trace.tags`|on Langfuse's copy of the `turn` span: `ai.agent`, and `[ai.agent, ai.profile]`|**no**|
 |`aviation.flight.callsign`|Tracked Flight callsign|**no**|
 |`aviation.flight.phase`|Flight Phase: `unknown`, `ground`, `takeoff`, `climb`, `cruise`, `descent`, `approach`, `landing`|yes|
 |`aviation.provider`|ADS-B / Aviationstack source|yes|

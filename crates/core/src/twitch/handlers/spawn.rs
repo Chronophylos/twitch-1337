@@ -231,7 +231,6 @@ where
                 ipinfo: services.ipinfo.clone(),
                 command_catalog: services.command_catalog.clone(),
                 emote_tracker: services.emote_tracker.clone(),
-                langfuse: services.langfuse.clone(),
                 model_catalog,
                 mouths: services.mouths.clone(),
                 echo: services.echo.clone(),
@@ -245,7 +244,6 @@ where
             services.chat_ctx.clone(),
             services.whisper.clone(),
             news_cooldown.clone(),
-            services.langfuse.clone(),
         )));
         command_list.push(Arc::new(commands::news::NewsCommand::new(
             services.llm.clone(),
@@ -254,14 +252,12 @@ where
             services.chat_ctx.clone(),
             services.whisper.clone(),
             news_cooldown.clone(),
-            services.langfuse.clone(),
         )));
         command_list.push(Arc::new(commands::haiku::HaikuCommand::new(
             services.llm.clone(),
             services.settings.clone(),
             services.chat_ctx.clone(),
             news_cooldown,
-            services.langfuse.clone(),
         )));
     }
 
@@ -648,7 +644,6 @@ pub(crate) fn spawn_handlers<T, L>(
         let shutdown = Arc::new(Notify::new());
         let echo_for_logins = services.echo.clone();
         let registry = services.llm.clone();
-        let observer = services.langfuse.clone();
         let bot_username = services.bot_username.clone();
         register_notify_loop(
             supervisor,
@@ -665,7 +660,6 @@ pub(crate) fn spawn_handlers<T, L>(
                     ctx.primary_history.clone(),
                     self_logins,
                     shutdown,
-                    observer,
                 )
                 .await;
             },

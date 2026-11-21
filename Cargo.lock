@@ -1569,7 +1569,8 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "indexmap",
- "parking_lot",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "reqwest",
  "rustls",
  "schemars",
@@ -1578,6 +1579,8 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
  "wiremock",
 ]
 
@@ -3401,9 +3404,11 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
+ "opentelemetry-proto",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "parking_lot",
+ "prost",
  "rand 0.10.3",
  "random-flight",
  "reqwest",

@@ -71,6 +71,9 @@ bytes = "1"
 either = "1"
 # In-memory span exporter for the span-status tests.
 opentelemetry_sdk = { workspace = true, features = ["testing"] }
+# Decode OTLP/protobuf request bodies in the Langfuse export tests.
+opentelemetry-proto = { version = "0.33", default-features = false, features = ["gen-tonic-messages", "trace"] }
+prost = "0.14"
 reqwest = { workspace = true }
 tempfile = "3"
 tokio = { version = "1.54.1", features = ["test-util"] }

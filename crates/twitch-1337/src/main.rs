@@ -95,10 +95,15 @@ pub async fn main() -> Result<()> {
         &config.twitch.channel,
     )
     .wrap_err("Failed to open settings store")?;
-    // `[otel]` absent or broken leaves export off; the bot runs the same.
-    // Enabled before `startup` opens: a span created while the OTel traces
-    // filter is still `off` is never exported, and neither would its tree be.
-    let otel = observability.enable_otel(config.otel.as_ref(), &settings_handle);
+    // `[otel]` / `[langfuse]` absent or broken leaves that export off; the
+    // bot runs the same. Enabled before `startup` opens: a span created while
+    // the OTel traces filter is still `off` is never exported, and neither
+    // would its tree be.
+    let otel = observability.enable_otel(
+        config.otel.as_ref(),
+        config.langfuse.as_ref(),
+        &settings_handle,
+    );
 
     // `startup` root: opened once tracing and export are up, handed to
     // `run_bot`, which closes it once the handlers are spawned and the bot
@@ -301,23 +306,6 @@ async fn prepare(
         None => None,
     };
 
-    let langfuse = match config.langfuse.as_ref() {
-        Some(b) => match twitch_1337_core::ai::langfuse::LangfuseHandle::start(b) {
-            Ok(h) => {
-                tracing::info!("Langfuse OTLP export enabled");
-                Some(Arc::new(h))
-            }
-            Err(error) => {
-                tracing::error!(
-                    ?error,
-                    "failed to start Langfuse exporter; tracing disabled"
-                );
-                None
-            }
-        },
-        None => None,
-    };
-
     let llm = Arc::new(llm_factory::LlmRegistry::new(
         config.ai.as_ref(),
         settings_handle.clone(),
@@ -437,7 +425,6 @@ async fn prepare(
         ipinfo: ipinfo_client,
         amp: amp_client,
         finnhub: finnhub_client,
-        langfuse,
         doener: doener_client,
         whisper: Some(whisper),
         data_dir: get_data_dir(),

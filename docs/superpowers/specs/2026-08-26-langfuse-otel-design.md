@@ -31,6 +31,8 @@ ships, or the same project double-ingests OpenRouter rounds.
 
 ## Approach
 
+> Superseded by [ADR-0013](../../adr/0013-observability-pipeline.md): Langfuse is now a filtered span sink on the OTel SDK pipeline (`util/observability/langfuse.rs`); the Langfuse semantics below still hold.
+
 Hand-rolled OTLP/JSON over workspace `reqwest` (`rustls-no-provider`). Langfuse
 documents `/api/public/otel` as the ingestion path for languages without a
 native SDK. The deprecated `POST /api/public/ingestion` API is not used.

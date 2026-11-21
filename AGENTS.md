@@ -300,11 +300,19 @@ cooldown is `cooldowns.aktien` in `settings.ron` (default 60s,
 `/settings → Cooldowns`). Adding or removing the section needs a bot restart.
 
 `[langfuse]` holds `public_key` + `secret_key` and an optional `host`
-(default `https://cloud.langfuse.com`, EU). Presence enables first-party
-OTLP export of LLM Turns (all backends, nested tool spans). Init or export
-failure logs and disables tracing; the bot stays up. No dashboard card.
-Turn off OpenRouter's Langfuse broadcast for the same project to avoid
-duplicate traces. Adding or removing keys needs a bot restart.
+(default `https://cloud.langfuse.com`, EU). Presence adds Langfuse as a
+second span sink on the OTel pipeline (ADR-0013 decision 5), with or without
+`[otel]`: every Turn (`observability::with_turn`: the `turn` span with its
+`chat` / `execute_tool` / `http.client` children, all backends) goes to
+`{host}/api/public/otel/v1/traces` over OTLP/HTTP protobuf with Basic auth,
+the Turn as the trace root, `langfuse.user.id` / `langfuse.session.id` on
+every span, prompts and completions included. Turn trees are traced whatever
+`observability.otel.traces_filter` says. Init failure logs a `warn` and
+leaves Langfuse off; an export failure drops the batch with one `warn` per
+outage and `info` on recovery, flushed on shutdown with the other signals;
+the bot stays up. No dashboard card. Turn off OpenRouter's Langfuse
+broadcast for the same project to avoid duplicate traces. Adding or removing
+keys needs a bot restart.
 
 `[otel]` holds `endpoint` (OTLP/HTTP collector base URL, e.g.
 `http://alloy:4318`; `http://`/`https://`, no credentials, query or fragment,

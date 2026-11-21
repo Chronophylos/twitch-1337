@@ -11,7 +11,10 @@ use crate::types::{
     ToolChatCompletionResponse, TraceIds,
 };
 use crate::usage::TokenUsage;
-use crate::util::{record_chat_outcome, reported_usage, truncate_for_echo};
+use crate::util::{
+    ChatOutcome, record_completion, record_prompt, reported_usage, tool_response_text,
+    truncate_for_echo,
+};
 
 // --- Internal serde types for OpenAI-compatible API ---
 
@@ -575,13 +578,13 @@ impl LlmClient for OpenAiClient {
         ),
     )]
     async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
-        let rec = crate::observe::GenerationInProgress::start(
-            request.model.clone(),
-            crate::observe::messages_json(&request.messages),
-        );
+        let outcome = ChatOutcome::start();
+        record_prompt(&request.messages);
         let result = self.chat_completion_untraced(request).await;
-        crate::observe::finish_generation(rec, &result, |(text, usage)| (text.clone(), *usage));
-        record_chat_outcome(&result, reported_usage(&result));
+        if let Ok((text, _)) = &result {
+            record_completion(|| text.clone());
+        }
+        outcome.finish(&result, reported_usage(&result));
         result.map(|(text, _)| text)
     }
 
@@ -602,34 +605,14 @@ impl LlmClient for OpenAiClient {
         &self,
         request: ToolChatCompletionRequest,
     ) -> Result<ToolChatCompletionResponse> {
-        let rec = crate::observe::GenerationInProgress::start(
-            request.model.clone(),
-            crate::observe::messages_json(&request.messages),
-        );
+        let outcome = ChatOutcome::start();
+        record_prompt(&request.messages);
         let result = self.chat_completion_with_tools_untraced(request).await;
-        crate::observe::finish_generation(rec, &result, |(resp, usage)| {
-            (format_tool_output(resp), *usage)
-        });
-        record_chat_outcome(&result, reported_usage(&result));
-        result.map(|(resp, _)| resp)
-    }
-}
-
-fn format_tool_output(resp: &ToolChatCompletionResponse) -> String {
-    match resp {
-        ToolChatCompletionResponse::Message(text) => text.clone(),
-        ToolChatCompletionResponse::ToolCalls { calls, .. } => {
-            let rows: Vec<serde_json::Value> = calls
-                .iter()
-                .map(|c| {
-                    serde_json::json!({
-                        "name": c.name,
-                        "arguments": c.arguments,
-                    })
-                })
-                .collect();
-            serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+        if let Ok((response, _)) = &result {
+            record_completion(|| tool_response_text(response));
         }
+        outcome.finish(&result, reported_usage(&result));
+        result.map(|(response, _)| response)
     }
 }
 
@@ -686,6 +669,54 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, LlmError::EmptyResponse), "{err:?}");
+    }
+
+    /// A completion whose caller times out closes its `chat` span as failed:
+    /// status Error `dropped`, `error.type = cancelled`.
+    #[tokio::test]
+    async fn timed_out_completion_marks_chat_span_failed() {
+        use opentelemetry::trace::{Status, TracerProvider as _};
+        use opentelemetry_sdk::trace::{InMemorySpanExporter, SdkTracerProvider};
+        use tracing_subscriber::prelude::*;
+
+        ensure_crypto_provider();
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(
+                wiremock::ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(10)),
+            )
+            .mount(&server)
+            .await;
+        let client = OpenAiClient::new("k", Some(&server.uri()), "ua", false, "open_ai").unwrap();
+        let exporter = InMemorySpanExporter::default();
+        let provider = SdkTracerProvider::builder()
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+        let _default = tracing::subscriber::set_default(subscriber);
+
+        let request = ChatCompletionRequest {
+            model: "m".to_string(),
+            messages: vec![Message::user("hi")],
+            reasoning_effort: None,
+            service_tier: None,
+            trace: TraceIds::default(),
+        };
+        let call = crate::client::LlmClient::chat_completion(&client, request);
+        let timeout = std::time::Duration::from_millis(50);
+        assert!(tokio::time::timeout(timeout, call).await.is_err());
+
+        let spans = exporter.get_finished_spans().unwrap();
+        let chat = spans.iter().find(|s| s.name == "chat").expect("chat span");
+        assert_eq!(chat.status, Status::error("dropped"));
+        assert!(
+            chat.attributes
+                .iter()
+                .any(|kv| kv.key.as_str() == "error.type" && kv.value.as_str() == "cancelled"),
+            "{:?}",
+            chat.attributes
+        );
     }
 
     #[test]

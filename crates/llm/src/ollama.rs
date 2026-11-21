@@ -9,7 +9,9 @@ use crate::types::{
     ChatCompletionRequest, ToolCall, ToolChatCompletionRequest, ToolChatCompletionResponse,
 };
 use crate::usage::TokenUsage;
-use crate::util::{record_chat_outcome, reported_usage};
+use crate::util::{
+    ChatOutcome, record_completion, record_prompt, reported_usage, tool_response_text,
+};
 
 // --- Internal serde types for Ollama native API ---
 
@@ -320,13 +322,13 @@ impl LlmClient for OllamaClient {
         ),
     )]
     async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String> {
-        let rec = crate::observe::GenerationInProgress::start(
-            request.model.clone(),
-            crate::observe::messages_json(&request.messages),
-        );
+        let outcome = ChatOutcome::start();
+        record_prompt(&request.messages);
         let result = self.chat_completion_untraced(request).await;
-        crate::observe::finish_generation(rec, &result, |(text, usage)| (text.clone(), *usage));
-        record_chat_outcome(&result, reported_usage(&result));
+        if let Ok((text, _)) = &result {
+            record_completion(|| text.clone());
+        }
+        outcome.finish(&result, reported_usage(&result));
         result.map(|(text, _)| text)
     }
 
@@ -347,34 +349,14 @@ impl LlmClient for OllamaClient {
         &self,
         request: ToolChatCompletionRequest,
     ) -> Result<ToolChatCompletionResponse> {
-        let rec = crate::observe::GenerationInProgress::start(
-            request.model.clone(),
-            crate::observe::messages_json(&request.messages),
-        );
+        let outcome = ChatOutcome::start();
+        record_prompt(&request.messages);
         let result = self.chat_completion_with_tools_untraced(request).await;
-        crate::observe::finish_generation(rec, &result, |(resp, usage)| {
-            (format_tool_output(resp), *usage)
-        });
-        record_chat_outcome(&result, reported_usage(&result));
-        result.map(|(resp, _)| resp)
-    }
-}
-
-fn format_tool_output(resp: &ToolChatCompletionResponse) -> String {
-    match resp {
-        ToolChatCompletionResponse::Message(text) => text.clone(),
-        ToolChatCompletionResponse::ToolCalls { calls, .. } => {
-            let rows: Vec<serde_json::Value> = calls
-                .iter()
-                .map(|c| {
-                    serde_json::json!({
-                        "name": c.name,
-                        "arguments": c.arguments,
-                    })
-                })
-                .collect();
-            serde_json::to_string(&rows).unwrap_or_else(|_| "[]".to_string())
+        if let Ok((response, _)) = &result {
+            record_completion(|| tool_response_text(response));
         }
+        outcome.finish(&result, reported_usage(&result));
+        result.map(|(response, _)| response)
     }
 }
 

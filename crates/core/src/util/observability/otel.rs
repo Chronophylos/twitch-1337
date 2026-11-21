@@ -1,14 +1,17 @@
-//! OTLP/HTTP export of logs, traces and metrics (ADR-0013).
+//! OTLP/HTTP export of logs, traces and metrics (ADR-0013), to the collector
+//! and, for Turns, to Langfuse.
 //!
 //! The OTel layers exist from [`super::install_tracing`] on, behind filters
 //! that start `off` and span/log processors that start empty. Without
-//! `[otel]` they stay that way, so the layers never see an event.
-//! [`Pipeline::enable`] fills the processors with batch exporters running on
-//! the tokio runtime, applies the settings filters, and keeps them in sync
-//! with the settings store.
+//! `[otel]` and `[langfuse]` they stay that way, so the layers never see an
+//! event. [`Pipeline::enable`] fills the collector processors with batch
+//! exporters running on the tokio runtime, applies the settings filters, and
+//! keeps them in sync with the settings store; [`Pipeline::enable_langfuse`]
+//! fills the Langfuse span processor and opens the Turn filter arm
+//! (`super::langfuse`).
 //!
 //! Export failures never reach the bot: a failing batch is dropped, logged
-//! once per outage as `warn`, and export resumes when the collector answers.
+//! once per outage as `warn`, and export resumes when the endpoint answers.
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +21,7 @@ use std::time::Duration;
 use eyre::WrapErr as _;
 use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _};
 use opentelemetry::metrics::{Counter, MeterProvider as _};
-use opentelemetry::trace::{Status, TracerProvider as _};
+use opentelemetry::trace::{Span as _, Status, TracerProvider as _};
 use opentelemetry::{Context, InstrumentationScope, KeyValue, Value};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use opentelemetry_otlp::{WithExportConfig as _, WithHttpConfig as _};
@@ -32,15 +35,18 @@ use opentelemetry_sdk::metrics::periodic_reader_with_async_runtime::PeriodicRead
 use opentelemetry_sdk::metrics::{SdkMeterProvider, Temporality};
 use opentelemetry_sdk::runtime::Tokio;
 use opentelemetry_sdk::trace::span_processor_with_async_runtime::BatchSpanProcessor;
-use opentelemetry_sdk::trace::{SdkTracer, SdkTracerProvider, Span, SpanData, SpanProcessor};
+use opentelemetry_sdk::trace::{
+    BatchConfigBuilder, SdkTracer, SdkTracerProvider, Span, SpanData, SpanProcessor,
+};
 use opentelemetry_semantic_conventions as semconv;
 use secrecy::ExposeSecret as _;
 use tokio::task::JoinHandle;
 use tracing::{Subscriber, debug, info, warn};
 use tracing_subscriber::{EnvFilter, reload};
 
+use super::langfuse::{self, TurnScope, Turns};
 use super::parse_otel_filter;
-use crate::config::OtelBootstrap;
+use crate::config::{LangfuseBootstrap, OtelBootstrap};
 use crate::settings::{OtelSettings, SettingsHandle, Subscription};
 use crate::util::redact::redact_secrets;
 
@@ -60,13 +66,17 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) struct FilterReload(Arc<dyn Fn(EnvFilter) -> Result<(), reload::Error> + Send + Sync>);
 
 /// A per-layer filter that exports nothing until reloaded, plus its handle.
-pub(super) fn off_filter<S>() -> (reload::Layer<EnvFilter, S>, FilterReload)
+pub(super) fn off_filter<S>() -> (reload::Layer<EnvFilter, S>, reload::Handle<EnvFilter, S>)
 where
     S: Subscriber + 'static,
 {
-    let (layer, handle) = reload::Layer::new(EnvFilter::new("off"));
-    let reload = move |filter: EnvFilter| handle.reload(filter);
-    (layer, FilterReload(Arc::new(reload)))
+    reload::Layer::new(EnvFilter::new("off"))
+}
+
+impl<S: 'static> From<reload::Handle<EnvFilter, S>> for FilterReload {
+    fn from(handle: reload::Handle<EnvFilter, S>) -> Self {
+        Self(Arc::new(move |filter: EnvFilter| handle.reload(filter)))
+    }
 }
 
 impl FilterReload {
@@ -84,46 +94,101 @@ impl FilterReload {
     }
 }
 
-/// Span processor slot, empty until [`Pipeline::enable`]. It lets the tracer
-/// provider, and the tracing layer holding its tracer, exist before
-/// config.toml is read.
+/// The tracer provider's span processor (behind redaction): a collector and a
+/// Langfuse slot, each empty until enabled, so the provider, and the tracing
+/// layer holding its tracer, exist before config.toml is read. With Langfuse
+/// on, [`Turns`] routes each span: the collector gets what its filter let
+/// through, Langfuse the Turn trees.
 #[derive(Debug, Clone, Default)]
-struct DeferredSpans(Arc<OnceLock<Box<dyn SpanProcessor>>>);
+pub(super) struct SpanSinks(Arc<Slots>);
 
-impl SpanProcessor for DeferredSpans {
+#[derive(Debug, Default)]
+struct Slots {
+    collector: OnceLock<Box<dyn SpanProcessor>>,
+    langfuse: OnceLock<Box<dyn SpanProcessor>>,
+    turns: Turns,
+}
+
+impl SpanSinks {
+    pub(super) fn collector_on(&self) -> bool {
+        self.0.collector.get().is_some()
+    }
+
+    pub(super) fn langfuse_on(&self) -> bool {
+        self.0.langfuse.get().is_some()
+    }
+
+    pub(super) fn turns(&self) -> &Turns {
+        &self.0.turns
+    }
+
+    fn processors(&self) -> impl Iterator<Item = &dyn SpanProcessor> {
+        [self.0.collector.get(), self.0.langfuse.get()]
+            .into_iter()
+            .flatten()
+            .map(|processor| &**processor)
+    }
+}
+
+impl SpanProcessor for SpanSinks {
     fn on_start(&self, span: &mut Span, cx: &Context) {
-        if let Some(inner) = self.0.get() {
-            inner.on_start(span, cx);
+        if self.langfuse_on() {
+            self.0.turns.adopt(span.span_context().span_id(), cx);
+        }
+        for processor in self.processors() {
+            processor.on_start(span, cx);
         }
     }
 
     fn on_end(&self, span: SpanData) {
-        if let Some(inner) = self.0.get() {
-            inner.on_end(span);
+        let collector = self.0.collector.get();
+        let Some(langfuse) = self.0.langfuse.get() else {
+            if let Some(collector) = collector {
+                collector.on_end(span);
+            }
+            return;
+        };
+        let route = self.0.turns.route(span.span_context.span_id());
+        let collector = collector.filter(|_| route.collector);
+        match &route.langfuse {
+            Some((turn, is_turn)) => {
+                if let Some(collector) = collector {
+                    collector.on_end(route.for_collector(span.clone()));
+                }
+                langfuse.on_end(turn.copy(span, *is_turn));
+            }
+            None => {
+                if let Some(collector) = collector {
+                    collector.on_end(route.for_collector(span));
+                }
+            }
         }
     }
 
     fn force_flush(&self) -> OTelSdkResult {
-        match self.0.get() {
-            Some(inner) => inner.force_flush(),
-            None => Ok(()),
-        }
+        self.processors()
+            .map(SpanProcessor::force_flush)
+            .fold(Ok(()), Result::and)
     }
 
     fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
-        match self.0.get() {
-            Some(inner) => inner.shutdown_with_timeout(timeout),
-            None => Ok(()),
-        }
+        let deadline = std::time::Instant::now() + timeout;
+        self.processors()
+            .map(|processor| {
+                processor.shutdown_with_timeout(
+                    deadline.saturating_duration_since(std::time::Instant::now()),
+                )
+            })
+            .fold(Ok(()), Result::and)
     }
 
     // `set_resource` keeps its no-op default: the provider calls it at build
-    // time, before there is an inner processor, so `enable` hands the same
-    // resource to the inner one directly.
+    // time, before there are inner processors, so `enable` hands the same
+    // resource to each one directly.
 }
 
 /// Log processor slot, empty until [`Pipeline::enable`]. See
-/// [`DeferredSpans`].
+/// [`SpanSinks`].
 #[derive(Debug, Clone, Default)]
 struct DeferredLogs(Arc<OnceLock<Box<dyn LogProcessor>>>);
 
@@ -175,7 +240,7 @@ fn redact_any(value: &AnyValue) -> Option<AnyValue> {
 
 /// Span processor running the stdout/ring `redact_secrets` pass over span
 /// attributes, span events (tracing events inside the span) and the status
-/// description before the batch processor queues the span.
+/// description before any sink sees the span.
 #[derive(Debug)]
 struct RedactingSpans<P>(P);
 
@@ -323,22 +388,30 @@ fn resource() -> Resource {
 }
 
 /// The OTel half of the subscriber: providers whose processors are filled
-/// on [`Self::enable`], and the reload handles of the two OTel filters.
+/// on [`Self::enable`] / [`Self::enable_langfuse`], and the reload handles of
+/// the OTel filters.
 pub(super) struct Pipeline {
     tracer_provider: SdkTracerProvider,
     logger_provider: SdkLoggerProvider,
-    spans: DeferredSpans,
+    spans: SpanSinks,
     logs: DeferredLogs,
     traces_filter: FilterReload,
     logs_filter: FilterReload,
+    /// The traces layer's Turn arm ([`langfuse::TURN_FILTER`]).
+    turn_filter: FilterReload,
 }
 
 impl Pipeline {
-    pub(super) fn new(traces_filter: FilterReload, logs_filter: FilterReload) -> Self {
-        let spans = DeferredSpans::default();
+    pub(super) fn new(
+        traces_filter: FilterReload,
+        logs_filter: FilterReload,
+        turn_filter: FilterReload,
+    ) -> Self {
+        let spans = SpanSinks::default();
         let logs = DeferredLogs::default();
+        // Redaction first, so neither sink sees a secret.
         let tracer_provider = SdkTracerProvider::builder()
-            .with_span_processor(spans.clone())
+            .with_span_processor(RedactingSpans(spans.clone()))
             .with_resource(resource())
             .build();
         let logger_provider = SdkLoggerProvider::builder()
@@ -352,12 +425,22 @@ impl Pipeline {
             logs,
             traces_filter,
             logs_filter,
+            turn_filter,
         }
     }
 
     /// Tracer for the `tracing-opentelemetry` layer.
     pub(super) fn tracer(&self) -> SdkTracer {
         self.tracer_provider.tracer(SERVICE_NAME)
+    }
+
+    /// The layer after the traces layer that tells the span sinks which spans
+    /// are Turns and which the collector's `traces_filter` turned down.
+    pub(super) fn turn_scope<S>(
+        &self,
+        traces_filter: reload::Handle<EnvFilter, S>,
+    ) -> TurnScope<S> {
+        TurnScope::new(self.spans.clone(), traces_filter)
     }
 
     /// The `tracing` → OTel logs bridge.
@@ -371,7 +454,7 @@ impl Pipeline {
         &self,
         config: &OtelBootstrap,
         settings: &SettingsHandle,
-    ) -> Option<OtelExport> {
+    ) -> Option<Collector> {
         let exporters = match Exporters::build(config) {
             Ok(exporters) => exporters,
             Err(error) => {
@@ -412,11 +495,7 @@ impl Pipeline {
         )
         .build();
         log_processor.set_resource(&resource);
-        let spans_set = self
-            .spans
-            .0
-            .set(Box::new(RedactingSpans(span_processor)))
-            .is_ok();
+        let spans_set = self.spans.0.collector.set(Box::new(span_processor)).is_ok();
         let logs_set = self
             .logs
             .0
@@ -439,12 +518,49 @@ impl Pipeline {
         ));
 
         info!(endpoint = %config.endpoint, "OTLP export enabled");
-        Some(OtelExport {
-            tracer_provider: self.tracer_provider.clone(),
-            logger_provider: self.logger_provider.clone(),
+        Some(Collector {
             meter_provider,
             sync,
         })
+    }
+
+    /// Send Turn trees to `config`'s Langfuse project and open the Turn
+    /// filter arm. `false` when setup fails (logged) or Langfuse export was
+    /// already enabled.
+    pub(super) fn enable_langfuse(&self, config: &LangfuseBootstrap) -> bool {
+        let exporter = match langfuse::exporter(config) {
+            Ok(exporter) => exporter,
+            Err(error) => {
+                warn!(?error, "Langfuse export disabled: exporter setup failed");
+                return false;
+            }
+        };
+        let mut processor =
+            BatchSpanProcessor::builder(Watched::new(exporter, "langfuse", None), Tokio)
+                .with_batch_config(
+                    BatchConfigBuilder::default()
+                        .with_max_export_batch_size(langfuse::MAX_EXPORT_BATCH)
+                        .build(),
+                )
+                .build();
+        processor.set_resource(&resource());
+        if self.spans.0.langfuse.set(Box::new(processor)).is_err() {
+            warn!("Langfuse export already enabled; second enable ignored");
+            return false;
+        }
+        self.turn_filter.apply("langfuse", langfuse::TURN_FILTER);
+        info!("Langfuse export enabled");
+        true
+    }
+
+    /// The handle that flushes what [`Self::enable`] and
+    /// [`Self::enable_langfuse`] started.
+    pub(super) fn export(&self, collector: Option<Collector>) -> OtelExport {
+        OtelExport {
+            tracer_provider: self.tracer_provider.clone(),
+            logger_provider: self.logger_provider.clone(),
+            collector,
+        }
     }
 }
 
@@ -573,7 +689,7 @@ impl<E> Watched<E> {
                     warn!(
                         signal,
                         ?error,
-                        "OTLP export failed; dropping this signal until the collector answers"
+                        "OTLP export failed; dropping this signal until the endpoint answers"
                     );
                 }
                 if let Some(counter) = &self.exported {
@@ -660,33 +776,44 @@ impl<E: PushMetricExporter> PushMetricExporter for Watched<E> {
     }
 }
 
-/// Running OTLP export, from [`super::Observability::enable_otel`]. Flush it
-/// with [`Self::shutdown`] when the bot stops.
-pub struct OtelExport {
-    tracer_provider: SdkTracerProvider,
-    logger_provider: SdkLoggerProvider,
+/// The collector half of a running export: the meter provider and the task
+/// following the settings filters.
+pub(super) struct Collector {
     meter_provider: SdkMeterProvider,
     sync: JoinHandle<()>,
 }
 
-impl OtelExport {
+impl Collector {
     /// Make this export's meter provider the process-wide one behind
     /// `opentelemetry::global::meter`. Kept out of [`Pipeline::enable`] so
     /// tests can wire a pipeline without touching process globals.
     pub(super) fn set_global_meter_provider(&self) {
         opentelemetry::global::set_meter_provider(self.meter_provider.clone());
     }
+}
 
-    /// Stop following settings and flush all three signals, giving up after
+/// Running OTLP export to the collector, Langfuse, or both, from
+/// [`super::Observability::enable_otel`]. Flush it with [`Self::shutdown`]
+/// when the bot stops.
+pub struct OtelExport {
+    tracer_provider: SdkTracerProvider,
+    logger_provider: SdkLoggerProvider,
+    collector: Option<Collector>,
+}
+
+impl OtelExport {
+    /// Stop following settings and flush every signal, giving up after
     /// [`SHUTDOWN_TIMEOUT`] in total. Failures are logged; shutdown goes on.
     pub async fn shutdown(self) {
-        self.sync.abort();
         let Self {
             tracer_provider,
             logger_provider,
-            meter_provider,
-            ..
+            collector,
         } = self;
+        let meter_provider = collector.map(|collector| {
+            collector.sync.abort();
+            collector.meter_provider
+        });
         // The async-runtime processors block their caller until the runtime
         // has run the final export, so the flush must not hold a worker. A
         // detached std thread rather than `spawn_blocking`: the runtime waits
@@ -697,11 +824,13 @@ impl OtelExport {
         let (done_tx, done_rx) = tokio::sync::oneshot::channel();
         let flush = move || {
             let left = || deadline.saturating_duration_since(std::time::Instant::now());
-            let results = [
+            let mut results = vec![
                 ("traces", tracer_provider.shutdown_with_timeout(left())),
                 ("logs", logger_provider.shutdown_with_timeout(left())),
-                ("metrics", meter_provider.shutdown_with_timeout(left())),
             ];
+            if let Some(meter_provider) = meter_provider {
+                results.push(("metrics", meter_provider.shutdown_with_timeout(left())));
+            }
             #[expect(
                 clippy::let_underscore_must_use,
                 reason = "Err only means shutdown already stopped waiting (ADR-0012 rule 6)"
@@ -799,7 +928,8 @@ mod tests {
             endpoint: format!("{}/", collector.uri()),
             auth_header: Some(SecretString::new("Bearer t0k".into())),
         };
-        let export = obs.otel.enable(&config, &settings).expect("enabled");
+        let collector_export = obs.otel.enable(&config, &settings).expect("enabled");
+        let export = obs.otel.export(Some(collector_export));
         let flush_logs = || {
             let logs = export.logger_provider.clone();
             async move {

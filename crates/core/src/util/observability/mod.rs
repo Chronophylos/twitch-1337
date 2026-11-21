@@ -3,10 +3,12 @@
 //! [`install_tracing`] installs one global subscriber with a filter per sink:
 //! stdout follows `RUST_LOG` (default `info`), the `/logs` ring is fixed at
 //! `info`, and the OTel logs and traces layers each sit behind a reloadable
-//! filter that starts `off`. [`Observability::enable_otel`] turns export on
-//! once config.toml and the settings store are loaded.
+//! filter that starts `off`. [`Observability::enable_otel`] turns export to
+//! the collector and Langfuse on once config.toml and the settings store are
+//! loaded.
 
 pub mod attr;
+mod langfuse;
 pub mod metrics;
 mod otel;
 mod report;
@@ -18,7 +20,7 @@ use jiff::Timestamp;
 use tracing::{Metadata, Subscriber};
 use tracing_error::ErrorLayer;
 use tracing_opentelemetry::OpenTelemetryLayer;
-use tracing_subscriber::filter::{EnvFilter, LevelFilter, ParseError};
+use tracing_subscriber::filter::{EnvFilter, FilterExt as _, LevelFilter, ParseError, filter_fn};
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
@@ -27,9 +29,10 @@ use tracing_subscriber::{Registry, fmt};
 
 use super::log_ring::{LogRing, LogRingLayer};
 use super::redact::redact_secrets;
-use crate::config::OtelBootstrap;
+use crate::config::{LangfuseBootstrap, OtelBootstrap};
 use crate::settings::SettingsHandle;
 
+pub use langfuse::with_turn;
 pub use otel::OtelExport;
 pub use report::mark_span_error;
 
@@ -105,21 +108,27 @@ impl Observability {
         Arc::clone(&self.log_ring)
     }
 
-    /// Start OTLP export when `[otel]` is configured, with the OTel filters
-    /// from `settings` applied now and on every settings change.
+    /// Start OTLP export: to the collector when `[otel]` is configured, with
+    /// the OTel filters from `settings` applied now and on every settings
+    /// change; and Turn trees to Langfuse when `[langfuse]` is.
     ///
-    /// `None` means nothing is exported: `[otel]` is absent, or setup failed
-    /// (logged once as `warn`). The bot runs the same either way. Call once,
-    /// inside the tokio runtime; flush the returned handle on shutdown.
+    /// `None` means nothing is exported: both sections are absent, or their
+    /// setup failed (logged once as `warn` each). The bot runs the same
+    /// either way. Call once, inside the tokio runtime; flush the returned
+    /// handle on shutdown.
     pub fn enable_otel(
         &self,
-        config: Option<&OtelBootstrap>,
+        otel: Option<&OtelBootstrap>,
+        langfuse: Option<&LangfuseBootstrap>,
         settings: &SettingsHandle,
     ) -> Option<OtelExport> {
-        let export = self.otel.enable(config?, settings)?;
-        export.set_global_meter_provider();
-        metrics::init(opentelemetry::global::meter(otel::SERVICE_NAME));
-        Some(export)
+        let collector = otel.and_then(|config| self.otel.enable(config, settings));
+        let langfuse = langfuse.is_some_and(|config| self.otel.enable_langfuse(config));
+        if let Some(collector) = &collector {
+            collector.set_global_meter_provider();
+            metrics::init(opentelemetry::global::meter(otel::SERVICE_NAME));
+        }
+        (collector.is_some() || langfuse).then(|| self.otel.export(collector))
     }
 }
 
@@ -129,7 +138,8 @@ impl Observability {
 ///   filter.
 /// - the dashboard `/logs` ring: `info`, fixed.
 /// - OTel logs and traces: `off` until [`Observability::enable_otel`], then
-///   `observability.otel.logs_filter` / `traces_filter` from settings.
+///   `observability.otel.logs_filter` / `traces_filter` from settings. With
+///   `[langfuse]`, the traces layer also takes every span inside a Turn.
 ///
 /// stdout and the ring scrub secret query values via [`redact_secrets`].
 /// Call once at program startup, before any span is created.
@@ -166,10 +176,20 @@ where
     // max level to TRACE and enable every callsite in every dependency.
     let error_layer = ErrorLayer::default().with_filter(stdout_filter());
 
-    let (traces_filter, traces_reload) = otel::off_filter();
-    let (logs_filter, logs_reload) = otel::off_filter();
-    let otel = otel::Pipeline::new(traces_reload, logs_reload);
-    let traces_layer = OpenTelemetryLayer::new(otel.tracer()).with_filter(traces_filter);
+    let (traces_filter, traces_handle) = otel::off_filter();
+    let (logs_filter, logs_handle) = otel::off_filter();
+    let (turn_filter, turn_handle) = otel::off_filter();
+    let otel = otel::Pipeline::new(
+        traces_handle.clone().into(),
+        logs_handle.into(),
+        turn_handle.into(),
+    );
+    // Turn trees reach Langfuse whatever the traces filter says. Spans only:
+    // events inside a Turn still follow the traces filter.
+    let turn_spans = turn_filter.and(filter_fn(|meta: &Metadata<'_>| meta.is_span()));
+    let traces_layer = OpenTelemetryLayer::new(otel.tracer())
+        .and_then(otel.turn_scope(traces_handle))
+        .with_filter(traces_filter.or(turn_spans));
     let logs_layer = otel.logs_layer().with_filter(logs_filter);
 
     let subscriber = Registry::default()
@@ -279,7 +299,7 @@ mod tests {
         let sink = buf.clone();
         let (subscriber, obs) = build_subscriber(move || sink.clone(), || None);
         let settings = crate::settings::test_handle();
-        assert!(obs.enable_otel(None, &settings).is_none());
+        assert!(obs.enable_otel(None, None, &settings).is_none());
 
         tracing::subscriber::with_default(subscriber, || {
             assert!(!tracing::enabled!(target: "twitch_1337_core::x", Level::DEBUG));
