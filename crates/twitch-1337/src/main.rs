@@ -64,6 +64,21 @@ fn build_aviation_client(
     }
 }
 
+const HELIX_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const HELIX_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+fn helix_http_client() -> Result<reqwest::Client> {
+    helix_http_client_with_timeout(HELIX_REQUEST_TIMEOUT)
+}
+
+fn helix_http_client_with_timeout(request_timeout: std::time::Duration) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(HELIX_CONNECT_TIMEOUT)
+        .timeout(request_timeout)
+        .build()
+        .wrap_err("build Helix HTTP client")
+}
+
 #[tokio::main]
 pub async fn main() -> Result<()> {
     if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
@@ -534,7 +549,7 @@ async fn build_web_spawner(
     });
 
     let helix = Arc::new(ReqwestHelixClient::new(
-        reqwest::Client::new(),
+        helix_http_client()?,
         config.twitch.client_id.clone(),
         token_provider,
     ));
@@ -623,7 +638,7 @@ async fn resolve_twitch_channel_id(
         creds: Arc::new(credentials.clone()),
     });
     let helix = ReqwestHelixClient::new(
-        reqwest::Client::new(),
+        helix_http_client()?,
         config.twitch.client_id.clone(),
         token_provider,
     );
@@ -657,8 +672,24 @@ impl AccessTokenProvider for CredsTokenProvider {
     }
 }
 
+/// Probe wildcard listeners through same-family loopback; preserve concrete bind addresses.
+fn healthcheck_url(bind_addr: &str) -> Result<String> {
+    let bind_addr: std::net::SocketAddr = bind_addr.parse().wrap_err("parse web.bind_addr")?;
+    let ip = match bind_addr.ip() {
+        std::net::IpAddr::V4(ip) if ip.is_unspecified() => {
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        }
+        std::net::IpAddr::V6(ip) if ip.is_unspecified() => {
+            std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)
+        }
+        ip => ip,
+    };
+    let address = std::net::SocketAddr::new(ip, bind_addr.port());
+    Ok(format!("http://{address}/healthz"))
+}
+
 /// Lightweight healthcheck for the Docker `HEALTHCHECK` directive. Reads the
-/// config to find the web bind port and probes `/healthz`. When `[web]` is
+/// config to find the web bind address and probes `/healthz`. When `[web]` is
 /// disabled, exits 0 without touching the network so the container is still
 /// considered healthy.
 async fn run_healthcheck() -> Result<()> {
@@ -666,8 +697,7 @@ async fn run_healthcheck() -> Result<()> {
     if !config.web.enabled {
         return Ok(());
     }
-    let port = config.web.bind_addr.rsplit(':').next().unwrap_or("8080");
-    let url = format!("http://127.0.0.1:{port}/healthz");
+    let url = healthcheck_url(&config.web.bind_addr)?;
     let res = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build()?
@@ -683,11 +713,25 @@ async fn run_healthcheck() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_aviation_client, request_shutdown};
+    use super::{
+        build_aviation_client, healthcheck_url, helix_http_client_with_timeout, request_shutdown,
+    };
+    use std::{sync::Arc, time::Duration};
+
     use secrecy::SecretString;
     use tokio::sync::oneshot;
     use twitch_1337_core::config::AviationstackBootstrap;
     use twitch_1337_core::settings::Settings;
+    use twitch_1337_web::helix::{AccessTokenProvider, HelixClient as _, ReqwestHelixClient};
+
+    struct StaticToken;
+
+    #[async_trait::async_trait]
+    impl AccessTokenProvider for StaticToken {
+        async fn current_access_token(&self) -> eyre::Result<String> {
+            Ok("test-token".to_owned())
+        }
+    }
 
     #[tokio::test]
     async fn one_shutdown_request_is_sent_once() {
@@ -728,5 +772,50 @@ mod tests {
         let client = build_aviation_client(Some(&bootstrap), &settings).expect("aviation client");
 
         assert!(client.aviationstack_enabled());
+    }
+
+    #[tokio::test]
+    async fn stalled_helix_response_hits_the_client_timeout() {
+        twitch_1337_core::install_crypto_provider();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind stalled Helix server");
+        let address = listener.local_addr().expect("stalled server address");
+        let server = tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("accept Helix request");
+            std::future::pending::<()>().await;
+        });
+        let helix = ReqwestHelixClient::with_base(
+            helix_http_client_with_timeout(Duration::from_millis(50)).expect("Helix HTTP client"),
+            SecretString::new("test-client-id".to_owned().into()),
+            Arc::new(StaticToken),
+            format!("http://{address}"),
+        );
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(2),
+            helix.fetch_user_by_login("test-user"),
+        )
+        .await;
+
+        assert!(
+            response.is_ok(),
+            "request escaped the Helix client's own deadline"
+        );
+        assert!(response.expect("client deadline").is_err());
+        server.abort();
+    }
+
+    #[test]
+    fn healthcheck_targets_the_configured_bind_address() {
+        for (bind_addr, expected) in [
+            ("127.0.0.1:8080", "http://127.0.0.1:8080/healthz"),
+            ("0.0.0.0:8080", "http://127.0.0.1:8080/healthz"),
+            ("192.0.2.10:8080", "http://192.0.2.10:8080/healthz"),
+            ("[::1]:8080", "http://[::1]:8080/healthz"),
+            ("[::]:8080", "http://[::1]:8080/healthz"),
+        ] {
+            assert_eq!(healthcheck_url(bind_addr).unwrap(), expected);
+        }
     }
 }
