@@ -1530,3 +1530,41 @@ async fn f1_alerts_card_renders_and_round_trips() {
     assert!(f1.enabled);
     assert_eq!(f1.poll_secs, 3600);
 }
+
+/// Every row is labelled with the knob's short name, never its dotted path,
+/// and every list textarea shows at least four lines in a wide row.
+#[tokio::test]
+async fn settings_rows_use_short_labels_and_four_line_textareas() {
+    let (state, _dirs) = owner_state().await;
+    let res = Owner::login(&state).get(&state, "/settings").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    let form = settings_form(&html);
+
+    let mut labels = 0;
+    for chunk in form.split("<code class=\"row-key\">").skip(1) {
+        let label = &chunk[..chunk.find("</code>").expect("closed row key")];
+        assert!(!label.contains('.'), "row label {label:?} is a dotted path");
+        labels += 1;
+    }
+    assert!(labels > 50, "settings form lost its rows ({labels})");
+
+    let mut textareas = 0;
+    let mut from = 0;
+    while let Some(rel) = form[from..].find("<textarea") {
+        let at = from + rel;
+        let tag = &form[at..at + form[at..].find('>').expect("textarea tag closed")];
+        let id = attr(tag, "id").unwrap_or_default();
+        let rows: u32 = attr(tag, "rows").and_then(|r| r.parse().ok()).unwrap_or(0);
+        assert!(rows >= 4, "textarea {id} has rows={rows}");
+        let row_start = form[..at].rfind("<div class=\"settings-row").expect("row");
+        let row_tag = &form[row_start..row_start + form[row_start..].find('>').expect("row tag")];
+        assert!(
+            row_tag.contains("row-wide"),
+            "textarea {id} is not in a wide row"
+        );
+        textareas += 1;
+        from = at + tag.len();
+    }
+    assert!(textareas >= 4, "list textareas missing ({textareas})");
+}

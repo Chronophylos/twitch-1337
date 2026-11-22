@@ -320,11 +320,7 @@ async fn settings_controls_have_accessible_names() {
             "spinbutton",
             "soul_bytes",
         ),
-        (
-            "[id=\"ai.aurora.profile\"]",
-            "combobox",
-            "ai.aurora.profile",
-        ),
+        ("[id=\"ai.aurora.profile\"]", "combobox", "profile"),
     ] {
         let got = s.accessibility(&s.find(css).await).await;
         assert_eq!(got, (role.to_owned(), name.to_owned()), "{css}");
@@ -339,6 +335,90 @@ async fn settings_controls_have_accessible_names() {
         .await,
         serde_json::Value::String("1".into()),
     );
+
+    s.close().await;
+}
+
+/// One row layout at 1365 px: within every card the controls share one left
+/// edge, framed controls show a border and background at rest and an accent
+/// border on focus, units sit inside their field, textareas show four lines
+/// across the control width, long text defaults fit their input, and no
+/// label is a dotted path.
+#[tokio::test]
+async fn settings_rows_share_one_layout() {
+    let s = E2eSession::start_as_owner().await;
+    s.set_window_size(1365, 900).await;
+    s.goto("/settings").await;
+    s.wait_for("#settings-form").await;
+
+    let iw = s.eval("return innerWidth;").await.as_u64().unwrap();
+    assert!(iw >= 1300, "viewport not at desktop width ({iw}px)");
+
+    let problems = s
+        .eval(
+            "const out = []; \
+             const rect = (el) => el.getBoundingClientRect(); \
+             const clear = (c) => c === 'transparent' || /^rgba\\(.*,\\s*0\\)$/.test(c); \
+             for (const card of document.querySelectorAll('#settings-form .settings-card')) { \
+               const edges = []; \
+               for (const row of card.querySelectorAll('.settings-row')) { \
+                 const key = row.querySelector('.row-key').textContent.trim(); \
+                 if (key.includes('.')) out.push(`dotted label ${key}`); \
+                 const box = row.querySelector('.row-control-cell > :first-child'); \
+                 edges.push([key, rect(box).left]); \
+               } \
+               const xs = edges.map(([, x]) => x); \
+               if (Math.max(...xs) - Math.min(...xs) > 1) \
+                 out.push(`${card.id} control edges ${JSON.stringify(edges)}`); \
+             } \
+             for (const f of document.querySelectorAll( \
+                 '#settings-form .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select)')) { \
+               const cs = getComputedStyle(f); \
+               if (parseFloat(cs.borderTopWidth) < 1 || clear(cs.borderTopColor) || clear(cs.backgroundColor)) \
+                 out.push(`unframed ${f.id || f.className}`); \
+             } \
+             for (const u of document.querySelectorAll('#settings-form :is(.num-unit, .bytes-units)')) { \
+               const box = rect(u.parentElement), r = rect(u); \
+               if (r.left < box.left || r.right > box.right + 0.5 \
+                   || r.top < box.top - 0.5 || r.bottom > box.bottom + 0.5) \
+                 out.push(`unit outside its field: ${u.textContent.trim()}`); \
+             } \
+             for (const ta of document.querySelectorAll('#settings-form textarea')) { \
+               if (ta.clientHeight < 4 * parseFloat(getComputedStyle(ta).lineHeight)) \
+                 out.push(`textarea under four lines: ${ta.id}`); \
+               if (rect(ta).width < ta.closest('.row-control-cell').clientWidth - 1) \
+                 out.push(`textarea narrower than its cell: ${ta.id}`); \
+             } \
+             for (const t of document.querySelectorAll('#settings-form input.text-input[type=text]')) { \
+               if (t.scrollWidth > t.clientWidth) out.push(`value scrolls: ${t.id} = ${t.value}`); \
+             } \
+             return out;",
+        )
+        .await;
+    assert_eq!(problems, serde_json::json!([]), "settings row layout");
+
+    // Focus turns each framed control's border to the accent colour.
+    s.exec(
+        "const p = document.createElement('div'); \
+         p.style.border = '1px solid var(--accent)'; \
+         document.body.append(p); \
+         window.__accent = getComputedStyle(p).borderTopColor; \
+         p.remove();",
+    )
+    .await;
+    for (css, frame) in [
+        ("[id=\"cooldowns.ai\"]", ".num-wrap"),
+        ("[id=\"ai.memory.soul_bytes_display\"]", ".bytes-wrap"),
+        ("[id=\"ai.aurora.persona_name\"]", ".text-input"),
+        ("[id=\"ai.aurora.profile\"]", "select"),
+        ("[id=\"twitch.hidden_admins\"]", ".text-input"),
+    ] {
+        s.wait_js(&format!(
+            "const el = document.querySelector('{css}'); el.focus(); \
+             return getComputedStyle(el.closest('{frame}')).borderTopColor === window.__accent;"
+        ))
+        .await;
+    }
 
     s.close().await;
 }

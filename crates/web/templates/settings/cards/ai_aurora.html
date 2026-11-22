@@ -12,7 +12,7 @@
   <div class="settings-rows">
     {% let aurora_profile = current.ai.aurora.profile.as_str() %}
     <div class="settings-row" data-section="ai_aurora">
-      {% call m::row_head("ai.aurora.profile", "Which provider profile the !ai agent runs on.", "ai.aurora.profile") %}{% endcall %}
+      {% call m::row_head(self.knob("ai.aurora.profile").label(), "Which provider profile the !ai agent runs on.", "ai.aurora.profile") %}{% endcall %}
       <div class="row-control-cell">
         <select id="ai.aurora.profile" name="ai.aurora.profile" data-key="ai.aurora.profile" data-default="{{ defaults.ai.aurora.profile }}" required>
           {% for p in current.ai.profiles %}

@@ -8,7 +8,23 @@
    validation errors and the table use. Bounds and the restart badge come
    from the table too; only prose and layout live here. The row key is a
    `<label for>` pointing at the control, so each input's accessible name is
-   its key.
+   its key. Labels are always `k.label()` (the short field name), never the
+   dotted path.
+
+   Row contract, shared by every macro and every hand-written row:
+       <div class="settings-row [row-wide|row-full]" data-section="…">
+         {% call row_head(…) %}           grid area `head`
+         <div class="row-control-cell">   grid area `control`; its first
+                                           child is the visible control box
+         <div class="row-right">          grid area `meta` (default, reset,
+                                           restart badge)
+   Default rows put the control in the control column, so every control in
+   a card starts at the same x. `row-wide` (free text, URLs, lists) spans the
+   control and right columns from that same x and drops the right column
+   under the control. `row-full` puts the control on its own line under the
+   label, for values too long for `row-wide`; give it to every row of such a
+   card, or the card's control edge breaks. Units sit inside the control box
+   as a suffix: `.num-unit` for fixed units, `.bytes-units` for the switcher.
 #}
 
 {% macro nav_group_head(group_id, label, count) %}
@@ -111,13 +127,15 @@
 {% endmacro %}
 
 {# Generic free-text row (URLs, paths). `placeholder` shows when the value
-   is empty. #}
-{% macro text_row(section, k, hint, value, default, placeholder, enabled_by = "") %}
-<div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
+   is empty. `width` is the row variant: "wide" (default) spans the control
+   and right columns, "full" takes its own line under the label (values like
+   filter directives that outgrow "wide"), "" keeps the control column. #}
+{% macro text_row(section, k, hint, value, default, placeholder, enabled_by = "", width = "wide") %}
+<div class="settings-row{% if !width.is_empty() %} row-{{ width }}{% endif %}" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
   {% call row_head(k.label(), hint, k.path) %}{% endcall %}
   <div class="row-control-cell">
     <input type="text"
-           class="text-input is-wide"
+           class="text-input"
            id="{{ k.path }}"
            name="{{ k.path }}"
            value="{{ value }}"

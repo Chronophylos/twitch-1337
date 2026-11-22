@@ -14,9 +14,9 @@
   <div class="settings-rows">
     {% call m::text_row("observability", self.knob("observability.otel.logs_filter"),
        "Log events sent to Loki.",
-       current.observability.otel.logs_filter, defaults.observability.otel.logs_filter, defaults.observability.otel.logs_filter) %}{% endcall %}
+       current.observability.otel.logs_filter, defaults.observability.otel.logs_filter, defaults.observability.otel.logs_filter, width = "full") %}{% endcall %}
     {% call m::text_row("observability", self.knob("observability.otel.traces_filter"),
        "Spans sent to Tempo.",
-       current.observability.otel.traces_filter, defaults.observability.otel.traces_filter, defaults.observability.otel.traces_filter) %}{% endcall %}
+       current.observability.otel.traces_filter, defaults.observability.otel.traces_filter, defaults.observability.otel.traces_filter, width = "full") %}{% endcall %}
   </div>
 </section>
