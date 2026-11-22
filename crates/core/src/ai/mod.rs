@@ -1,3 +1,4 @@
+pub mod bash_tool;
 pub mod chat_history;
 pub mod command;
 pub mod commands_tool;

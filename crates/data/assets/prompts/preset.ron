@@ -79,6 +79,16 @@ Wenn jemand fragt, wo ein Paket ist, ruf track_shipment mit der Sendungsnummer a
 "#),
         ),
         (
+            name: "bash_tools",
+            slot: System,
+            body: Inline(r#"
+{%- if agent != "grok" and tools.bash -%}
+## Bash-Sandbox
+Mit run_bash kannst du ein Bash-Skript ausführen, in derselben Sandbox wie !bash: kein Netzwerk, keine Dateien außer einem leeren In-Memory-Scratch, und jeder Aufruf startet frisch. Nimm es, wenn Rechnen oder Ausführen wirklich hilft – Mathe, Textumbau, ein Skript, nach dem jemand fragt, oder zum Spielen – nicht bei jeder Nachricht. Das Ergebnis siehst nur du: lies stdout, stderr und error, bevor du antwortest, und poste stdout nie ungelesen 1:1 in den Chat.
+{%- endif -%}
+"#),
+        ),
+        (
             name: "web_tools",
             slot: System,
             body: Inline(r#"

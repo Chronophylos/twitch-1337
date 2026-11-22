@@ -299,6 +299,37 @@ async fn busy_run_rejects_instead_of_queueing() {
     bot.shutdown().await;
 }
 
+/// The interpreter permit is shared with Aurora's `run_bash`. While another
+/// holder (here: the test, standing in for an in-flight Aurora run) owns the
+/// only slot, `!bash` still answers at once instead of waiting for it, and
+/// it runs again as soon as the slot frees.
+#[tokio::test]
+async fn permit_held_elsewhere_rejects_without_waiting() {
+    let mut bot = TestBotBuilder::new()
+        .with_settings(|o| o.bash.timeout_ms = Some(5_000))
+        .spawn()
+        .await;
+
+    let held = bot
+        .bash_permits
+        .clone()
+        .try_acquire_owned()
+        .expect("the only permit is free");
+    let start = std::time::Instant::now();
+    let busy = run(&mut bot, "alice", "3001", "printf hi").await;
+    assert_eq!(busy, "zu viel zu tun");
+    assert!(
+        start.elapsed() < Duration::from_secs(2),
+        "!bash waited for the permit ({:?})",
+        start.elapsed()
+    );
+
+    drop(held);
+    assert_eq!(run(&mut bot, "bob", "3002", "printf hi").await, "hi");
+
+    bot.shutdown().await;
+}
+
 /// A 10-second script must not hold shutdown to its deadline: the lifecycle
 /// token cancels the interpreter and the bot drains at once.
 #[tokio::test]

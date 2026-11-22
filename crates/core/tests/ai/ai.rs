@@ -493,3 +493,86 @@ async fn overlong_ai_reply_clamps_when_rewrite_fails() {
 
     bot.shutdown().await;
 }
+
+fn run_bash_call(script: &str) -> ToolChatCompletionResponse {
+    ToolChatCompletionResponse::ToolCalls {
+        calls: vec![ToolCall {
+            id: "bash_1".into(),
+            name: "run_bash".into(),
+            arguments: serde_json::json!({ "script": script }),
+            arguments_parse_error: None,
+        }],
+        reasoning_content: None,
+    }
+}
+
+/// The script output reaches the model as JSON, not chat; Aurora writes the
+/// reply. The run charges neither `cooldowns.bash` nor the `!bash` per-user
+/// active set: the same viewer's `!bash` right after runs at once.
+#[tokio::test]
+async fn run_bash_feeds_the_model_and_leaves_bash_admission_alone() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| o.cooldowns.bash = Some(600))
+        .spawn()
+        .await;
+
+    bot.llm.push_tool(run_bash_call("echo $((6 * 7))"));
+    bot.llm.push_tool_message("Das ergibt 42.");
+    bot.send_privmsg_as("alice", "5001", "!ai was ist 6 mal 7?")
+        .await;
+    assert_eq!(
+        bot.expect_reply(Duration::from_secs(5)).await,
+        "Das ergibt 42."
+    );
+
+    let calls = bot.llm.tool_calls();
+    let result = &calls[1].prior_rounds[0].results[0];
+    assert_eq!(result.tool_name, "run_bash");
+    let v: serde_json::Value = serde_json::from_str(&result.content)
+        .unwrap_or_else(|e| panic!("not JSON ({e}): {}", result.content));
+    assert_eq!(v["exit_code"], 0);
+    assert_eq!(v["stdout"], "42\n");
+    assert_eq!(v["truncated"], false);
+
+    bot.send_privmsg_as("alice", "5001", "!bash printf frei")
+        .await;
+    assert_eq!(bot.expect_reply(Duration::from_secs(5)).await, "frei");
+
+    bot.shutdown().await;
+}
+
+/// `run_bash` takes its permit from the same semaphore `!bash` uses: with
+/// the only slot held it waits `bash.timeout_ms`, then reports `bash_busy`.
+#[tokio::test]
+async fn run_bash_reports_busy_while_the_shared_permit_is_held() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_settings(|o| o.bash.timeout_ms = Some(200))
+        .spawn()
+        .await;
+    let held = bot
+        .bash_permits
+        .clone()
+        .try_acquire_owned()
+        .expect("the only permit is free");
+
+    bot.llm.push_tool(run_bash_call("printf hi"));
+    bot.llm.push_tool_message("Sandbox ist gerade voll.");
+    bot.send("alice", "!ai rechne was").await;
+    assert_eq!(
+        bot.expect_reply(Duration::from_secs(5)).await,
+        "Sandbox ist gerade voll."
+    );
+    drop(held);
+
+    let calls = bot.llm.tool_calls();
+    let result = &calls[1].prior_rounds[0].results[0];
+    assert!(
+        result.content.starts_with("bash_busy"),
+        "got: {}",
+        result.content
+    );
+
+    bot.shutdown().await;
+}

@@ -12,8 +12,9 @@ use super::knob::Knobs;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 #[knobs(overrides = BashOverrides)]
 pub struct BashSettings {
-    /// Interpreter runs admitted at once. Read once at startup to size the
-    /// command's semaphore, so a change needs a restart.
+    /// Interpreter runs admitted at once, `!bash` and Aurora's `run_bash`
+    /// together. Read once at startup to size the shared semaphore, so a
+    /// change needs a restart.
     #[knob(restart, min = 1, max = 4)]
     pub max_concurrent: usize,
     /// Wall-clock ceiling for one script, applied to both script execution

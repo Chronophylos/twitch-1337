@@ -245,6 +245,8 @@ pub struct Tools {
     pub emote_stats: bool,
     pub web: bool,
     pub dhl: bool,
+    /// `run_bash` is registered (Aurora Turns only).
+    pub bash: bool,
 }
 
 pub struct Inject<'a> {
@@ -285,6 +287,7 @@ impl PromptContext<'_> {
                 emote_stats => self.tools.emote_stats,
                 web => self.tools.web,
                 dhl => self.tools.dhl,
+                bash => self.tools.bash,
             },
             inject => context! {
                 memory => self.inject.memory,
@@ -381,6 +384,7 @@ mod tests {
             emote_stats: true,
             web: true,
             dhl: true,
+            bash: true,
         }
     }
 
@@ -390,6 +394,7 @@ mod tests {
             emote_stats: false,
             web: false,
             dhl: false,
+            bash: false,
         }
     }
 
@@ -513,5 +518,19 @@ mod tests {
             "volatile value reached the cached system prefix:\n{}",
             system.content
         );
+    }
+
+    /// The sandbox block tells Aurora the tool exists; Grok never sees it.
+    #[test]
+    fn bash_block_follows_the_flag_and_the_agent() {
+        let render = |agent: &str, tools: Tools| {
+            preset()
+                .render_block("bash_tools", &ctx(agent, tools))
+                .expect("render")
+        };
+        let aurora = render("aurora", all_tools());
+        assert!(aurora.contains("run_bash"), "got: {aurora}");
+        assert!(render("aurora", no_tools()).is_empty());
+        assert!(render("grok", all_tools()).is_empty());
     }
 }

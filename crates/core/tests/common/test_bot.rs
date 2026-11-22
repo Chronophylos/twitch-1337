@@ -98,6 +98,9 @@ pub struct TestBot {
     /// Shared EMA latency cell — the same `Arc<AtomicU32>` the latency
     /// handler re-bases and the 1337 handler reads.
     latency_value: Arc<AtomicU32>,
+    /// Interpreter permits shared by `!bash` and Aurora's `run_bash`
+    /// (`Services::bash_permits`). Tests hold one to occupy the sandbox.
+    pub bash_permits: Arc<tokio::sync::Semaphore>,
     /// Address the dashboard listener actually bound (`with_web`), so a test
     /// can bind port 0 and still reach it.
     web_addr: Option<std::net::SocketAddr>,
@@ -583,6 +586,7 @@ impl TestBotBuilder {
             let latency_value = Arc::new(AtomicU32::new(
                 settings_handle.load().twitch.expected_latency,
             ));
+            let bash_permits = twitch_1337::commands::bash::shared_permits(&settings_handle);
             let services = Services {
                 clock: clock.clone(),
                 llm: Arc::new(
@@ -665,6 +669,7 @@ impl TestBotBuilder {
                 echo,
                 suspension,
                 recap: recap_handle.clone(),
+                bash_permits: bash_permits.clone(),
                 log_ring: Default::default(),
             };
             let mut web_addr = None;
@@ -783,6 +788,7 @@ impl TestBotBuilder {
                 settings: settings_handle,
                 settings_store: settings_store.clone(),
                 latency_value,
+                bash_permits,
                 web_addr,
                 shutdown: Some(shutdown_tx),
                 bot_task: Some(bot_task),

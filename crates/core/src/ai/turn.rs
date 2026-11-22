@@ -53,12 +53,19 @@ const MAX_SHIPMENT_LOOKUPS_PER_TURN: usize = 3;
 /// not be able to loop the tool.
 const MAX_NETWORK_LOOKUPS_PER_TURN: usize = 3;
 
+/// `run_bash` calls per turn. Each run may hold an interpreter permit shared
+/// with `!bash` for up to `bash.timeout_ms`, so one turn must not be able to
+/// keep chat out of the sandbox.
+const MAX_BASH_RUNS_PER_TURN: usize = 3;
+
 const WEB_BUDGET_EXHAUSTED: &str = "web_budget_exhausted: this turn's web_search/read_url \
      limit is used up; answer with what you already have";
 const SHIPMENT_BUDGET_EXHAUSTED: &str = "shipment_budget_exhausted: this turn's \
      track_shipment limit is used up; answer with what you already have";
 const NETWORK_BUDGET_EXHAUSTED: &str = "network_budget_exhausted: this turn's \
      lookup_network limit is used up; answer with what you already have";
+const BASH_BUDGET_EXHAUSTED: &str = "bash_budget_exhausted: this turn's \
+     run_bash limit is used up; answer with what you already have";
 
 /// Per-turn call quota for one paid or rate-limited tool family.
 struct CallBudget {
@@ -160,6 +167,8 @@ pub struct TurnRunner {
     command_catalog: crate::ai::commands_tool::CatalogCell,
     emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     recap: Option<Arc<RecapHandle>>,
+    /// Interpreter permits shared with `!bash`.
+    bash_permits: Arc<tokio::sync::Semaphore>,
     /// Per-process nonce stamped into memory fences. Stable across
     /// turns so the memory block is a byte-stable cache prefix; the real
     /// fence-injection guard is `scrub_for_inject`, not nonce freshness.
@@ -188,6 +197,7 @@ impl TurnRunner {
             command_catalog: deps.command_catalog,
             emote_tracker: deps.emote_tracker,
             recap: deps.recap,
+            bash_permits: deps.bash_permits,
             prompt_nonce: inject::fresh_nonce(),
         }
     }
@@ -407,6 +417,7 @@ impl TurnRunner {
                 emote_stats: self.emote_tracker.is_some(),
                 web: self.web.is_some(),
                 dhl: self.dhl.is_some(),
+                bash: !grok_alias,
             },
             inject: crate::ai::preset::Inject {
                 memory: &memory,
@@ -482,6 +493,7 @@ impl TurnRunner {
             tools.push(crate::ai::flight_tool::plan_flight_tool());
             tools.push(crate::ai::packages_tool::search_packages_tool());
             tools.push(crate::ai::network_tool::lookup_network_tool());
+            tools.push(crate::ai::bash_tool::run_bash_tool());
             if self.dhl.is_some() {
                 tools.push(crate::ai::dhl_tool::track_shipment_tool());
             }
@@ -522,6 +534,7 @@ impl TurnRunner {
                         CallBudget::new(self.web.as_ref().map_or(0, AiWeb::max_rounds));
                     let shipment_budget = CallBudget::new(MAX_SHIPMENT_LOOKUPS_PER_TURN);
                     let network_budget = CallBudget::new(MAX_NETWORK_LOOKUPS_PER_TURN);
+                    let bash_budget = CallBudget::new(MAX_BASH_RUNS_PER_TURN);
                     let prior_rounds = if grok_alias
                         && let Some(w) = &self.web
                         && web_budget.try_consume()
@@ -564,6 +577,9 @@ impl TurnRunner {
                         web_budget: &web_budget,
                         shipment_budget: &shipment_budget,
                         network_budget: &network_budget,
+                        bash_budget: &bash_budget,
+                        bash_permits: &self.bash_permits,
+                        settings: &self.settings,
                         command_catalog: &self.command_catalog,
                         emote_tracker: self.emote_tracker.as_ref(),
                         trace: &trace,
@@ -665,7 +681,7 @@ impl TurnRunner {
 /// (web_search/read_url) when web tools are configured, the on-demand
 /// `search_emotes` tool when the emote provider is active, the always-on
 /// doener_index and list_commands tools, the Aurora-only draw_tarot and plan_flight tools, or the
-/// Aurora-only search_packages and lookup_network tools. A name outside
+/// Aurora-only search_packages, lookup_network and run_bash tools. A name outside
 /// `registered_tools` runs nothing, so a model can't reach a tool this turn
 /// never offered it.
 struct V2Executor<'a> {
@@ -685,6 +701,12 @@ struct V2Executor<'a> {
     shipment_budget: &'a CallBudget,
     /// `lookup_network` quota ([`MAX_NETWORK_LOOKUPS_PER_TURN`]).
     network_budget: &'a CallBudget,
+    /// `run_bash` quota ([`MAX_BASH_RUNS_PER_TURN`]).
+    bash_budget: &'a CallBudget,
+    /// Interpreter permits shared with `!bash`.
+    bash_permits: &'a tokio::sync::Semaphore,
+    /// Read per `run_bash` call for the `bash.*` sandbox limits.
+    settings: &'a SettingsHandle,
     command_catalog: &'a crate::ai::commands_tool::CatalogCell,
     emote_tracker: Option<&'a Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     trace: &'a TraceIds,
@@ -724,6 +746,18 @@ impl ToolExecutor for V2Executor<'_> {
                 Some(c) => crate::ai::dhl_tool::execute_track_shipment(c, call).await,
                 None => ToolResultMessage::for_call(call, "unknown_tool".to_string()),
             };
+        }
+        if call.name == crate::ai::bash_tool::RUN_BASH_TOOL_NAME {
+            if !self.bash_budget.try_consume() {
+                return ToolResultMessage::for_call(call, BASH_BUDGET_EXHAUSTED.to_string());
+            }
+            return crate::ai::bash_tool::execute_run_bash(
+                self.bash_permits,
+                self.settings,
+                call,
+                self.cancellation,
+            )
+            .await;
         }
         if call.name == crate::ai::network_tool::LOOKUP_NETWORK_TOOL_NAME {
             if !self.network_budget.try_consume() {
@@ -900,6 +934,8 @@ mod turn_tests {
         /// First round: `n` distinct calls to the named tool, each with a
         /// `query` argument (`AS3320`, `AS3321`, ...). Later rounds: text.
         Calls(&'static str, usize),
+        /// First round: one `run_bash` call per script. Later rounds: text.
+        Scripts(Vec<&'static str>),
     }
 
     #[async_trait]
@@ -925,7 +961,7 @@ mod turn_tests {
                     status: *status,
                     body: "nope".into(),
                 }),
-                Answer::Calls(..) if !first_round => {
+                Answer::Calls(..) | Answer::Scripts(_) if !first_round => {
                     Ok(ToolChatCompletionResponse::Message("fertig".into()))
                 }
                 Answer::Calls(name, n) => Ok(ToolChatCompletionResponse::ToolCalls {
@@ -934,6 +970,19 @@ mod turn_tests {
                             id: format!("call{i}"),
                             name: (*name).into(),
                             arguments: serde_json::json!({ "query": format!("AS{}", 3320 + i) }),
+                            arguments_parse_error: None,
+                        })
+                        .collect(),
+                    reasoning_content: None,
+                }),
+                Answer::Scripts(scripts) => Ok(ToolChatCompletionResponse::ToolCalls {
+                    calls: scripts
+                        .iter()
+                        .enumerate()
+                        .map(|(i, script)| ToolCall {
+                            id: format!("call{i}"),
+                            name: crate::ai::bash_tool::RUN_BASH_TOOL_NAME.into(),
+                            arguments: serde_json::json!({ "script": script }),
                             arguments_parse_error: None,
                         })
                         .collect(),
@@ -1053,6 +1102,7 @@ mod turn_tests {
             command_catalog: Default::default(),
             emote_tracker: None,
             recap: None,
+            bash_permits: crate::commands::bash::shared_permits(&settings),
         });
 
         Fixture {
@@ -1336,5 +1386,84 @@ mod turn_tests {
         };
         assert!(offered(&aurora));
         assert!(!offered(&grok));
+    }
+
+    /// `run_bash` is a Viewer-Facing Tool for Aurora only.
+    #[tokio::test]
+    async fn run_bash_is_aurora_only() {
+        let aurora = fixture(Answer::Text("moin".into()), 30).await;
+        aurora
+            .runner
+            .run_turn(input(Agent::Aurora, "hi"))
+            .await
+            .unwrap();
+        let grok = fixture(Answer::Text("yep".into()), 30).await;
+        grok.runner
+            .run_turn(input(Agent::Grok, "hi"))
+            .await
+            .unwrap();
+
+        let offered = |f: &Fixture| {
+            f.llm.calls.lock().unwrap()[0]
+                .tools
+                .iter()
+                .any(|t| t.name == crate::ai::bash_tool::RUN_BASH_TOOL_NAME)
+        };
+        assert!(offered(&aurora));
+        assert!(!offered(&grok));
+    }
+
+    /// Calls past the per-turn budget come back as `bash_budget_exhausted`
+    /// without an interpreter; the first ones run and report JSON.
+    #[tokio::test]
+    async fn bash_runs_past_the_turn_budget_are_not_run() {
+        let f = fixture(Answer::Scripts(vec!["printf ran"; 4]), 30).await;
+
+        let out = f
+            .runner
+            .run_turn(input(Agent::Aurora, "rechne viermal"))
+            .await
+            .unwrap();
+
+        assert!(matches!(out, TurnOutcome::Reply { .. }), "got {out:?}");
+        let calls = f.llm.calls.lock().unwrap();
+        let results = &calls[1].prior_rounds[0].results;
+        assert_eq!(results.len(), 4);
+        let exhausted = results
+            .iter()
+            .filter(|r| r.content == BASH_BUDGET_EXHAUSTED)
+            .count();
+        assert_eq!(exhausted, 4 - MAX_BASH_RUNS_PER_TURN);
+        for r in results
+            .iter()
+            .filter(|r| r.content != BASH_BUDGET_EXHAUSTED)
+        {
+            let v: serde_json::Value = serde_json::from_str(&r.content)
+                .unwrap_or_else(|e| panic!("not JSON ({e}): {}", r.content));
+            assert_eq!(v["stdout"], "ran");
+            assert_eq!(v["exit_code"], 0);
+        }
+    }
+
+    /// Two runs in one turn get two interpreters: a file the first writes
+    /// does not exist for the second.
+    #[tokio::test]
+    async fn bash_runs_in_one_turn_do_not_share_a_filesystem() {
+        let script = "cat /tmp/state 2>/dev/null; printf leaked > /tmp/state";
+        let f = fixture(Answer::Scripts(vec![script, script]), 30).await;
+
+        f.runner
+            .run_turn(input(Agent::Aurora, "zweimal"))
+            .await
+            .unwrap();
+
+        let calls = f.llm.calls.lock().unwrap();
+        let results = &calls[1].prior_rounds[0].results;
+        assert_eq!(results.len(), 2);
+        for r in results {
+            let v: serde_json::Value = serde_json::from_str(&r.content)
+                .unwrap_or_else(|e| panic!("not JSON ({e}): {}", r.content));
+            assert_eq!(v["stdout"], "", "a run saw another run's file: {v}");
+        }
     }
 }
