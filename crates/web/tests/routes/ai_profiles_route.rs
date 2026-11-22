@@ -1045,7 +1045,7 @@ async fn load_models_returns_openrouter_datalist_without_caching() {
         .await;
     let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
     use_listing_key(&mut state);
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
@@ -1074,7 +1074,7 @@ async fn load_models_returns_openrouter_datalist_without_caching() {
 async fn model_datalist_does_not_restrict_free_text_save() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());

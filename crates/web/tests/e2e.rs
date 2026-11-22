@@ -1222,10 +1222,7 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
         .await
         .expect("pick open_ai_compatible");
     assert_eq!(s.eval(enabled).await, "open_ai_compatible");
-    assert_eq!(
-        s.eval(visible_model_buttons).await,
-        "open_ai_compatible"
-    );
+    assert_eq!(s.eval(visible_model_buttons).await, "open_ai_compatible");
     assert_eq!(
         s.eval(base_state).await,
         "true|https://llm.example.com/v1|Required for an OpenAI-compatible endpoint."

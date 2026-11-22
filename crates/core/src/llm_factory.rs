@@ -318,8 +318,10 @@ impl LlmRegistry {
             Some(name) => Some(self.keys.get(name).ok_or(ModelListingError::UnknownKey)?),
             None => None,
         };
-        if matches!(prof.provider, AiProvider::OpenAi | AiProvider::OpenAiCompatible)
-            && secret.is_none()
+        if matches!(
+            prof.provider,
+            AiProvider::OpenAi | AiProvider::OpenAiCompatible
+        ) && secret.is_none()
         {
             return Err(ModelListingError::MissingKey);
         }
@@ -343,12 +345,13 @@ impl LlmRegistry {
         if !response.status().is_success() {
             return Err(ModelListingError::HttpStatus(response.status().as_u16()));
         }
-        let body = read_capped(response, MAX_MODEL_LIST_BYTES)
-            .await
-            .map_err(|error| match error {
-                BodyError::TooLarge { .. } => ModelListingError::ResponseTooLarge,
-                BodyError::Read(error) => model_request_failure(error),
-            })?;
+        let body =
+            read_capped(response, MAX_MODEL_LIST_BYTES)
+                .await
+                .map_err(|error| match error {
+                    BodyError::TooLarge { .. } => ModelListingError::ResponseTooLarge,
+                    BodyError::Read(error) => model_request_failure(error),
+                })?;
         match capability {
             ModelListing::OpenRouter => {
                 let listing: OpenRouterModels = serde_json::from_slice(&body)
