@@ -1998,6 +1998,21 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   border-color: var(--line-strong);
   background: var(--bg-2);
 }
+.profile-form :is(input, select)[aria-invalid="true"],
+.profile-form :is(input, select)[aria-invalid="true"]:focus {
+  border-color: var(--danger);
+}
+.profile-form .segmented[aria-invalid="true"] {
+  outline: 1px solid var(--danger);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+.profile-form .field-error {
+  margin: 0;
+  max-width: 420px;
+  color: var(--danger);
+  font-size: 12px;
+}
 .profile-form .profile-section {
   min-width: 0;
   margin: 0;
