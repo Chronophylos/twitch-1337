@@ -87,6 +87,7 @@ where
         )),
         Arc::new(commands::leaderboard::LeaderboardCommand::new(
             services.leaderboard.clone(),
+            services.public_url.as_deref(),
         )),
         Arc::new(commands::hall_of_shame::HallOfShameCommand::new(
             services.hall_of_shame.clone(),

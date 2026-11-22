@@ -4,6 +4,7 @@
 //! - `/healthz` (always public)
 //! - `/commands.json` (always public, chat-client autocomplete)
 //! - `/commands` (always public, German help page from the same catalog)
+//! - `/1337` (always public, German full 1337 ranking linked from `!lb`)
 //! - `/login`, `/auth/callback`, `/logout` (OAuth + post-login `?next=` deep-link)
 //! - `/assets/*` (embedded htmx + pico bundles, immutable cache)
 //!
@@ -155,6 +156,10 @@ pub fn build_router(state: WebState) -> Router {
         .merge(routes::assets::router())
         .merge(routes::commands::router(
             state.command_catalog.clone(),
+            state.channel.clone(),
+        ))
+        .merge(routes::public_leaderboard::router(
+            state.leaderboard.clone(),
             state.channel.clone(),
         ))
         .merge(auth::auth_router().with_state(state.clone()));

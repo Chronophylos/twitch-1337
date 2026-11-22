@@ -14,6 +14,7 @@ pub mod leaderboard;
 pub mod logs;
 pub mod memory;
 pub mod pings;
+pub mod public_leaderboard;
 pub mod schedules;
 pub mod settings;
 

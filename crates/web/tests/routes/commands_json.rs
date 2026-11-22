@@ -18,7 +18,7 @@ impl CommandCatalog for OneCommand {
             aliases: vec![],
             kind: CommandKind::Command,
             permission: Permission::Everyone,
-            description: "1337-Leaderboard, Top 5".to_owned(),
+            description: "1337-Leaderboard, Top 10".to_owned(),
             usage: "!lb".to_owned(),
         }]
     }

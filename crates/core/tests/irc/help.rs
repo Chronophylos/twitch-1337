@@ -139,6 +139,24 @@ async fn commands_and_hilfe_look_up_like_help() {
 }
 
 #[tokio::test]
+async fn help_lb_and_commands_page_describe_the_top_10() {
+    let mut bot = TestBotBuilder::new().with_web("127.0.0.1:0").spawn().await;
+
+    let reply = ask(&mut bot, "alice", "!help lb").await;
+    assert_eq!(reply, "!lb: 1337-Leaderboard, Top 10 · Nutzung: !lb");
+
+    let html = reqwest::get(bot.web_url("/commands"))
+        .await
+        .expect("connect")
+        .text()
+        .await
+        .expect("body");
+    assert!(html.contains("1337-Leaderboard, Top 10"), "{html}");
+
+    bot.shutdown().await;
+}
+
+#[tokio::test]
 async fn help_has_a_per_user_cooldown_shared_by_its_aliases() {
     let mut bot = TestBotBuilder::new().spawn().await;
 
