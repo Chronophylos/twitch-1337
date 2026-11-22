@@ -149,6 +149,9 @@ pub struct Services {
     /// once the registry is built; the web state is composed earlier, so it
     /// shares this cell instead of the registry itself.
     pub command_catalog: Arc<std::sync::OnceLock<Arc<dyn commands::CommandCatalog>>>,
+    /// Aurora's Viewer-Facing Tool availability. Filled from the actual Turn
+    /// dependencies and read by the public `/commands` page.
+    pub aurora_tools: crate::ai::viewer_tools::AuroraToolCatalog,
     /// Shared v2 memory store. Constructed by the bin so the bot's `!ai`
     /// turn / dreamer ritual and the dashboard memory editor write through
     /// the *same* per-path mutex map. Two independent stores against the

@@ -235,6 +235,7 @@ where
                 rdap,
                 ipinfo: services.ipinfo.clone(),
                 command_catalog: services.command_catalog.clone(),
+                aurora_tools: services.aurora_tools.clone(),
                 emote_tracker: services.emote_tracker.clone(),
                 model_catalog,
                 mouths: services.mouths.clone(),

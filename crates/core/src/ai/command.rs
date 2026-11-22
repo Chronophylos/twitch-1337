@@ -153,6 +153,8 @@ pub struct AiCommandDeps {
     pub rdap: Arc<crate::rdap::RdapClient>,
     pub ipinfo: Option<Arc<crate::ipinfo::IpinfoClient>>,
     pub command_catalog: crate::ai::commands_tool::CatalogCell,
+    /// Viewer-Facing Tool availability shared with the public commands page.
+    pub aurora_tools: crate::ai::viewer_tools::AuroraToolCatalog,
     pub emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     pub recap: Option<Arc<RecapHandle>>,
     /// Interpreter permits shared with `!bash` (`Services::bash_permits`),

@@ -53,6 +53,9 @@ pub struct WebState {
     /// built. Empty until then; `/commands.json` answers 503 meanwhile.
     pub command_catalog:
         Arc<std::sync::OnceLock<Arc<dyn twitch_1337_core::commands::CommandCatalog>>>,
+    /// Viewer-Facing Tools published from Aurora's executable dependencies.
+    /// Empty while AI is disabled or the Turn runner has not been built.
+    pub aurora_tools: twitch_1337_core::ai::viewer_tools::AuroraToolCatalog,
     /// Shared v2 memory store (same `Arc`-backed instance the bot's `!ai`
     /// turn / dreamer ritual writes through). Sharing the store keeps the
     /// per-path mutex map coherent — two independent stores against the
@@ -152,6 +155,7 @@ impl WebState {
             oauth: web.oauth,
             ping_actor: core.ping.clone(),
             command_catalog: core.command_catalog.clone(),
+            aurora_tools: core.aurora_tools.clone(),
             memory_store: core.memory_store.clone(),
             memory_audit: web.memory_audit,
             signed_key: web.signed_key,
@@ -237,6 +241,7 @@ impl WebState {
             oauth,
             ping_actor,
             command_catalog: Arc::default(),
+            aurora_tools: twitch_1337_core::ai::viewer_tools::AuroraToolCatalog::default(),
             memory_store,
             memory_audit,
             signed_key,

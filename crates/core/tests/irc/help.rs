@@ -209,3 +209,47 @@ async fn commands_page_and_json_hide_disabled_commands_and_members_only_pings() 
 
     bot.shutdown().await;
 }
+
+#[tokio::test]
+async fn live_commands_page_uses_aurora_registration_catalog_but_help_stays_chat_only() {
+    let mut bot = TestBotBuilder::new()
+        .with_ai()
+        .with_dhl_base_url("http://127.0.0.1:1")
+        .with_web("127.0.0.1:0")
+        .spawn()
+        .await;
+
+    let http = reqwest::Client::new();
+    let page = http
+        .get(bot.web_url("/commands"))
+        .send()
+        .await
+        .expect("connect to commands page");
+    assert_eq!(page.status(), 200);
+    let html = page.text().await.expect("commands page body");
+    assert_eq!(html.matches("class=\"tr aurora-tool\"").count(), 7);
+    for expected in ["Döner-Index", "Bash-Sandbox", "DHL-Sendung"] {
+        assert!(html.contains(expected), "missing {expected}");
+    }
+    assert!(
+        !html.contains("Websuche"),
+        "web integration was not enabled"
+    );
+
+    let json = http
+        .get(bot.web_url("/commands.json"))
+        .send()
+        .await
+        .expect("connect to commands JSON")
+        .text()
+        .await
+        .expect("commands JSON body");
+    assert!(!json.contains("run_bash"), "tool leaked into JSON: {json}");
+    assert!(!json.contains("track_shipment"));
+    assert_eq!(
+        ask(&mut bot, "alice", "!help run_bash").await,
+        UNKNOWN_REPLY
+    );
+
+    bot.shutdown().await;
+}
