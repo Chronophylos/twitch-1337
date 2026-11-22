@@ -733,6 +733,7 @@ for (const form of document.querySelectorAll('form.profile-form')) {
   const baseUrl = form.querySelector('input[name="base_url"]');
   const baseUrlHelp = form.querySelector('[data-base-url-help]');
   const model = form.querySelector('input[name="model"]');
+  const modelButtons = form.querySelectorAll('[data-load-models-provider]');
   if (!select) continue;
   const refresh = () => {
     const decision = kind?.value === 'decision';
@@ -753,6 +754,9 @@ for (const form of document.querySelectorAll('form.profile-form')) {
 
     const selected = select.selectedOptions[0];
     if (!selected) return;
+    for (const button of modelButtons) {
+      button.hidden = button.dataset.loadModelsProvider !== select.value;
+    }
     const requiresKey = selected.dataset.requiresKey === '1';
     if (keyRow) keyRow.hidden = !requiresKey;
     if (key) {

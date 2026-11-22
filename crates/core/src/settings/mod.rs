@@ -62,7 +62,7 @@ pub use link_correction::{LinkCorrectionOverrides, LinkCorrectionSettings};
 pub use observability::{
     ObservabilityOverrides, ObservabilitySettings, OtelOverrides, OtelSettings,
 };
-pub use provider::{AiProvider, Efforts, ProviderCaps};
+pub use provider::{AiProvider, Efforts, ModelListing, ProviderCaps};
 pub use schedules::Schedule;
 pub use spoiler::{SpoilerOverrides, SpoilerSettings};
 pub use store::{Actor, SettingsStore};

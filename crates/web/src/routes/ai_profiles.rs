@@ -12,14 +12,16 @@
 use askama::Template;
 use axum::Router;
 use axum::extract::{Extension, Path, Query, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use llm::LlmError;
 use serde::Deserialize;
 use tower_cookies::Cookies;
-use twitch_1337_core::llm_factory::ProfileTestError;
+use twitch_1337_core::llm_factory::{ListedModel, ModelListingError, ProfileTestError};
 use twitch_1337_core::settings::{
-    Actor, AiProfile, AiProvider, Efforts, FieldError, ProfileKind, Settings, SettingsError,
+    Actor, AiProfile, AiProvider, Efforts, FieldError, ProfileKind, ProviderCaps, Settings,
+    SettingsError,
 };
 
 use crate::auth::csrf;
@@ -224,6 +226,7 @@ pub fn router() -> Router<WebState> {
         .route("/ai-profiles", get(list))
         .route("/ai-profiles/add", post(create))
         .route("/ai-profiles/test", post(test_connection))
+        .route("/ai-profiles/models", post(list_models))
         .route("/ai-profiles/{name}/edit", post(update))
         .route("/ai-profiles/{name}/delete", post(delete))
 }
@@ -272,6 +275,7 @@ struct ProviderOption {
     effort_kind: &'static str,
     effort_values: Vec<&'static str>,
     service_tier: bool,
+    model_listing: bool,
     requires_key: bool,
     base_url_required: bool,
     default_base_url: Option<&'static str>,
@@ -281,31 +285,33 @@ struct ProviderOption {
 fn provider_options() -> Vec<ProviderOption> {
     AiProvider::ALL
         .into_iter()
-        .map(|p| {
-            let caps = p.caps();
-            let (effort_kind, effort_values) = match caps.efforts {
-                Efforts::Fixed(list) => ("fixed", list.to_vec()),
-                Efforts::FreeText => ("free", Vec::new()),
-                Efforts::None => ("none", Vec::new()),
-            };
-            ProviderOption {
-                value: p.as_str(),
-                label: p.label(),
-                effort_kind,
-                effort_values,
-                service_tier: caps.service_tier,
-                requires_key: p.uses_openai_client(),
-                base_url_required: caps.default_base_url.is_none(),
-                default_base_url: caps.default_base_url,
-                model_placeholder: match p {
-                    AiProvider::OpenRouter => "provider/model-id",
-                    AiProvider::OpenAi => "gpt-5",
-                    AiProvider::OpenAiCompatible => "vendor/model-id",
-                    AiProvider::Ollama => "qwen3:8b",
-                },
-            }
-        })
+        .map(|provider| provider_option_with_caps(provider, provider.caps()))
         .collect()
+}
+
+fn provider_option_with_caps(provider: AiProvider, caps: ProviderCaps) -> ProviderOption {
+    let (effort_kind, effort_values) = match caps.efforts {
+        Efforts::Fixed(list) => ("fixed", list.to_vec()),
+        Efforts::FreeText => ("free", Vec::new()),
+        Efforts::None => ("none", Vec::new()),
+    };
+    ProviderOption {
+        value: provider.as_str(),
+        label: provider.label(),
+        effort_kind,
+        effort_values,
+        service_tier: caps.service_tier,
+        model_listing: caps.supports_model_listing(),
+        requires_key: provider.uses_openai_client(),
+        base_url_required: caps.default_base_url.is_none(),
+        default_base_url: caps.default_base_url,
+        model_placeholder: match provider {
+            AiProvider::OpenRouter => "provider/model-id",
+            AiProvider::OpenAi => "gpt-5",
+            AiProvider::OpenAiCompatible => "vendor/model-id",
+            AiProvider::Ollama => "qwen3:8b",
+        },
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -333,6 +339,13 @@ impl FormState {
             ..Self::default()
         }
     }
+}
+
+#[derive(Template)]
+#[template(path = "ai_profiles/_model_options.html")]
+struct ModelOptionsTpl {
+    id: &'static str,
+    models: Vec<ListedModel>,
 }
 
 #[derive(Template)]
@@ -395,6 +408,16 @@ impl ProfileForm {
     /// the key-name requirement lives here so a missing name cannot
     /// quarantine `settings.ron` on bot start.
     fn to_profile(&self) -> Result<AiProfile, FieldError> {
+        self.to_profile_inner(true)
+    }
+
+    /// Listing deliberately lets the registry report a missing key, just like
+    /// its other operational failures, rather than re-rendering the form.
+    fn to_listing_profile(&self) -> Result<AiProfile, FieldError> {
+        self.to_profile_inner(false)
+    }
+
+    fn to_profile_inner(&self, require_key: bool) -> Result<AiProfile, FieldError> {
         let provider = AiProvider::ALL
             .into_iter()
             .find(|p| p.as_str() == self.provider)
@@ -422,7 +445,11 @@ impl ProfileForm {
             message: format!("must be a whole number of seconds (got {:?})", self.timeout),
         })?;
         let key = non_empty(&self.key);
-        if provider.uses_openai_client() && !self.model.trim().is_empty() && key.is_none() {
+        if require_key
+            && provider.uses_openai_client()
+            && !self.model.trim().is_empty()
+            && key.is_none()
+        {
             return Err(FieldError {
                 field: "form.key".into(),
                 message: "required (must name an [ai.keys] entry)".into(),
@@ -665,6 +692,106 @@ async fn test_connection(
         Some(submitted),
         Some(connection_test),
     )
+}
+
+async fn list_models(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    axum_extra::extract::Form(form): axum_extra::extract::Form<ProfileForm>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form._csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    let profile = match form.to_listing_profile() {
+        Ok(profile) => profile,
+        Err(error) => {
+            let message = match error.field.as_str() {
+                "form.key" => "This provider requires a key name from [ai.keys].",
+                "form.timeout" => "Timeout must be a whole number of seconds.",
+                "form.provider" => "Unknown provider.",
+                "form.kind" => "Unknown profile kind.",
+                _ => "Invalid profile fields; check Provider, Key name, and Timeout.",
+            };
+            return Ok((StatusCode::BAD_REQUEST, message).into_response());
+        }
+    };
+    match state.llm.list_models(&profile).await {
+        Ok(models) => render(&ModelOptionsTpl {
+            id: if form._edit_target.is_some() {
+                "profile-edit-model-options"
+            } else {
+                "profile-new-model-options"
+            },
+            models,
+        }),
+        Err(error) => {
+            let (status, message) = model_listing_failure(error);
+            Ok((status, message).into_response())
+        }
+    }
+}
+
+fn model_listing_failure(error: ModelListingError) -> (StatusCode, String) {
+    match error {
+        ModelListingError::UnknownKey => (
+            StatusCode::BAD_REQUEST,
+            "Unknown key name. Choose an existing [ai.keys] entry.".to_owned(),
+        ),
+        ModelListingError::MissingKey => (
+            StatusCode::BAD_REQUEST,
+            "This provider requires a key name from [ai.keys].".to_owned(),
+        ),
+        ModelListingError::MissingBaseUrl => (
+            StatusCode::BAD_REQUEST,
+            "Base URL is required for this provider.".to_owned(),
+        ),
+        ModelListingError::Unsupported => (
+            StatusCode::BAD_REQUEST,
+            "This provider does not support model listing.".to_owned(),
+        ),
+        ModelListingError::InvalidRequest => (
+            StatusCode::BAD_REQUEST,
+            "Could not build the provider request. Check Base URL and Key name.".to_owned(),
+        ),
+        ModelListingError::Timeout => (
+            StatusCode::GATEWAY_TIMEOUT,
+            "Model listing timed out. Increase Timeout or check provider load.".to_owned(),
+        ),
+        ModelListingError::Connect => (
+            StatusCode::BAD_GATEWAY,
+            "Could not connect to the provider. Check Base URL, DNS, and TLS.".to_owned(),
+        ),
+        ModelListingError::Transport => (
+            StatusCode::BAD_GATEWAY,
+            "Could not retrieve the model list. Check Base URL and network access.".to_owned(),
+        ),
+        ModelListingError::HttpStatus(status) => {
+            let message = match status {
+                401 | 403 => format!(
+                    "Authentication failed (HTTP {status}). Check the selected [ai.keys] entry and its provider permissions."
+                ),
+                404 => format!(
+                    "Model listing endpoint not found (HTTP {status}). Check Base URL or provider support."
+                ),
+                429 => {
+                    "Provider rate limited model listing (HTTP 429). Try again later.".to_owned()
+                }
+                500..=599 => format!(
+                    "Provider failed to list models (HTTP {status}). Check the provider's status and try again."
+                ),
+                _ => format!("Provider rejected model listing (HTTP {status})."),
+            };
+            (StatusCode::BAD_GATEWAY, message)
+        }
+        ModelListingError::MalformedResponse => (
+            StatusCode::BAD_GATEWAY,
+            "Provider returned an invalid model list.".to_owned(),
+        ),
+        ModelListingError::ResponseTooLarge => (
+            StatusCode::BAD_GATEWAY,
+            "Provider returned a model list larger than 8 MiB.".to_owned(),
+        ),
+    }
 }
 
 fn connection_failure(error: ProfileTestError) -> String {
@@ -960,4 +1087,50 @@ fn render_page(
         kinds: ProfileKind::ALL,
     };
     render(&resp)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use twitch_1337_core::settings::ModelListing;
+
+    #[test]
+    fn form_omits_load_models_for_an_unsupported_capability() {
+        let caps = ProviderCaps {
+            efforts: Efforts::None,
+            service_tier: false,
+            default_base_url: None,
+            model_listing: ModelListing::None,
+        };
+        let tpl = ListTpl {
+            rows: Vec::new(),
+            edit_form: None,
+            edit_target: None,
+            new_form: Some(FormState {
+                provider: AiProvider::Ollama.as_str().to_owned(),
+                ..FormState::new_default()
+            }),
+            form_errors: FormErrors::default(),
+            global_errors: Vec::new(),
+            flash: None,
+            connection_test: None,
+            csrf: String::new(),
+            user_login: "owner".to_owned(),
+            user_avatar_url: None,
+            current_page: crate::nav::AI_PROFILES,
+            is_mod: true,
+            is_broadcaster: true,
+            is_owner: true,
+            total: 0,
+            providers: vec![provider_option_with_caps(AiProvider::Ollama, caps)],
+            kinds: ProfileKind::ALL,
+        };
+
+        let html = tpl.render().unwrap();
+        assert!(!html.contains("Load models"), "{html}");
+        assert!(
+            html.contains("list=\"profile-new-model-options\""),
+            "{html}"
+        );
+    }
 }

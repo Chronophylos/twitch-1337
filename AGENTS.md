@@ -251,8 +251,9 @@ resolved per call through `LlmRegistry` (`crates/core/src/llm_factory.rs`), so
 changing an agent's profile selection or editing a profile applies on the next
 turn — no restart. Each profile declares an
 `AiProvider` (`open_router`, `open_ai`, `open_ai_compatible`, `ollama`) whose
-`caps()` table decides which `reasoning_effort` values it accepts and whether
-`service_tier` applies — see `crates/core/src/settings/provider.rs`. Memory
+`caps()` table decides which `reasoning_effort` values it accepts, whether
+`service_tier` applies, and which model-listing wire format it supports — see
+`crates/core/src/settings/provider.rs`. Memory
 caps, dreamer schedule, web/emote/media tool toggles, history caps, and every
 other runtime knob live in the dashboard (`/settings`, owner only) and
 persist to `$DATA_DIR/settings.ron`. A leftover legacy `[ai]` table in
@@ -391,8 +392,11 @@ AI profile edits (provider, base URL, model, timeout, reasoning_effort,
 service_tier) apply live via `SettingsHandle` and `LlmRegistry` — no restart,
 same as behavior limits including Aurora reply target/soft/hard character
 caps, history caps, memory byte budgets, dreamer schedule, web tools,
-emotes, and media. Model fields are plain text inputs — type the
-upstream model id exactly.
+emotes, and media. Model fields remain free text. **Load models** posts the
+current form to owner-only, CSRF-checked `POST /ai-profiles/models` and swaps
+in a `<datalist>`; it never caches, is bounded by the profile timeout and an
+8 MiB response cap, sorts and caps suggestions at 2000, and reports sanitized
+failures through the global htmx toast. Saving never validates the entered model against that list.
 
 OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config structs are `Deserialize`-only; do NOT add `Serialize` derive (closes credential-leak via debug dump).
 

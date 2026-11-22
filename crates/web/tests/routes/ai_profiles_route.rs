@@ -580,6 +580,69 @@ async fn post_form(
     app.oneshot(req).await.unwrap()
 }
 
+fn model_listing_form(
+    csrf: &str,
+    provider: &str,
+    base_url: &str,
+    key: &str,
+    timeout: u64,
+) -> String {
+    format!(
+        "_csrf={}&name=draft&provider={}&base_url={}&key={}&model=manual-model&timeout={timeout}",
+        urlencoding::encode(csrf),
+        urlencoding::encode(provider),
+        urlencoding::encode(base_url),
+        urlencoding::encode(key),
+    )
+}
+
+async fn post_models(
+    app: axum::Router,
+    sid: &str,
+    csrf_cookie: &str,
+    body: String,
+) -> axum::http::Response<Body> {
+    let req = Request::builder()
+        .method("POST")
+        .uri("/ai-profiles/models")
+        .header(header::COOKIE, cookie_header(sid, csrf_cookie))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header("HX-Request", "true")
+        .body(Body::from(body))
+        .unwrap();
+    app.oneshot(req).await.unwrap()
+}
+
+fn use_listing_key(state: &mut twitch_1337_web::WebState) {
+    state.llm = Arc::new(
+        twitch_1337_core::llm_factory::LlmRegistry::new(None, state.settings.clone()).with_keys(
+            HashMap::from([("k".to_owned(), SecretString::from("test-secret"))]),
+        ),
+    );
+}
+
+async fn assert_safe_listing_error(res: axum::http::Response<Body>, forbidden: &[&str]) {
+    assert!(
+        res.status().is_client_error() || res.status().is_server_error(),
+        "listing failures must not be swapped as successful fragments"
+    );
+    let content_type = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(content_type.starts_with("text/plain"), "{content_type}");
+    let text = body_string(res).await;
+    assert!(!text.is_empty());
+    assert!(text.len() <= 300, "toast text must stay short: {text}");
+    assert!(!text.contains("<input"), "{text}");
+    assert!(!text.contains("manual-model"), "{text}");
+    for value in forbidden {
+        assert!(!text.contains(value), "sensitive value leaked: {text}");
+    }
+}
+
 async fn point_spoiler_at(state: &twitch_1337_web::WebState, name: &str) {
     let mut o = SettingsOverrides::default();
     o.spoiler.profile = Some(name.to_owned());
@@ -946,6 +1009,231 @@ async fn cards_label_metadata_and_warn_about_missing_models() {
         !empty.contains("Key name"),
         "absent key name must not render: {empty}"
     );
+}
+
+#[tokio::test]
+async fn load_models_returns_openrouter_datalist_without_caching() {
+    install_crypto();
+    let upstream = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .and(request_header("authorization", "Bearer test-secret"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "data": [
+                {
+                    "id": "vendor/vision",
+                    "name": "Vision Model",
+                    "context_length": 131072,
+                    "architecture": {
+                        "input_modalities": ["text", "image"],
+                        "output_modalities": ["text"]
+                    }
+                },
+                {
+                    "id": "vendor/image-only",
+                    "name": "Image Only",
+                    "context_length": 8192,
+                    "architecture": {
+                        "input_modalities": ["text"],
+                        "output_modalities": ["image"]
+                    }
+                }
+            ]
+        })))
+        .expect(2)
+        .mount(&upstream)
+        .await;
+    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    use_listing_key(&mut state);
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let app = build_router(state.clone());
+    let body = model_listing_form(&csrf, "open_router", &upstream.uri(), "k", 30);
+
+    let res = post_models(app.clone(), &sid, &cc, body.clone()).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(
+        html.contains("<datalist id=\"profile-new-model-options\">"),
+        "{html}"
+    );
+    assert!(html.contains("value=\"vendor/vision\""), "{html}");
+    assert!(html.contains("Vision Model"), "{html}");
+    assert!(html.contains("131072 tokens"), "{html}");
+    assert!(html.contains("image input"), "{html}");
+    assert!(!html.contains("vendor/image-only"), "{html}");
+    assert!(!html.contains("test-secret"), "{html}");
+    assert!(!html.contains("name=\"model\""), "{html}");
+
+    let second = post_models(app, &sid, &cc, body).await;
+    assert_eq!(second.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn model_datalist_does_not_restrict_free_text_save() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let app = build_router(state.clone());
+    let req = Request::builder()
+        .uri("/ai-profiles?new=true")
+        .header(header::COOKIE, cookie_header(&sid, &cc))
+        .body(Body::empty())
+        .unwrap();
+    let html = body_string(app.clone().oneshot(req).await.unwrap()).await;
+    assert!(html.contains("name=\"model\""), "{html}");
+    assert!(
+        html.contains("list=\"profile-new-model-options\""),
+        "{html}"
+    );
+    assert!(
+        html.contains("<datalist id=\"profile-new-model-options\">"),
+        "{html}"
+    );
+    assert!(html.contains("Load models"), "{html}");
+
+    let body = format!(
+        "_csrf={}&name=manual&provider=open_ai&model=not-in-any-provider-list&timeout=30&key=k",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(app, &sid, &cc, "/ai-profiles/add", body).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let settings = state.settings.load();
+    let saved = settings
+        .ai
+        .profiles
+        .iter()
+        .find(|p| p.name == "manual")
+        .unwrap();
+    assert_eq!(saved.model, "not-in-any-provider-list");
+}
+
+#[tokio::test]
+async fn model_listing_errors_are_short_plain_text_and_do_not_replace_the_input() {
+    install_crypto();
+    let (mut state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    use_listing_key(&mut state);
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let app = build_router(state.clone());
+
+    let not_found = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("UPSTREAM-404-BODY test-secret"))
+        .expect(1)
+        .mount(&not_found)
+        .await;
+    let res = post_models(
+        app.clone(),
+        &sid,
+        &cc,
+        model_listing_form(&csrf, "open_ai_compatible", &not_found.uri(), "k", 30),
+    )
+    .await;
+    assert_safe_listing_error(res, &["test-secret", "UPSTREAM-404-BODY"]).await;
+
+    let unauthorized = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(401).set_body_string("UPSTREAM-401-BODY test-secret"))
+        .expect(1)
+        .mount(&unauthorized)
+        .await;
+    let res = post_models(
+        app.clone(),
+        &sid,
+        &cc,
+        model_listing_form(&csrf, "open_ai", &unauthorized.uri(), "k", 30),
+    )
+    .await;
+    assert_safe_listing_error(res, &["test-secret", "UPSTREAM-401-BODY"]).await;
+
+    let malformed = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_string("UPSTREAM-MALFORMED-BODY test-secret"),
+        )
+        .expect(1)
+        .mount(&malformed)
+        .await;
+    let res = post_models(
+        app.clone(),
+        &sid,
+        &cc,
+        model_listing_form(&csrf, "open_ai", &malformed.uri(), "k", 30),
+    )
+    .await;
+    assert_safe_listing_error(res, &["test-secret", "UPSTREAM-MALFORMED-BODY"]).await;
+
+    let res = post_models(
+        app.clone(),
+        &sid,
+        &cc,
+        model_listing_form(&csrf, "open_ai", "", "missing", 30),
+    )
+    .await;
+    assert_safe_listing_error(res, &["test-secret"]).await;
+
+    let res = post_models(
+        app.clone(),
+        &sid,
+        &cc,
+        model_listing_form(&csrf, "open_ai", "", "", 30),
+    )
+    .await;
+    assert_safe_listing_error(res, &["test-secret"]).await;
+
+    let slow = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/models"))
+        .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(2)))
+        .expect(1)
+        .mount(&slow)
+        .await;
+    let res = post_models(
+        app,
+        &sid,
+        &cc,
+        model_listing_form(&csrf, "open_ai", &slow.uri(), "k", 1),
+    )
+    .await;
+    assert_safe_listing_error(res, &["test-secret"]).await;
+}
+
+#[tokio::test]
+async fn model_listing_route_is_owner_only_and_csrf_checked() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    for (user_id, role) in [
+        ("111", twitch_1337_web::auth::Role::Viewer),
+        ("999", twitch_1337_web::auth::Role::Mod),
+    ] {
+        let (sid, cc, csrf) = insert_session_as(&state, user_id, "not-owner", role);
+        let res = post_models(
+            build_router(state.clone()),
+            &sid,
+            &cc,
+            model_listing_form(&csrf, "open_router", "http://127.0.0.1:9", "k", 1),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    }
+
+    let (sid, cc, _) =
+        insert_session_as(&state, "123", "owner", twitch_1337_web::auth::Role::Owner);
+    let res = post_models(
+        build_router(state),
+        &sid,
+        &cc,
+        model_listing_form("wrong-csrf", "open_router", "http://127.0.0.1:9", "k", 1),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

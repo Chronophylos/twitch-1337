@@ -30,12 +30,23 @@ pub enum Efforts {
     None,
 }
 
+/// Wire protocol used by the optional provider model listing endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelListing {
+    OpenRouter,
+    OpenAiStyle,
+    OllamaTags,
+    /// Reserved for providers that cannot enumerate models.
+    None,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderCaps {
     pub efforts: Efforts,
     pub service_tier: bool,
     /// Used when the profile leaves `base_url` empty. `None` = required.
     pub default_base_url: Option<&'static str>,
+    pub model_listing: ModelListing,
 }
 
 impl ProviderCaps {
@@ -56,6 +67,10 @@ impl ProviderCaps {
             Efforts::FreeText => "free",
             Efforts::None => "none",
         }
+    }
+
+    pub const fn supports_model_listing(&self) -> bool {
+        !matches!(self.model_listing, ModelListing::None)
     }
 }
 
@@ -115,11 +130,13 @@ impl AiProvider {
                 efforts: Efforts::Fixed(&["minimal", "medium", "high", "xhigh"]),
                 service_tier: true,
                 default_base_url: Some("https://openrouter.ai/api/v1"),
+                model_listing: ModelListing::OpenRouter,
             },
             Self::OpenAi => ProviderCaps {
                 efforts: Efforts::Fixed(&["minimal", "medium", "high"]),
                 service_tier: false,
                 default_base_url: Some("https://api.openai.com/v1"),
+                model_listing: ModelListing::OpenAiStyle,
             },
             Self::OpenAiCompatible => ProviderCaps {
                 efforts: Efforts::FreeText,
@@ -129,11 +146,13 @@ impl AiProvider {
                 // request body.
                 service_tier: true,
                 default_base_url: None,
+                model_listing: ModelListing::OpenAiStyle,
             },
             Self::Ollama => ProviderCaps {
                 efforts: Efforts::None,
                 service_tier: false,
                 default_base_url: Some("http://localhost:11434"),
+                model_listing: ModelListing::OllamaTags,
             },
         }
     }
@@ -165,6 +184,27 @@ mod tests {
             );
             assert_eq!(caps.service_tier, tier, "{provider:?} service tier");
         }
+    }
+
+    #[test]
+    fn caps_declare_model_listing_wire_formats() {
+        for (provider, listing) in [
+            (AiProvider::OpenRouter, ModelListing::OpenRouter),
+            (AiProvider::OpenAi, ModelListing::OpenAiStyle),
+            (AiProvider::OpenAiCompatible, ModelListing::OpenAiStyle),
+            (AiProvider::Ollama, ModelListing::OllamaTags),
+        ] {
+            let caps = provider.caps();
+            assert_eq!(caps.model_listing, listing, "{provider:?}");
+            assert!(caps.supports_model_listing(), "{provider:?}");
+        }
+        let caps = ProviderCaps {
+            efforts: Efforts::None,
+            service_tier: false,
+            default_base_url: None,
+            model_listing: ModelListing::None,
+        };
+        assert!(!caps.supports_model_listing());
     }
 
     #[test]

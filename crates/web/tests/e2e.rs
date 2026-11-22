@@ -1179,7 +1179,11 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
                    .map((el) => el.dataset.provider).join();";
     let provider = "form.profile-form select[name=\"provider\"]";
     let kind = "form.profile-form select[name=\"kind\"]";
+    let visible_model_buttons = "return [...document.querySelectorAll('form.profile-form [data-load-models-provider]')] \
+                                 .filter((el) => getComputedStyle(el).display !== 'none') \
+                                 .map((el) => el.dataset.loadModelsProvider).join();";
     assert_eq!(s.eval(enabled).await, "open_router");
+    assert_eq!(s.eval(visible_model_buttons).await, "open_router");
     let key_state = "const el = document.querySelector('form.profile-form input[name=\"key\"]'); \
                      return [el.closest('.row').hidden, el.disabled, el.required].join(',');";
     assert_eq!(s.eval(key_state).await, "false,false,true");
@@ -1207,6 +1211,7 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
         .await
         .expect("pick open_ai");
     assert_eq!(s.eval(enabled).await, "open_ai");
+    assert_eq!(s.eval(visible_model_buttons).await, "open_ai");
     assert_eq!(
         s.eval(base_state).await,
         "false|https://api.openai.com/v1|Optional. Leave blank to use https://api.openai.com/v1."
@@ -1217,6 +1222,10 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
         .await
         .expect("pick open_ai_compatible");
     assert_eq!(s.eval(enabled).await, "open_ai_compatible");
+    assert_eq!(
+        s.eval(visible_model_buttons).await,
+        "open_ai_compatible"
+    );
     assert_eq!(
         s.eval(base_state).await,
         "true|https://llm.example.com/v1|Required for an OpenAI-compatible endpoint."
@@ -1232,6 +1241,7 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
         .await
         .expect("pick ollama");
     assert_eq!(s.eval(enabled).await, "ollama");
+    assert_eq!(s.eval(visible_model_buttons).await, "ollama");
     assert_eq!(s.eval(key_state).await, "true,true,false");
     assert_eq!(
         s.eval(base_state).await,
@@ -1258,6 +1268,7 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
         .await
         .expect("pick chat");
     assert_eq!(s.eval(enabled).await, "open_router");
+    assert_eq!(s.eval(visible_model_buttons).await, "open_router");
 
     s.goto("/ai-profiles?edit=alpha").await;
     s.wait_for("details.profile-advanced").await;
