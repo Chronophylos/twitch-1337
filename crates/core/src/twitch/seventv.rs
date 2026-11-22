@@ -769,6 +769,11 @@ mod tests {
             usage: None,
             avoid: Some("never".into()),
             updated_at: 1,
+            name: None,
+            curated: crate::emote_tracker::CuratedFields::default(),
+            generated_at: None,
+            context_lines: 0,
+            usage_count: 0,
         };
         assert!(!is_usable_meaning(&row));
         assert!(prompt_emote_from_meaning("KEKW", &row).is_none());

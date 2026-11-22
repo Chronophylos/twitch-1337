@@ -12,8 +12,8 @@ use axum::http::{Request, Response, StatusCode, header};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 use twitch_1337_core::settings::{
-    Actor, AiAuroraOverrides, AiDreamerOverrides, AiGrokOverrides, AiMediaOverrides, AiOverrides,
-    AiProfile, AiProvider, ProfileKind, Settings, SettingsOverrides,
+    Actor, AiAuroraOverrides, AiDreamerOverrides, AiEmotesAgentOverrides, AiGrokOverrides,
+    AiMediaOverrides, AiOverrides, AiProfile, AiProvider, ProfileKind, Settings, SettingsOverrides,
 };
 use twitch_1337_web::WebState;
 use twitch_1337_web::auth::Role;
@@ -234,7 +234,7 @@ fn chat_profile(name: &str) -> AiProfile {
 }
 
 /// Persist chat profiles `names`, with `a` active and backing Aurora,
-/// Dreamer and Media; Grok points at `grok_profile`.
+/// Dreamer, Emotes and Media; Grok points at `grok_profile`.
 async fn seed_chat_profiles(state: &WebState, names: &[&str], grok_profile: &str) {
     state
         .settings_store
@@ -251,6 +251,10 @@ async fn seed_chat_profiles(state: &WebState, names: &[&str], grok_profile: &str
                         ..Default::default()
                     },
                     dreamer: AiDreamerOverrides {
+                        profile: Some(Some("a".into())),
+                        ..Default::default()
+                    },
+                    emotes_agent: AiEmotesAgentOverrides {
                         profile: Some(Some("a".into())),
                         ..Default::default()
                     },

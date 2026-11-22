@@ -27,6 +27,8 @@ pub struct AiSettings {
     #[knob(nested)]
     pub dreamer: AiDreamer,
     #[knob(nested)]
+    pub emotes_agent: AiEmotesAgent,
+    #[knob(nested)]
     pub media: AiMedia,
     #[knob(nested)]
     pub history: AiHistory,
@@ -114,6 +116,7 @@ impl Default for AiSettings {
             grok: AiGrok::default(),
             recap: AiRecap::default(),
             dreamer: AiDreamer::default(),
+            emotes_agent: AiEmotesAgent::default(),
             media: AiMedia::default(),
             history: AiHistory::default(),
             memory: AiMemory::default(),
@@ -233,6 +236,22 @@ pub struct AiDreamer {
     /// the chat cap's 8). Both are bounded to the same `1..=64` range.
     #[knob(min = 1, max = 64)]
     pub max_writes_per_turn: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
+pub struct AiEmotesAgent {
+    pub enabled: bool,
+    /// Required Chat profile; its model must accept image input.
+    #[knob(required_profile)]
+    pub profile: String,
+    /// Berlin-local wallclock for the priority batch.
+    pub run_at: String,
+    #[knob(min = 1, max = 500)]
+    pub batch_size: usize,
+    #[knob(min = 1)]
+    pub min_usages: u32,
+    #[knob(min = 1)]
+    pub tryout_hours: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
@@ -393,6 +412,19 @@ impl Default for AiDreamer {
             timeout_secs: 120,
             max_rounds: 20,
             max_writes_per_turn: 32,
+        }
+    }
+}
+
+impl Default for AiEmotesAgent {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            profile: "default".into(),
+            run_at: "04:30".into(),
+            batch_size: 50,
+            min_usages: 10,
+            tryout_hours: 72,
         }
     }
 }

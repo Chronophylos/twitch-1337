@@ -15,7 +15,9 @@ use tokio::time::{MissedTickBehavior, interval};
 use tracing::error;
 use twitch_irc::message::ServerMessage;
 
-use crate::emote_tracker::{EmoteRow, EmoteTrackerHandle, NewUsageEvent, match_usage_tokens};
+use crate::emote_tracker::{
+    EmoteRow, EmoteTrackerHandle, NewUsageEvent, fetch_global_set, match_usage_tokens,
+};
 use crate::lifecycle::{Lifecycle, TaskGroup};
 use crate::settings::SettingsHandle;
 use crate::twitch::clanker::should_flag_usage;
@@ -23,6 +25,8 @@ use crate::twitch::echo::EchoGuard;
 use crate::twitch::handlers::Inbound;
 
 pub const CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+const GLOBAL_CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(3600);
+const DEFAULT_API_BASE: &str = "https://7tv.io/v3";
 
 const USAGE_WRITER_FAILED: &str = "emote usage writer child failed";
 
@@ -59,11 +63,32 @@ pub(crate) fn active_name_index(rows: &[EmoteRow]) -> HashMap<String, String> {
     out
 }
 
-async fn refresh_catalog(handle: &EmoteTrackerHandle, out: &mut HashMap<String, String>) {
+async fn refresh_catalog(
+    handle: &EmoteTrackerHandle,
+    out: &mut HashMap<String, String>,
+    globals: &HashMap<String, String>,
+) {
     match handle.list_active_emotes().await {
-        Ok(rows) => *out = active_name_index(&rows),
+        Ok(rows) => {
+            *out = active_name_index(&rows);
+            // Channel membership wins a same-name collision with a global.
+            for (name, id) in globals {
+                out.entry(name.clone()).or_insert_with(|| id.clone());
+            }
+        }
         Err(error) => error!(?error, "emote usage catalog refresh failed"),
     }
+}
+
+fn global_name_index(rows: &[crate::emote_tracker::GlobalCatalogEmote]) -> HashMap<String, String> {
+    let mut sorted: Vec<_> = rows.iter().collect();
+    sorted.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut out = HashMap::new();
+    for emote in sorted {
+        out.entry(emote.name.clone())
+            .or_insert_with(|| emote.id.clone());
+    }
+    out
 }
 
 async fn run_usage_ingest<Insert, Fut>(
@@ -206,10 +231,18 @@ pub async fn run_emote_usage_handler(
     lifecycle: Lifecycle,
 ) -> eyre::Result<()> {
     let mut active_names = HashMap::new();
-    refresh_catalog(&emote_tracker, &mut active_names).await;
+    let mut global_names = HashMap::new();
+    refresh_catalog(&emote_tracker, &mut active_names, &global_names).await;
 
     let mut refresh = interval(CATALOG_REFRESH_INTERVAL);
     refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut global_refresh = interval(GLOBAL_CATALOG_REFRESH_INTERVAL);
+    global_refresh.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let global_http = reqwest::Client::builder()
+        .user_agent(crate::APP_USER_AGENT)
+        .timeout(crate::emote_tracker::INGEST_HTTP_TIMEOUT)
+        .build()
+        .wrap_err("build global emote usage HTTP client")?;
 
     // Mouth logins never change post-startup; clone once so the per-message
     // deny-list merge below is just a cheap chain, not a re-clone of the guard's set.
@@ -230,11 +263,47 @@ pub async fn run_emote_usage_handler(
                 let error = fail_on_usage_writer_completion(&mut usage_tasks, completion).await;
                 return Err(eyre::Report::new(error).wrap_err(USAGE_WRITER_FAILED));
             }
+            _ = global_refresh.tick() => {
+                if lifecycle.is_cancelled() {
+                    continue;
+                }
+                let snapshot = settings.load();
+                let enabled = snapshot.ai.emotes_agent.enabled;
+                let base_url = snapshot
+                    .ai
+                    .emotes
+                    .as_ref()
+                    .and_then(|cfg| cfg.base_url.clone())
+                    .unwrap_or_else(|| DEFAULT_API_BASE.into());
+                drop(snapshot);
+                if enabled {
+                    match fetch_global_set(&global_http, &base_url).await {
+                        Ok(rows) => {
+                            let names = global_name_index(&rows);
+                            if let Err(error) = emote_tracker
+                                .ensure_global_emotes(rows, jiff::Timestamp::now().as_millisecond())
+                                .await
+                            {
+                                crate::log_handled!(error, error, "global emote usage FK catalog write failed");
+                            } else {
+                                global_names = names;
+                                refresh_catalog(&emote_tracker, &mut active_names, &global_names).await;
+                            }
+                        }
+                        Err(error) => {
+                            crate::log_handled!(error, error, "global emote usage catalog refresh failed");
+                        }
+                    }
+                } else if !global_names.is_empty() {
+                    global_names.clear();
+                    refresh_catalog(&emote_tracker, &mut active_names, &global_names).await;
+                }
+            }
             _ = refresh.tick() => {
                 if lifecycle.is_cancelled() {
                     continue;
                 }
-                refresh_catalog(&emote_tracker, &mut active_names).await;
+                refresh_catalog(&emote_tracker, &mut active_names, &global_names).await;
             }
             msg = broadcast_rx.recv() => {
                 let inbound = match msg {
@@ -322,6 +391,21 @@ mod tests {
         ];
         let map = active_name_index(&rows);
         assert_eq!(map.get("Same").unwrap(), "a");
+    }
+
+    #[test]
+    fn global_name_index_lowest_id_wins_collision() {
+        let rows = vec![
+            crate::emote_tracker::GlobalCatalogEmote {
+                id: "b".into(),
+                name: "Same".into(),
+            },
+            crate::emote_tracker::GlobalCatalogEmote {
+                id: "a".into(),
+                name: "Same".into(),
+            },
+        ];
+        assert_eq!(global_name_index(&rows).get("Same").unwrap(), "a");
     }
 
     #[tokio::test]

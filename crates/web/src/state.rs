@@ -81,6 +81,8 @@ pub struct WebState {
     /// through). `None` when SQLite open/migrate failed at startup; emote
     /// dashboard routes then render the disabled placeholder.
     pub emote_tracker: Option<Arc<twitch_1337_core::emote_tracker::EmoteTrackerHandle>>,
+    /// Non-blocking Emotes generation queue for Regenerate and owner Run now.
+    pub emotes_agent: twitch_1337_core::ai::emotes_agent::EmotesAgentHandle,
     /// TTL cache for Twitch helix `profile_image_url` lookups. Shared
     /// across handlers so repeat `/memory/users` loads don't re-issue
     /// the same helix batch call.
@@ -162,6 +164,7 @@ impl WebState {
             leaderboard: core.leaderboard.clone(),
             tracker_tx: core.aviation_tracker_tx.clone(),
             emote_tracker: core.emote_tracker.clone(),
+            emotes_agent: core.emotes_agent.clone(),
             avatar_cache: web.avatar_cache,
             owner: web.owner,
             llm: core.llm.clone(),
@@ -248,6 +251,7 @@ impl WebState {
             leaderboard: Arc::new(RwLock::new(HashMap::new())),
             tracker_tx: None,
             emote_tracker: None,
+            emotes_agent: Default::default(),
             avatar_cache: Arc::new(crate::helix::AvatarCache::new(
                 std::time::Duration::from_secs(3600),
             )),

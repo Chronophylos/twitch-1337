@@ -1,0 +1,57 @@
+{# crates/web/templates/settings/cards/ai_emotes_agent.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-ai-emotes-agent" class="settings-card{% if !current.ai.emotes_agent.enabled %} is-card-off{% endif %}" data-section="ai_emotes_agent">
+  <header class="settings-card-head">
+    <div>
+      <h2>Emotes</h2>
+      <p>Generates German Emote Meanings from a static 7TV image, the name and real post-try-out chat usage. The selected Chat profile must support image input.</p>
+    </div>
+    <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
+  </header>
+  <input type="hidden" name="ai.emotes_agent.__shown" value="1">
+  <div class="settings-rows">
+    <div class="settings-row" data-section="ai_emotes_agent">
+      {% call m::row_head("enabled", "Generate on add, nightly and on dashboard requests.", "ai.emotes_agent.enabled") %}{% endcall %}
+      <div class="row-control-cell">
+        <label class="toggle">
+          <input type="checkbox" id="ai.emotes_agent.enabled" name="ai.emotes_agent.enabled" data-card-toggle value="1" role="switch"
+                 data-key="ai.emotes_agent.enabled"
+                 {% if current.ai.emotes_agent.enabled %}checked{% endif %}>
+          <span class="toggle-thumb" aria-hidden="true"></span>
+        </label>
+      </div>
+      <div class="row-right">{% call m::restart_badge(self.knob("ai.emotes_agent.enabled")) %}{% endcall %}</div>
+    </div>
+
+    {% let emotes_profile = current.ai.emotes_agent.profile.as_str() %}
+    <div class="settings-row" data-section="ai_emotes_agent" data-card-enabled-by="ai.emotes_agent.enabled">
+      {% call m::row_head("profile", "Vision-capable Chat profile used for every generation.", "ai.emotes_agent.profile") %}{% endcall %}
+      <div class="row-control-cell">
+        <select id="ai.emotes_agent.profile" name="ai.emotes_agent.profile" data-key="ai.emotes_agent.profile" data-default="{{ defaults.ai.emotes_agent.profile }}" required>
+          {% for p in current.ai.profiles %}
+          {% if p.kind.as_str() == "chat" %}<option value="{{ p.name }}"{% if emotes_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
+          {% endfor %}
+        </select>
+      </div>
+      <div class="row-right">
+        {% call m::restart_badge(self.knob("ai.emotes_agent.profile")) %}{% endcall %}
+        {% call m::row_reset("ai.emotes_agent.profile") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{{ defaults.ai.emotes_agent.profile }}</span></span>
+      </div>
+    </div>
+
+    {% call m::time_row("ai_emotes_agent", self.knob("ai.emotes_agent.run_at"),
+       "Berlin-local wallclock for the capped priority batch (HH:MM).",
+       current.ai.emotes_agent.run_at, defaults.ai.emotes_agent.run_at, "ai.emotes_agent.enabled") %}{% endcall %}
+    {% call m::num_row("ai_emotes_agent", self.knob("ai.emotes_agent.batch_size"),
+       "Maximum emotes per nightly or Run now batch.",
+       current.ai.emotes_agent.batch_size, defaults.ai.emotes_agent.batch_size, "", "ai.emotes_agent.enabled") %}{% endcall %}
+    {% call m::num_row("ai_emotes_agent", self.knob("ai.emotes_agent.min_usages"),
+       "Post-window transcript lines needed for normal context refreshes and used globals.",
+       current.ai.emotes_agent.min_usages, defaults.ai.emotes_agent.min_usages, "", "ai.emotes_agent.enabled") %}{% endcall %}
+    {% call m::num_row("ai_emotes_agent", self.knob("ai.emotes_agent.tryout_hours"),
+       "Hours after the latest add whose usage is excluded. A re-add restarts this window.",
+       current.ai.emotes_agent.tryout_hours, defaults.ai.emotes_agent.tryout_hours, "h", "ai.emotes_agent.enabled") %}{% endcall %}
+  </div>
+</section>

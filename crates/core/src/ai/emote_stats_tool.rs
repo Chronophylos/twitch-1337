@@ -146,8 +146,12 @@ fn window_cutoff(days: u32) -> eyre::Result<Option<i64>> {
     Ok(Some(cutoff.as_millisecond()))
 }
 
-fn removed_marker(active: bool) -> &'static str {
-    if active { "" } else { " (entfernt)" }
+fn removed_marker(active: bool, has_channel_lifecycle: bool) -> &'static str {
+    if !active && has_channel_lifecycle {
+        " (entfernt)"
+    } else {
+        ""
+    }
 }
 
 /// Ranked `name — Nx, zuletzt …` lines shared by `top` and `usage_by_user`.
@@ -157,7 +161,7 @@ fn push_emote_counts(out: &mut String, rows: &[EmoteUsageCount]) {
             "{}. {}{} — {}x, zuletzt {}\n",
             i + 1,
             r.name,
-            removed_marker(r.active),
+            removed_marker(r.active, r.has_channel_lifecycle),
             r.count,
             format_berlin_millis(r.last_used_at),
         ));
@@ -343,7 +347,18 @@ async fn execute_of_emote(
             return "{\"error\":\"tracker unavailable\"}".to_string();
         }
     };
-    let marker = removed_marker(row.active);
+    let has_channel_lifecycle = if row.active {
+        false
+    } else {
+        match tracker.latest_lifecycle_event(&row.emote_id).await {
+            Ok(event) => event.is_some(),
+            Err(error) => {
+                tracing::warn!(?error, "emote_stats lifecycle lookup failed");
+                return "{\"error\":\"tracker unavailable\"}".to_string();
+            }
+        }
+    };
+    let marker = removed_marker(row.active, has_channel_lifecycle);
     match tracker
         .usage_count_by_emote(&row.emote_id, cutoff, limit as u32)
         .await
@@ -798,9 +813,51 @@ mod tests {
     #[tokio::test]
     async fn top_marks_removed_emotes() {
         let (h, _dir) = tracker().await;
+        h.insert_set_event(lifecycle(15, SetEventKind::Remove, Some("KEKW"), None))
+            .await
+            .unwrap();
         h.deactivate_emote("e1", 20).await.unwrap();
         let out = content(execute_emote_stats(h, &call(serde_json::json!({"kind": "top"}))).await);
         assert!(out.contains("KEKW (entfernt) — 4x"), "{out}");
+    }
+
+    #[tokio::test]
+    async fn global_only_rows_are_not_marked_removed() {
+        let (h, _dir) = tracker().await;
+        h.ensure_global_emotes(
+            vec![crate::emote_tracker::GlobalCatalogEmote {
+                id: "g1".into(),
+                name: "Global".into(),
+            }],
+            10,
+        )
+        .await
+        .unwrap();
+        h.insert_usage_events(vec![NewUsageEvent {
+            at: Timestamp::now().as_millisecond(),
+            emote_id: "g1".into(),
+            twitch_user_id: "u1".into(),
+            login: Some("alice".into()),
+            flagged: false,
+        }])
+        .await
+        .unwrap();
+
+        let top = content(
+            execute_emote_stats(h.clone(), &call(serde_json::json!({"kind": "top"}))).await,
+        );
+        let global = top.lines().find(|line| line.contains("Global")).unwrap();
+        assert!(!global.contains("(entfernt)"), "{top}");
+
+        let of_emote = content(
+            execute_emote_stats(
+                h,
+                &call(serde_json::json!({"kind": "usage_of_emote", "emote": "Global"})),
+            )
+            .await,
+        );
+        assert!(of_emote.contains("Global"), "{of_emote}");
+        assert!(!of_emote.contains("(entfernt)"), "{of_emote}");
     }
 
     #[tokio::test]

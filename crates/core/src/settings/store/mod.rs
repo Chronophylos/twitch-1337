@@ -549,6 +549,7 @@ mod tests {
                     aurora: (profile: Some(Some("p"))),
                     grok: (profile: Some(Some("p"))),
                     dreamer: (profile: Some(Some("p"))),
+                    emotes_agent: (profile: Some(Some("p"))),
                     media: (profile: Some(Some("p"))),
                 ),
             )"#,

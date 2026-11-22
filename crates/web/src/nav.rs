@@ -21,6 +21,7 @@ pub const FLIGHTS: &str = "flights";
 pub const EMOTES: &str = "emotes";
 pub const EMOTES_AUDIT: &str = "emotes_audit";
 pub const EMOTES_USAGE: &str = "emotes_usage";
+pub const EMOTES_MEANINGS: &str = "emotes_meanings";
 pub const LOGS: &str = "logs";
 pub const SETTINGS: &str = "settings";
 
@@ -55,6 +56,7 @@ pub fn crumbs(page: &str) -> &'static [Crumb] {
         EMOTES => &[EMOTES_ROOT],
         EMOTES_AUDIT => const { &[EMOTES_ROOT, crumb("Audit", "/emotes/audit")] },
         EMOTES_USAGE => const { &[EMOTES_ROOT, crumb("Usage", "/emotes/usage")] },
+        EMOTES_MEANINGS => const { &[EMOTES_ROOT, crumb("Meanings", "/emotes/meanings")] },
         AI_PROFILES => const { &[crumb("AI Profiles", "/ai-profiles")] },
         SETTINGS => const { &[crumb("Settings", "/settings")] },
         LOGS => const { &[crumb("Logs", "/logs")] },

@@ -192,7 +192,8 @@ field syntax needs literals, so spans and logs rely on this table).
 |`bot.command.name`|canonical command ID (`ai`, `news`, `ping_trigger`), the same for every alias and ping|yes|
 |`bot.schedule.name`|schedule|yes|
 |`ping.name`|Ping|yes|
-|`ai.agent`|agent, or the feature calling the LLM outside one: `aurora`, `grok`, `dreamer`, `recap`, `haiku`, `news`, `tldr`, `spoiler`, `profile_test`; `unknown` for a call outside `with_llm_scope`|yes|
+|`emote.id`|stable 7TV emote id for one Emote Meaning generation|**no**|
+|`ai.agent`|agent, or the feature calling the LLM outside one: `aurora`, `grok`, `dreamer`, `emotes`, `recap`, `haiku`, `news`, `tldr`, `spoiler`, `profile_test`; `unknown` for a call outside `with_llm_scope`|yes|
 |`ai.profile`|profile name; `unknown` for a call outside `with_llm_scope`|yes|
 |`memory.kind`|Memory / Scratch file kind: `soul`, `lore`, `character_sheet`, `scratch`|yes|
 |`ai.turn.session_id`|Turn session nonce (Langfuse session)|**no**|

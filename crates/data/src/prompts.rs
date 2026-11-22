@@ -1,5 +1,6 @@
 pub const PRESET: &str = include_str!("../assets/prompts/preset.ron");
 pub const DREAMER: &str = include_str!("../assets/prompts/dreamer.md");
+pub const EMOTES_AGENT: &str = include_str!("../assets/prompts/emotes_agent.md");
 pub const RECAP: &str = include_str!("../assets/prompts/recap.md");
 pub const SEED_SOUL: &str = include_str!("../assets/prompts/seed_soul.md");
 

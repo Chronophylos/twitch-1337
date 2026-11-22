@@ -66,6 +66,10 @@ async fn seed_profiles(state: &twitch_1337_web::WebState, rows: Vec<AiProfile>, 
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
                     },
+                    emotes_agent: twitch_1337_core::settings::AiEmotesAgentOverrides {
+                        profile: Some(Some(active.to_owned())),
+                        ..Default::default()
+                    },
                     media: twitch_1337_core::settings::AiMediaOverrides {
                         profile: Some(Some(active.to_owned())),
                         ..Default::default()
@@ -287,7 +291,7 @@ async fn add_rejects_openai_profile_without_key() {
 }
 
 #[tokio::test]
-async fn edit_renaming_profile_rewrites_all_five_agent_pointers() {
+async fn edit_renaming_profile_rewrites_all_six_agent_pointers() {
     install_crypto();
     let (state, _td_p, _td_m, td_s) = build_state_with_all_dirs(empty_helix()).await;
     Box::pin(seed_profiles(&state, vec![profile("old")], "old")).await;
@@ -337,6 +341,7 @@ async fn edit_renaming_profile_rewrites_all_five_agent_pointers() {
     assert_eq!(settings.ai.aurora.profile, "renamed");
     assert_eq!(settings.ai.grok.profile, "renamed");
     assert_eq!(settings.ai.dreamer.profile, "renamed");
+    assert_eq!(settings.ai.emotes_agent.profile, "renamed");
     assert_eq!(settings.ai.media.profile, "renamed");
     assert_eq!(settings.ai.recap.profile.as_deref(), Some("renamed"));
 
@@ -345,13 +350,24 @@ async fn edit_renaming_profile_rewrites_all_five_agent_pointers() {
     assert_eq!(persisted.ai.aurora.profile, Some(Some("renamed".into())));
     assert_eq!(persisted.ai.grok.profile, Some(Some("renamed".into())));
     assert_eq!(persisted.ai.dreamer.profile, Some(Some("renamed".into())));
+    assert_eq!(
+        persisted.ai.emotes_agent.profile,
+        Some(Some("renamed".into()))
+    );
     assert_eq!(persisted.ai.media.profile, Some(Some("renamed".into())));
     assert_eq!(persisted.ai.recap.profile, Some(Some("renamed".into())));
 }
 
 #[tokio::test]
 async fn delete_refuses_every_referenced_agent_pointer() {
-    for pointer in ["aurora", "grok", "dreamer", "media", "recap"] {
+    for pointer in [
+        "aurora",
+        "grok",
+        "dreamer",
+        "emotes_agent",
+        "media",
+        "recap",
+    ] {
         install_crypto();
         let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
         Box::pin(seed_profiles(&state, vec![profile("a"), profile("b")], "a")).await;
@@ -360,6 +376,7 @@ async fn delete_refuses_every_referenced_agent_pointer() {
             "aurora" => ai.aurora.profile = Some(Some("b".into())),
             "grok" => ai.grok.profile = Some(Some("b".into())),
             "dreamer" => ai.dreamer.profile = Some(Some("b".into())),
+            "emotes_agent" => ai.emotes_agent.profile = Some(Some("b".into())),
             "media" => ai.media.profile = Some(Some("b".into())),
             "recap" => ai.recap.profile = Some(Some("b".into())),
             _ => unreachable!(),
@@ -1280,6 +1297,7 @@ async fn cards_show_assignment_links_and_name_delete_blockers() {
         ("Aurora", "sec-ai-aurora"),
         ("Grok", "sec-ai-grok"),
         ("Dreamer", "sec-ai-dreamer"),
+        ("Emotes", "sec-ai-emotes-agent"),
         ("Media", "sec-ai-media"),
         ("Recap", "sec-ai-recap"),
         ("Spoiler check", "sec-spoiler"),
@@ -1300,7 +1318,7 @@ async fn cards_show_assignment_links_and_name_delete_blockers() {
         "delete form must retain its CSRF token: {unused}"
     );
     assert!(
-        html.contains("Reassign Aurora, Grok, Dreamer, Media, Recap before deleting"),
+        html.contains("Reassign Aurora, Grok, Dreamer, Emotes, Media, Recap before deleting"),
         "delete confirmation must name blockers: {html}"
     );
 }

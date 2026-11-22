@@ -97,6 +97,32 @@ impl MediaClient {
         &self.base_url
     }
 
+    pub async fn analyze(
+        &self,
+        content_type: &str,
+        payload: &Payload,
+        instruction: Option<&str>,
+        trace: &TraceIds,
+    ) -> Result<String, MediaError> {
+        self.analyze_inner(content_type, payload, instruction, SYSTEM_PROMPT, trace)
+            .await
+    }
+
+    /// Analyze media with a feature-owned system prompt while keeping the
+    /// provider wire format, tracing, usage accounting and error handling in
+    /// this one vision client.
+    pub async fn analyze_with_system(
+        &self,
+        content_type: &str,
+        payload: &Payload,
+        instruction: Option<&str>,
+        system_prompt: &str,
+        trace: &TraceIds,
+    ) -> Result<String, MediaError> {
+        self.analyze_inner(content_type, payload, instruction, system_prompt, trace)
+            .await
+    }
+
     #[instrument(
         skip_all,
         name = "chat",
@@ -110,15 +136,16 @@ impl MediaClient {
             otel.status_code = Empty,
         ),
     )]
-    pub async fn analyze(
+    async fn analyze_inner(
         &self,
         content_type: &str,
         payload: &Payload,
         instruction: Option<&str>,
+        system_prompt: &str,
         trace: &TraceIds,
     ) -> Result<String, MediaError> {
         let result = self
-            .request_answer(content_type, payload, instruction, trace)
+            .request_answer(content_type, payload, instruction, system_prompt, trace)
             .await;
         if let Err(error) = &result {
             let span = Span::current();
@@ -133,9 +160,16 @@ impl MediaClient {
         content_type: &str,
         payload: &Payload,
         instruction: Option<&str>,
+        system_prompt: &str,
         trace: &TraceIds,
     ) -> Result<String, MediaError> {
-        let body = self.build_request(content_type, payload, instruction, trace);
+        let body = self.build_request_with_system(
+            content_type,
+            payload,
+            instruction,
+            system_prompt,
+            trace,
+        );
 
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let mut req = self.http.post(&url).timeout(self.timeout).json(&body);
@@ -181,11 +215,23 @@ impl MediaClient {
         }
     }
 
+    #[cfg(test)]
     fn build_request(
         &self,
         content_type: &str,
         payload: &Payload,
         instruction: Option<&str>,
+        trace: &TraceIds,
+    ) -> Value {
+        self.build_request_with_system(content_type, payload, instruction, SYSTEM_PROMPT, trace)
+    }
+
+    fn build_request_with_system(
+        &self,
+        content_type: &str,
+        payload: &Payload,
+        instruction: Option<&str>,
+        system_prompt: &str,
         trace: &TraceIds,
     ) -> Value {
         let prompt = instruction
@@ -212,7 +258,7 @@ impl MediaClient {
         let mut body = json!({
             "model": self.model,
             "messages": [
-                { "role": "system", "content": SYSTEM_PROMPT },
+                { "role": "system", "content": system_prompt },
                 {
                     "role": "user",
                     "content": [

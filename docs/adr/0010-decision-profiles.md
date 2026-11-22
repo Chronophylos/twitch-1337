@@ -42,7 +42,7 @@ and `Decision`.
     (`validate_agent_profile_targets = false`): a mismatched pointer is
     skipped at runtime, not a load failure.
   - `/ai-profiles` rename rewrites and delete-in-use checks cover
-    `spoiler.profile` alongside the five agents.
+    `spoiler.profile` alongside the six agents (including Emotes, ADR-0014).
   - `LlmRegistry` refuses to build a chat client from a Decision profile.
 - Decision calls go through a separate module in `crates/llm`, built per
   call from the profile. It is not cached in `LlmRegistry`, but the key

@@ -204,6 +204,8 @@ pub struct Services {
     pub schedule_runtime: Arc<crate::schedule::ScheduleRuntimeStore>,
     /// Emote set audit + usage SoR. `None` when SQLite open/migrate failed.
     pub emote_tracker: Option<std::sync::Arc<crate::emote_tracker::EmoteTrackerHandle>>,
+    /// Non-blocking generation queue shared by ingest, the worker and dashboard.
+    pub emotes_agent: crate::ai::emotes_agent::EmotesAgentHandle,
     /// Twitch broadcaster user id for 7TV ingest. `None` when Helix resolve failed.
     pub twitch_channel_id: Option<String>,
     /// Per-agent Helix chat-send mouths, built at composition via
@@ -444,6 +446,37 @@ where
             );
             supervisor.adopt("dreamer ritual", ritual_handle);
             tracing::info!("Daily AI memory dreamer ritual spawned (live settings)");
+        }
+
+        // Emote meanings worker. Producers stay non-blocking even while a
+        // vision request is in flight; the scheduler reads every knob live.
+        if services.ai_enabled
+            && let Some(tracker) = services.emote_tracker.clone()
+        {
+            let http = reqwest::Client::builder()
+                .user_agent(crate::APP_USER_AGENT)
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .wrap_err("build Emotes agent HTTP client")?;
+            let cdn_http = reqwest::Client::builder()
+                .user_agent(crate::APP_USER_AGENT)
+                .timeout(std::time::Duration::from_secs(30))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .wrap_err("build Emotes CDN HTTP client")?;
+            let agent = crate::ai::emotes_agent::EmotesAgent::new(
+                services.emotes_agent.clone(),
+                services.llm.clone(),
+                services.settings.clone(),
+                tracker,
+                services.clock.clone(),
+                services.memory_store.memories_dir().join("transcripts"),
+                http,
+                cdn_http,
+                lifecycle.clone(),
+            );
+            supervisor.adopt("emotes agent", agent.spawn());
+            tracing::info!("Emotes meanings agent spawned (live settings)");
         }
 
         crate::twitch::announce::announce_startup(&client_for_announce, admin_channel.as_deref())

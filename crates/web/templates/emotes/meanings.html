@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Emote Meanings — twitch-1337{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Emote Meanings <span class="count">({{ rows.len() }})</span></h1>
+    <p class="page-sub">Automatic German annotations from 7TV images and post-try-out channel usage. Saving a changed field marks it curated; automation never overwrites curated fields.</p>
+  </div>
+  {% if is_owner %}
+  <form method="post" action="/emotes/meanings/run">
+    <input type="hidden" name="_csrf" value="{{ csrf }}">
+    <button class="btn primary" type="submit">Run now</button>
+  </form>
+  {% endif %}
+</div>
+
+{% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
+
+<form method="get" action="/emotes/meanings" class="filters">
+  <label>Search <input type="search" name="q" value="{{ query }}" placeholder="Emote name or id"></label>
+  <label>Filter
+    <select name="filter">
+      <option value=""{% if filter.is_empty() %} selected{% endif %}>All</option>
+      <option value="no_row"{% if filter == "no_row" %} selected{% endif %}>No row</option>
+      <option value="no_context"{% if filter == "no_context" %} selected{% endif %}>No chat context yet</option>
+      <option value="curated"{% if filter == "curated" %} selected{% endif %}>Curated</option>
+    </select>
+  </label>
+  <button class="btn" type="submit">Apply</button>
+</form>
+
+{% if tracker_disabled %}
+  <div class="empty">Emote tracker is disabled.</div>
+{% else if load_failed %}
+  <div class="empty">Failed to load Emote Meanings.</div>
+{% else if rows.is_empty() %}
+  <div class="empty">No Emote Meanings match these filters.</div>
+{% else %}
+<div class="card-grid">
+{% for row in rows %}
+  <article class="card" id="meaning-{{ row.emote_id }}">
+    <header class="card-head">
+      <img src="{{ row.image_url }}" alt="{{ row.name }}" width="64" height="64" loading="lazy">
+      <div>
+        <h2>{{ row.name }}</h2>
+        <p class="mono">{{ row.emote_id }}</p>
+      </div>
+    </header>
+    <p>Last generated: {{ row.generated_at }} · Post-window usage (30 days): {{ row.usage_count }}</p>
+    {% if !row.has_row %}<p class="badge">no row</p>{% endif %}
+    <form method="post" action="/emotes/meanings/{{ row.emote_id }}/edit">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      {% for field in row.fields %}
+      <input type="hidden" name="original_{{ field.key }}" value="{{ field.value }}">
+      <div class="field">
+        <label for="{{ row.emote_id }}-{{ field.key }}">
+          {{ field.key }}
+          {% if field.curated %}<span class="badge">curated</span>{% else %}<span class="badge">auto</span>{% endif %}
+        </label>
+        <textarea id="{{ row.emote_id }}-{{ field.key }}" name="{{ field.key }}" rows="2" maxlength="300"{% if field.key == "appearance" %} required{% endif %}>{{ field.value }}</textarea>
+
+      </div>
+      {% endfor %}
+      <button class="btn primary" type="submit">Save changes</button>
+    </form>
+    {% for field in row.fields %}
+      {% if field.curated %}
+      <form method="post" action="/emotes/meanings/{{ row.emote_id }}/unlock" class="inline-form">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <input type="hidden" name="field" value="{{ field.key }}">
+        <button class="btn ghost" type="submit">Unlock {{ field.key }}</button>
+      </form>
+      {% endif %}
+    {% endfor %}
+    {% if row.can_regenerate %}
+    <form method="post" action="/emotes/meanings/{{ row.emote_id }}/regenerate">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <button class="btn" type="submit">Regenerate uncurated fields</button>
+    </form>
+    {% endif %}
+  </article>
+{% endfor %}
+</div>
+{% endif %}
+{% endblock %}

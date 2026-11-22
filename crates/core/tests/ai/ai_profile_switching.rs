@@ -81,6 +81,7 @@ async fn grok_registers_when_aurora_is_unusable_and_aurora_can_recover_live() {
             o.ai.aurora.profile = Some(Some("broken".into()));
             o.ai.grok.profile = Some(Some("working".into()));
             o.ai.dreamer.profile = Some(Some("working".into()));
+            o.ai.emotes_agent.profile = Some(Some("working".into()));
             o.ai.media.profile = Some(Some("working".into()));
         })
         .spawn()
@@ -121,6 +122,7 @@ async fn chat_turn_timeout_comes_from_each_freshly_resolved_profile() {
             o.ai.aurora.profile = Some(Some("aurora".into()));
             o.ai.grok.profile = Some(Some("grok".into()));
             o.ai.dreamer.profile = Some(Some("aurora".into()));
+            o.ai.emotes_agent.profile = Some(Some("aurora".into()));
             o.ai.media.profile = Some(Some("aurora".into()));
         })
         .spawn()
