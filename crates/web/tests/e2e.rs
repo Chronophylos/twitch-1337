@@ -1043,6 +1043,84 @@ async fn schedule_form_shows_only_the_checked_trigger() {
     s.close().await;
 }
 
+/// Long model IDs and connection URLs must wrap inside their card at 390 px,
+/// without either the card or the page gaining horizontal overflow.
+#[tokio::test]
+async fn ai_profile_long_values_fit_phone_width() {
+    let s = E2eSession::start_as_owner().await;
+    let long_model = "m".repeat(60);
+    let long_base_url = format!("https://example.com/{}", "u".repeat(120));
+    s.goto("/ai-profiles?new=true").await;
+    s.wait_and_fill("form.profile-form input[name=\"name\"]", "overflow")
+        .await;
+    s.fill("form.profile-form input[name=\"key\"]", "k").await;
+    s.fill("form.profile-form input[name=\"base_url\"]", &long_base_url)
+        .await;
+    s.fill("form.profile-form input[name=\"model\"]", &long_model)
+        .await;
+    s.click("form.profile-form button[type=\"submit\"]").await;
+    let delete_form = "form[action=\"/ai-profiles/overflow/delete\"]";
+    s.wait_for(delete_form).await;
+
+    s.set_window_size(390, 844).await;
+    s.goto("/ai-profiles").await;
+    s.wait_for(delete_form).await;
+    let fit = s
+        .eval(
+            r#"const card = document.querySelector('form[action="/ai-profiles/overflow/delete"]')?.closest('.ai-profile-card');
+               if (!card) return { missing: true };
+               const model = card.querySelector('.profile-model-value');
+               const baseLabel = [...card.querySelectorAll('dt')]
+                   .find((el) => el.textContent.trim() === 'Base URL');
+               const base = baseLabel?.nextElementSibling;
+               if (!model || !base) return { missing: true };
+               const measure = (el) => {
+                   const rect = el.getBoundingClientRect();
+                   return {
+                       left: rect.left,
+                       right: rect.right,
+                       scrollWidth: el.scrollWidth,
+                       clientWidth: el.clientWidth,
+                   };
+               };
+               return {
+                   viewportWidth: innerWidth,
+                   pageWidth: document.documentElement.scrollWidth,
+                   modelText: model.textContent.trim(),
+                   baseText: base.textContent.trim(),
+                   card: measure(card),
+                   model: measure(model),
+                   base: measure(base),
+               };"#,
+        )
+        .await;
+    assert!(fit["missing"].is_null(), "profile values missing: {fit}");
+    assert_eq!(fit["modelText"].as_str().unwrap(), long_model.as_str());
+    assert_eq!(fit["baseText"].as_str().unwrap(), long_base_url.as_str());
+    let viewport = fit["viewportWidth"].as_f64().unwrap();
+    assert!(
+        fit["pageWidth"].as_f64().unwrap() <= viewport,
+        "page scrolls horizontally: {fit}"
+    );
+    let card_left = fit["card"]["left"].as_f64().unwrap();
+    let card_right = fit["card"]["right"].as_f64().unwrap();
+    assert!(card_right <= viewport + 1.0, "card leaves viewport: {fit}");
+    for name in ["card", "model", "base"] {
+        let rect = &fit[name];
+        assert!(
+            rect["scrollWidth"].as_i64().unwrap() <= rect["clientWidth"].as_i64().unwrap() + 1,
+            "{name} overflows its own box: {fit}"
+        );
+        assert!(
+            rect["left"].as_f64().unwrap() >= card_left - 1.0
+                && rect["right"].as_f64().unwrap() <= card_right + 1.0,
+            "{name} leaves the card: {fit}"
+        );
+    }
+
+    s.close().await;
+}
+
 /// AI profile delete asks first (`data-confirm`, handled in app.js), and the
 /// form's provider picker enables only the chosen provider's controls.
 #[tokio::test]
@@ -1052,8 +1130,22 @@ async fn ai_profile_delete_confirms_and_provider_picker_toggles() {
     add_profile(&s, "doomed").await;
 
     s.goto("/ai-profiles").await;
-    let delete = "form[action=\"/ai-profiles/doomed/delete\"] button";
+    let delete = "form[action=\"/ai-profiles/doomed/delete\"] button.btn.danger";
     s.wait_for(delete).await;
+    assert_eq!(
+        s.eval(
+            "const edit = document.querySelector('a.btn[href=\"/ai-profiles?edit=doomed\"]'); \
+             const del = document.querySelector('form[action=\"/ai-profiles/doomed/delete\"] button.btn.danger'); \
+             if (!edit || !del) return false; \
+             const er = edit.getBoundingClientRect(); \
+             const dr = del.getBoundingClientRect(); \
+             return !edit.classList.contains('chip') && !del.classList.contains('chip') \
+                    && er.right <= dr.left;"
+        )
+        .await,
+        true,
+        "Edit and Delete must be separated button actions, not chips"
+    );
     // Declining the confirm keeps the profile.
     s.exec("window.confirm = () => false;").await;
     s.click(delete).await;
