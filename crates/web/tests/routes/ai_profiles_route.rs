@@ -270,9 +270,14 @@ async fn add_rejects_openai_profile_without_key() {
     let res = app.oneshot(req).await.unwrap();
     assert_eq!(res.status(), StatusCode::OK, "must re-render the form");
     let html = body_string(res).await;
+    assert_invalid_control(&html, "name=\"key\"", "profile-new-key-error");
     assert!(
-        html.contains("form.key"),
-        "validation must name the key field; got: {html}"
+        error_element(&html, "profile-new-key-error").contains("required"),
+        "validation must explain the key field inline; got: {html}"
+    );
+    assert!(
+        !html.contains("form.key"),
+        "raw form paths must not leak into the page: {html}"
     );
     assert_eq!(
         state.settings.load().ai.profiles.len(),
@@ -888,4 +893,319 @@ async fn cards_show_assignment_links_and_name_delete_blockers() {
         html.contains("Reassign Aurora, Grok, Dreamer, Media, Recap before deleting"),
         "delete confirmation must name blockers: {html}"
     );
+}
+
+// ─── Inline field errors (#677) ──────────────────────────────────────────────
+
+/// Opening tags (`<input …>`, `<select …>`, `<div …>`) that contain `needle`.
+fn tags_containing<'a>(html: &'a str, needle: &str) -> Vec<&'a str> {
+    html.match_indices(needle)
+        .filter_map(|(at, _)| {
+            let start = html[..at].rfind('<')?;
+            let end = at + html[at..].find('>')?;
+            Some(&html[start..=end])
+        })
+        .collect()
+}
+
+/// Exactly one control matching `needle` is marked invalid, and it points
+/// `aria-describedby` at `error_id`.
+fn assert_invalid_control(html: &str, needle: &str, error_id: &str) {
+    let invalid: Vec<&str> = tags_containing(html, needle)
+        .into_iter()
+        .filter(|tag| tag.contains("aria-invalid=\"true\""))
+        .collect();
+    assert_eq!(
+        invalid.len(),
+        1,
+        "expected one invalid {needle} control: {html}"
+    );
+    assert!(
+        invalid[0].contains(&format!("aria-describedby=\"{error_id}\"")),
+        "{needle} must be described by #{error_id}: {}",
+        invalid[0]
+    );
+}
+
+/// The inline error element with `id`, up to its closing tag.
+fn error_element<'a>(html: &'a str, id: &str) -> &'a str {
+    let needle = format!("id=\"{id}\"");
+    let at = html
+        .find(&needle)
+        .unwrap_or_else(|| panic!("missing error element #{id}: {html}"));
+    let end = at + html[at..].find("</p>").unwrap();
+    let start = html[..at].rfind('<').unwrap();
+    assert!(
+        html[start..at].contains("class=\"field-error\""),
+        "#{id} must be styled as a field error"
+    );
+    &html[at..end]
+}
+
+/// The top-of-page validation summary.
+fn error_summary(html: &str) -> &str {
+    let at = html
+        .find("data-error-summary")
+        .unwrap_or_else(|| panic!("missing error summary: {html}"));
+    let end = at + html[at..].find("</div>").unwrap();
+    &html[at..end]
+}
+
+fn assert_summary_has_no_storage_paths(summary: &str) {
+    assert!(!summary.contains("row "), "no `row N` wording: {summary}");
+    assert!(
+        !summary.contains("ai.profiles"),
+        "no raw storage paths: {summary}"
+    );
+    assert!(!summary.contains("form."), "no raw form paths: {summary}");
+}
+
+/// Store validation flags the appended row (`ai.profiles[1].name`); that is
+/// the create form's row, so the error belongs beside its Name input.
+#[tokio::test]
+async fn add_duplicate_name_is_flagged_beside_the_name_input() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=a&provider=open_router&model=kept-model&timeout=30&key=k",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/add",
+        body,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+
+    assert_invalid_control(&html, "name=\"name\"", "profile-new-name-error");
+    assert!(
+        error_element(&html, "profile-new-name-error").contains("duplicate profile name"),
+        "{html}"
+    );
+    assert!(
+        html.contains("value=\"kept-model\""),
+        "rejected values stay"
+    );
+    let summary = error_summary(&html);
+    assert!(summary.contains("Fix the highlighted fields"), "{summary}");
+    assert!(
+        !summary.contains("<li>"),
+        "inline errors are not repeated: {summary}"
+    );
+    assert_summary_has_no_storage_paths(summary);
+    assert_eq!(state.settings.load().ai.profiles.len(), 1);
+}
+
+/// An invalid tier on the edited row lands on the active provider group's
+/// tier select, inside an open Advanced section.
+#[tokio::test]
+async fn edit_invalid_service_tier_is_flagged_beside_the_tier_select() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("other"), profile("a")], "other").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=a&provider=open_router&model=m&timeout=30&key=k&service_tier=turbo",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/a/edit",
+        body,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+
+    // Every provider group ships a tier select; only the active one is
+    // flagged.
+    assert_invalid_control(
+        &html,
+        "name=\"service_tier\"",
+        "profile-edit-service_tier-error",
+    );
+    assert!(
+        error_element(&html, "profile-edit-service_tier-error").contains("must be one of"),
+        "{html}"
+    );
+    let details = tags_containing(&html, "class=\"profile-advanced\"");
+    assert_eq!(details.len(), 1, "{html}");
+    assert!(details[0].contains("open"), "Advanced must render open");
+    assert!(html.contains("action=\"/ai-profiles/a/edit\""), "{html}");
+    assert_summary_has_no_storage_paths(error_summary(&html));
+    assert_eq!(state.settings.load().ai.profiles[1].service_tier, None);
+}
+
+/// Renaming onto an existing name is flagged on the *other* row (the later
+/// duplicate); the fix still belongs in this form's Name input.
+#[tokio::test]
+async fn edit_rename_onto_an_existing_name_is_flagged_beside_the_name_input() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=b&provider=open_router&model=m&timeout=30&key=k",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/a/edit",
+        body,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+
+    assert_invalid_control(&html, "name=\"name\"", "profile-edit-name-error");
+    assert!(html.contains("action=\"/ai-profiles/a/edit\""), "{html}");
+    let summary = error_summary(&html);
+    assert!(!summary.contains("<li>"), "{summary}");
+    assert_summary_has_no_storage_paths(summary);
+}
+
+/// `ProfileForm::to_profile` rejects a non-numeric timeout (`form.timeout`)
+/// before the store runs; it still renders beside the Timeout input.
+#[tokio::test]
+async fn add_non_numeric_timeout_is_flagged_beside_the_timeout_input() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=fresh&provider=open_router&model=m&timeout=soon&key=k",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/add",
+        body,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+
+    assert_invalid_control(&html, "name=\"timeout\"", "profile-new-timeout-error");
+    assert!(
+        error_element(&html, "profile-new-timeout-error").contains("whole number of seconds"),
+        "{html}"
+    );
+    assert!(html.contains("value=\"soon\""), "rejected values stay");
+    let details = tags_containing(&html, "class=\"profile-advanced\"");
+    assert!(details[0].contains("open"), "Advanced must render open");
+    assert_summary_has_no_storage_paths(error_summary(&html));
+    assert_eq!(state.settings.load().ai.profiles.len(), 1);
+}
+
+/// The connection-test route re-renders through the same path: a form-parse
+/// error shows inline on the edit form, which keeps its original target.
+#[tokio::test]
+async fn test_connection_form_error_is_flagged_inline() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&_edit_target=a&name=a&provider=open_ai&model=gpt-5&timeout=30",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/test",
+        body,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+
+    assert_invalid_control(&html, "name=\"key\"", "profile-edit-key-error");
+    assert!(html.contains("action=\"/ai-profiles/a/edit\""), "{html}");
+    assert_summary_has_no_storage_paths(error_summary(&html));
+}
+
+/// A delete blocked by agent pointers has no form control: the summary names
+/// the profile in plain words and nothing is marked invalid.
+#[tokio::test]
+async fn delete_in_use_profile_names_it_in_the_summary() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(
+        &state,
+        vec![profile("spare"), profile("busy-profile")],
+        "busy-profile",
+    )
+    .await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!("_csrf={}", urlencoding::encode(&csrf));
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/busy-profile/delete",
+        body,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+
+    let summary = error_summary(&html);
+    assert!(summary.contains("busy-profile"), "{summary}");
+    assert!(summary.contains("Aurora"), "{summary}");
+    assert!(!summary.contains("Fix the highlighted fields"), "{summary}");
+    assert_summary_has_no_storage_paths(summary);
+    assert!(!html.contains("aria-invalid"), "{html}");
+    assert_eq!(state.settings.load().ai.profiles.len(), 2);
+}
+
+/// An error for a control the selected provider does not render (Ollama has
+/// no reasoning effort) must still reach the user, via the summary.
+#[tokio::test]
+async fn error_for_a_hidden_control_falls_back_to_the_summary() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    seed_profiles(&state, vec![profile("a")], "a").await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=a&provider=ollama&model=qwen3%3A8b&timeout=30&reasoning_effort=high",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/a/edit",
+        body,
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+
+    let summary = error_summary(&html);
+    assert!(
+        summary.contains("Reasoning effort") && summary.contains("no reasoning effort setting"),
+        "{summary}"
+    );
+    assert_summary_has_no_storage_paths(summary);
+    assert!(!html.contains("aria-invalid"), "{html}");
 }

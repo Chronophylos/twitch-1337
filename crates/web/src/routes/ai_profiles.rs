@@ -29,12 +29,194 @@ use crate::flash;
 use crate::routes::render;
 use crate::state::WebState;
 
-#[derive(Debug, Clone)]
-struct RowError {
-    row_index: usize,
-    row_name: String,
-    field: String,
-    message: String,
+/// Inline errors for the profile form, one slot per control. A slot is
+/// `Some` only when the control is rendered visibly on the re-rendered
+/// page; errors for hidden controls go to the page summary instead.
+#[derive(Debug, Default)]
+struct FormErrors {
+    name: Option<String>,
+    kind: Option<String>,
+    provider: Option<String>,
+    key: Option<String>,
+    base_url: Option<String>,
+    model: Option<String>,
+    timeout: Option<String>,
+    reasoning_effort: Option<String>,
+    service_tier: Option<String>,
+}
+
+impl FormErrors {
+    fn slot(&mut self, field: &str) -> Option<&mut Option<String>> {
+        Some(match field {
+            "name" => &mut self.name,
+            "kind" => &mut self.kind,
+            "provider" => &mut self.provider,
+            "key" => &mut self.key,
+            "base_url" => &mut self.base_url,
+            "model" => &mut self.model,
+            "timeout" => &mut self.timeout,
+            "reasoning_effort" => &mut self.reasoning_effort,
+            "service_tier" => &mut self.service_tier,
+            _ => return None,
+        })
+    }
+
+    fn any(&self) -> bool {
+        self.name.is_some()
+            || self.kind.is_some()
+            || self.provider.is_some()
+            || self.key.is_some()
+            || self.base_url.is_some()
+            || self.model.is_some()
+            || self.advanced()
+    }
+
+    /// Whether an error sits inside the collapsible **Advanced** section,
+    /// which must then render open.
+    fn advanced(&self) -> bool {
+        self.timeout.is_some() || self.reasoning_effort.is_some() || self.service_tier.is_some()
+    }
+}
+
+/// Human label for a profile field, used when its error has no inline
+/// control and lands in the page summary.
+fn field_label(field: &str) -> &str {
+    match field {
+        "name" => "Name",
+        "kind" => "Kind",
+        "provider" => "Provider",
+        "key" => "Key name",
+        "base_url" => "Base URL",
+        "model" => "Model",
+        "timeout" => "Timeout",
+        "reasoning_effort" => "Reasoning effort",
+        "service_tier" => "Service tier",
+        other => other,
+    }
+}
+
+/// Whether the re-rendered form shows `field`'s control to the user. Mirrors
+/// the template (key row hidden for providers without an OpenAI client,
+/// effort/tier only in the selected provider's group) and `app.js` (decision
+/// profiles hide every provider group).
+fn control_visible(field: &str, form: &FormState) -> bool {
+    let provider = AiProvider::ALL
+        .into_iter()
+        .find(|p| p.as_str() == form.provider);
+    let groups_shown = form.kind.trim() != ProfileKind::Decision.as_str();
+    match field {
+        "name" | "kind" | "provider" | "base_url" | "model" | "timeout" => true,
+        "key" => provider.is_none_or(AiProvider::uses_openai_client),
+        "reasoning_effort" => {
+            groups_shown && provider.is_some_and(|p| !matches!(p.caps().efforts, Efforts::None))
+        }
+        "service_tier" => groups_shown && provider.is_some_and(|p| p.caps().service_tier),
+        _ => false,
+    }
+}
+
+/// Agent pointers that reference profiles from other settings sections.
+fn reference_label(field: &str) -> Option<&'static str> {
+    Some(match field {
+        "ai.aurora.profile" => "Aurora",
+        "ai.grok.profile" => "Grok",
+        "ai.dreamer.profile" => "Dreamer",
+        "ai.media.profile" => "Media",
+        "ai.recap.profile" => "Recap",
+        "spoiler.profile" => "Spoiler check",
+        _ => return None,
+    })
+}
+
+/// The submitted form a re-render reports errors against: its values and
+/// the `ai.profiles` index it occupies in the list the store validated
+/// (the edited row, or one past the persisted rows for a new profile).
+struct SubmittedRow<'a> {
+    form: &'a FormState,
+    index: Option<usize>,
+}
+
+/// Errors split by where they render: inline next to a form control, or in
+/// the page summary as a sentence naming the profile/agent involved.
+#[derive(Debug, Default)]
+struct PageErrors {
+    form: FormErrors,
+    global: Vec<String>,
+}
+
+impl PageErrors {
+    fn push_form_field(&mut self, field: &str, message: String, form: &FormState) {
+        if control_visible(field, form)
+            && let Some(slot) = self.form.slot(field)
+        {
+            *slot = Some(match slot.take() {
+                Some(previous) => format!("{previous}; {message}"),
+                None => message,
+            });
+            return;
+        }
+        self.global
+            .push(format!("{}: {message}", field_label(field)));
+    }
+}
+
+/// Sorts `FieldError`s from `ProfileForm::to_profile` (`form.<field>`) and
+/// `settings::validation` (`ai.profiles[<idx>].<field>`, `ai.profiles`,
+/// agent pointers) into inline form errors and summary sentences. Summary
+/// sentences never expose storage paths or row indices.
+fn classify_errors(
+    errs: Vec<FieldError>,
+    rows: &[AiProfile],
+    submitted: Option<&SubmittedRow<'_>>,
+) -> PageErrors {
+    let mut out = PageErrors::default();
+    for FieldError { field, message } in errs {
+        if let Some(f) = field.strip_prefix("form.") {
+            match submitted {
+                Some(s) => out.push_form_field(f, message, s.form),
+                None => out.global.push(format!("{}: {message}", field_label(f))),
+            }
+            continue;
+        }
+        if let Some(rest) = field.strip_prefix("ai.profiles[")
+            && let Some((idx, f)) = rest.split_once("].")
+            && let Ok(idx) = idx.parse::<usize>()
+        {
+            if let Some(s) = submitted {
+                // A rename onto an existing name is flagged on whichever of
+                // the two rows comes later; when that is the other profile,
+                // the fix still belongs in this form's Name input.
+                let duplicate_of_submitted =
+                    f == "name" && rows.get(idx).is_some_and(|p| p.name == s.form.name);
+                if s.index == Some(idx) || duplicate_of_submitted {
+                    out.push_form_field(f, message, s.form);
+                    continue;
+                }
+            }
+            out.global.push(match rows.get(idx) {
+                Some(p) => format!("Profile {:?}, {}: {message}", p.name, field_label(f)),
+                None => format!("{}: {message}", field_label(f)),
+            });
+            continue;
+        }
+        if field == "ai.profiles" {
+            out.global.push(capitalize(&message));
+            continue;
+        }
+        out.global.push(match reference_label(&field) {
+            Some(label) => format!("{label}: {message}"),
+            None => format!("Setting {field}: {message}"),
+        });
+    }
+    out
+}
+
+fn capitalize(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 pub fn router() -> Router<WebState> {
@@ -168,8 +350,10 @@ struct ListTpl {
     /// silently no-ops (see `update`'s regression test).
     edit_target: Option<String>,
     new_form: Option<FormState>,
-    row_errors: Vec<RowError>,
-    global_errors: Vec<(String, String)>,
+    /// Errors shown beside the open form's controls.
+    form_errors: FormErrors,
+    /// Errors with no control on the form, already worded for humans.
+    global_errors: Vec<String>,
     flash: Option<String>,
     connection_test: Option<ConnectionTestView>,
     csrf: String,
@@ -298,7 +482,7 @@ async fn list(
         edit_form,
         edit_target,
         new_form,
-        row_errors: Vec::new(),
+        form_errors: FormErrors::default(),
         global_errors: Vec::new(),
         flash: flash::take(&cookies),
         connection_test: None,
@@ -315,7 +499,8 @@ async fn list(
     })
 }
 
-fn card_view(p: &AiProfile, settings: &Settings) -> CardView {
+/// Every agent / the spoiler check whose profile pointer names `name`.
+fn assignments(name: &str, settings: &Settings) -> Vec<AssignmentView> {
     let mut assignments = Vec::new();
     for (label, settings_anchor, selected) in [
         (
@@ -341,18 +526,27 @@ fn card_view(p: &AiProfile, settings: &Settings) -> CardView {
             settings.spoiler.profile.as_str(),
         ),
     ] {
-        if selected == p.name {
+        if selected == name {
             assignments.push(AssignmentView {
                 label,
                 settings_anchor,
             });
         }
     }
-    let assignment_names = assignments
+    assignments
+}
+
+fn assignment_names(assignments: &[AssignmentView]) -> String {
+    assignments
         .iter()
         .map(|assignment| assignment.label)
         .collect::<Vec<_>>()
-        .join(", ");
+        .join(", ")
+}
+
+fn card_view(p: &AiProfile, settings: &Settings) -> CardView {
+    let assignments = assignments(&p.name, settings);
+    let assignment_names = assignment_names(&assignments);
 
     CardView {
         name: p.name.clone(),
@@ -626,29 +820,23 @@ async fn delete(
             &session,
             vec![FieldError {
                 field: "ai.profiles".into(),
-                message: "at least one profile is required".into(),
+                message: format!("Can't delete {name:?}: at least one profile is required."),
             }],
             None,
             None,
         );
     }
-    let in_use = [
-        settings.ai.aurora.profile.as_str(),
-        settings.ai.grok.profile.as_str(),
-        settings.ai.dreamer.profile.as_str(),
-        settings.ai.media.profile.as_str(),
-        settings.spoiler.profile.as_str(),
-    ]
-    .into_iter()
-    .any(|profile| profile == name)
-        || settings.ai.recap.profile.as_deref() == Some(name.as_str());
-    if in_use {
+    let assigned = assignments(&name, &settings);
+    if !assigned.is_empty() {
         return render_validation(
             &state,
             &session,
             vec![FieldError {
                 field: "ai.profiles".into(),
-                message: "assign every agent and the spoiler check to another profile before deleting this one".into(),
+                message: format!(
+                    "Can't delete {name:?}: it is still assigned to {}. Assign them to another profile in Settings first.",
+                    assignment_names(&assigned)
+                ),
             }],
             None,
             None,
@@ -718,34 +906,19 @@ fn render_page(
 ) -> Result<Response, WebError> {
     let settings = state.settings.load();
     let rows = settings.ai.profiles.clone();
-    let mut row_errors: Vec<RowError> = Vec::new();
-    let mut global_errors: Vec<(String, String)> = Vec::new();
-    for e in errs {
-        if let Some(rest) = e.field.strip_prefix("ai.profiles[")
-            && let Some(end) = rest.find(']')
-        {
-            let idx_str = &rest[..end];
-            if let Ok(idx) = idx_str.parse::<usize>() {
-                let field_name = rest.get(end + 2..).unwrap_or("").to_owned();
-                if let Some(row) = rows.get(idx) {
-                    row_errors.push(RowError {
-                        row_index: idx,
-                        row_name: row.name.clone(),
-                        field: field_name,
-                        message: e.message,
-                    });
-                    continue;
-                }
-                // Index past the persisted rows = the just-submitted row
-                // that failed store validation and was never saved. It has
-                // no card, so attribute it to the form rather than a
-                // phantom row that doesn't exist.
-                global_errors.push((field_name, e.message));
-                continue;
-            }
-        }
-        global_errors.push((e.field, e.message));
-    }
+    let submitted_row = submitted.as_ref().map(|form| SubmittedRow {
+        form,
+        // Edits replace the target row in place; creates append one past
+        // the persisted rows (see the `create` / `update` mutators).
+        index: match &edit_on_error {
+            Some(target) => rows.iter().position(|p| p.name == *target),
+            None => Some(rows.len()),
+        },
+    });
+    let PageErrors {
+        form: form_errors,
+        global: global_errors,
+    } = classify_errors(errs, &rows, submitted_row.as_ref());
     let total = rows.len();
     let cards: Vec<CardView> = rows.iter().map(|p| card_view(p, &settings)).collect();
 
@@ -771,7 +944,7 @@ fn render_page(
         edit_form,
         edit_target,
         new_form,
-        row_errors,
+        form_errors,
         global_errors,
         flash: None,
         connection_test,

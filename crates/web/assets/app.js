@@ -774,6 +774,22 @@ for (const form of document.querySelectorAll('form.profile-form')) {
   select.addEventListener('change', refresh);
   kind?.addEventListener('change', refresh);
   refresh();
+
+  // A rejected submit re-renders with `aria-invalid` on the offending
+  // controls (in document order). Focus the first one the user can reach,
+  // opening the collapsed Advanced section around it first. The server only
+  // flags controls inside the active provider group, which `refresh()` has
+  // just shown and enabled.
+  const invalid = [...form.querySelectorAll('[aria-invalid="true"]')]
+    .find((el) => !el.closest('[hidden], fieldset:disabled'));
+  if (invalid) {
+    const details = invalid.closest('details');
+    if (details) details.open = true;
+    const target = invalid.getAttribute('role') === 'radiogroup'
+      ? invalid.querySelector('input:checked') ?? invalid.querySelector('input')
+      : invalid;
+    target?.focus();
+  }
 }
 
 // ─── Percent bars ────────────────────────────────────────────────────────────

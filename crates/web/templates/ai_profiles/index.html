@@ -12,17 +12,19 @@
 
 {% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
 
-{% if !row_errors.is_empty() || !global_errors.is_empty() %}
-  <div class="flash error">
+{# Errors that belong to a form control render beside it (`_form.html`);
+   this summary only lists errors with no control on the form. #}
+{% if form_errors.any() || !global_errors.is_empty() %}
+  <div class="flash error" data-error-summary>
     <strong>Validation failed.</strong>
-    <ul>
-      {% for err in row_errors %}
-        <li><code>row {{ err.row_index }}{% if !err.row_name.is_empty() %} ({{ err.row_name }}){% endif %}.{{ err.field }}</code>: {{ err.message }}</li>
-      {% endfor %}
-      {% for (field, msg) in global_errors %}
-        <li><code>{{ field }}</code>: {{ msg }}</li>
-      {% endfor %}
-    </ul>
+    {% if form_errors.any() %}Fix the highlighted fields.{% endif %}
+    {% if !global_errors.is_empty() %}
+      <ul>
+        {% for msg in global_errors %}
+          <li>{{ msg }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
   </div>
 {% endif %}
 
@@ -30,6 +32,7 @@
   <section class="settings-card">
     <header class="settings-card-head"><div><h2>New profile</h2></div></header>
     {% let action = "/ai-profiles/add" %}
+    {% let form_id = "profile-new" %}
     {% let cancel_href = Some("/ai-profiles") %}
     {% include "ai_profiles/_form.html" %}
   </section>
@@ -45,6 +48,7 @@
     {% let target = edit_target.as_deref().unwrap_or(form.name.as_str()) %}
     {% let action_owned = format!("/ai-profiles/{}/edit", urlencoding::encode(target)) %}
     {% let action = action_owned.as_str() %}
+    {% let form_id = "profile-edit" %}
     {% let cancel_href = Some("/ai-profiles") %}
     {% include "ai_profiles/_form.html" %}
   </section>

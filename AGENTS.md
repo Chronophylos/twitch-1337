@@ -236,7 +236,11 @@ move it into `[ai.keys]` and set the profile's key name. Provider, base URL,
 model, timeout, reasoning effort and service tier live in **profiles** — a
 named list (`ai.profiles`) CRUD'd at `/ai-profiles` (owner only — a profile
 carries `base_url`/`key`, the same credential surface `/settings` keeps
-owner-only). `ai.aurora.profile` names the profile `!ai` uses; Aurora, Grok,
+owner-only). A rejected create/edit/connection test re-renders with each
+error beside its form control (`aria-invalid` + `aria-describedby`, first one
+focused by `app.js`); the top summary only lists errors with no control
+(list-level, agent pointers, other profiles), named by profile, never by
+`ai.profiles[N]` path. `ai.aurora.profile` names the profile `!ai` uses; Aurora, Grok,
 Dreamer, and Media each have a required profile dropdown at `/settings`.
 Recap's profile dropdown is optional, with empty meaning off. Agents do not
 override model / effort / tier on top of a profile — pick a different profile

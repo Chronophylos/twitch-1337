@@ -1,4 +1,5 @@
 {# Variant-picker profile form. `form: &FormState`, `action: &str`,
+   `form_id: &str` (unique per form, prefixes error element ids),
    `cancel_href: Option<&str>`, `providers: &Vec<ProviderOption>` must be
    bound in the calling template's scope before this include.
 
@@ -6,7 +7,12 @@
    provider's effort/tier controls are rendered up front inside a
    `<fieldset disabled>` and app.js (`form.profile-form`) flips which one is
    enabled + visible. Server-side validation (settings::validation) stays
-   the authority — that script is convenience only. #}
+   the authority — that script is convenience only.
+
+   `form_errors` slots are only filled for controls that render visibly
+   (effort/tier errors only for the selected provider's group); each one
+   marks its control `aria-invalid` and points `aria-describedby` at the
+   `.field-error` beside it. app.js focuses the first invalid control. #}
 <form method="post" action="{{ action }}" class="settings-rows profile-form" data-unsaved-guard>
   <input type="hidden" name="_csrf" value="{{ csrf }}">
   {% if let Some(target) = edit_target %}
@@ -23,13 +29,16 @@
     <legend>Profile</legend>
   <div class="row">
     <label>Name
-      <input type="text" name="name" value="{{ form.name }}" required>
+      <input type="text" name="name" value="{{ form.name }}" required
+        {%- if form_errors.name.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-name-error"{% endif %}>
     </label>
+    {% if let Some(msg) = form_errors.name %}<p class="field-error" id="{{ form_id }}-name-error">{{ msg }}</p>{% endif %}
   </div>
 
   <div class="row">
     <label>Kind
-      <select name="kind" class="kind-select">
+      <select name="kind" class="kind-select"
+        {%- if form_errors.kind.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-kind-error"{% endif %}>
         {% for k in kinds %}
           <option value="{{ k.as_str() }}" {% if form.kind == k.as_str() || (form.kind.is_empty() && k.as_str() == "chat") %}selected{% endif %}>
             {%- if k.as_str() == "chat" %}Chat agent{% else %}Decision / structured choice{% endif -%}
@@ -39,6 +48,7 @@
       <small class="muted" data-kind-help="chat" {% if form.kind == "decision" %}hidden{% endif %}>For Aurora, Grok, Dreamer, Media, and Recap.</small>
       <small class="muted" data-kind-help="decision" {% if form.kind != "decision" %}hidden{% endif %}>For the spoiler check. OpenRouter only; no reasoning effort or service tier.</small>
     </label>
+    {% if let Some(msg) = form_errors.kind %}<p class="field-error" id="{{ form_id }}-kind-error">{{ msg }}</p>{% endif %}
   </div>
 
   </fieldset>
@@ -47,7 +57,8 @@
     <legend>Connection</legend>
   <div class="row">
     <label>Provider
-      <select name="provider" class="provider-select">
+      <select name="provider" class="provider-select"
+        {%- if form_errors.provider.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-provider-error"{% endif %}>
         {% for p in providers %}
           <option value="{{ p.value }}"
             data-decision-ok="{% if p.value == "open_router" %}1{% else %}0{% endif %}"
@@ -59,51 +70,62 @@
         {% endfor %}
       </select>
     </label>
+    {% if let Some(msg) = form_errors.provider %}<p class="field-error" id="{{ form_id }}-provider-error">{{ msg }}</p>{% endif %}
   </div>
 
   <div class="row" data-key-row {% if form.provider == "ollama" %}hidden{% endif %}>
     <label>
       <span>Key name (required)</span>
       <input type="text" name="key" value="{{ form.key }}" placeholder="openrouter"
-        {% if form.provider == "ollama" %}disabled{% else %}required{% endif %}>
+        {% if form.provider == "ollama" %}disabled{% else %}required{% endif %}
+        {%- if form_errors.key.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-key-error"{% endif %}>
       <small class="muted">Name of the credential in <code>[ai.keys]</code>, not the API key itself.</small>
     </label>
+    {% if let Some(msg) = form_errors.key %}<p class="field-error" id="{{ form_id }}-key-error">{{ msg }}</p>{% endif %}
   </div>
 
   <div class="row">
     <label>Base URL
       <input type="text" name="base_url" value="{{ form.base_url }}"
-        {% if form.provider == "open_ai_compatible" %}required{% endif %}>
+        {% if form.provider == "open_ai_compatible" %}required{% endif %}
+        {%- if form_errors.base_url.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-base_url-error"{% endif %}>
       <small class="muted" data-base-url-help>Optional. Leave blank to use the provider default.</small>
     </label>
+    {% if let Some(msg) = form_errors.base_url %}<p class="field-error" id="{{ form_id }}-base_url-error">{{ msg }}</p>{% endif %}
   </div>
 
   <div class="row">
     <label>Model
-      <input type="text" name="model" value="{{ form.model }}" placeholder="provider/model-id" required>
+      <input type="text" name="model" value="{{ form.model }}" placeholder="provider/model-id" required
+        {%- if form_errors.model.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-model-error"{% endif %}>
       <small class="muted">Use the exact upstream model ID.</small>
     </label>
+    {% if let Some(msg) = form_errors.model %}<p class="field-error" id="{{ form_id }}-model-error">{{ msg }}</p>{% endif %}
   </div>
 
   </fieldset>
 
   <details class="profile-advanced"
-    {% if edit_target.is_some() || !form.reasoning_effort.is_empty() || !form.service_tier.is_empty() || form.timeout != "30" %}open{% endif %}>
+    {% if edit_target.is_some() || !form.reasoning_effort.is_empty() || !form.service_tier.is_empty() || form.timeout != "30" || form_errors.advanced() %}open{% endif %}>
     <summary>Advanced <span class="muted">Timeout, reasoning, and service tier</span></summary>
     <div class="profile-advanced-body">
   <div class="row">
     <label>Timeout (seconds)
-      <input type="number" name="timeout" min="1" max="600" value="{{ form.timeout }}" required>
+      <input type="number" name="timeout" min="1" max="600" value="{{ form.timeout }}" required
+        {%- if form_errors.timeout.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-timeout-error"{% endif %}>
     </label>
+    {% if let Some(msg) = form_errors.timeout %}<p class="field-error" id="{{ form_id }}-timeout-error">{{ msg }}</p>{% endif %}
   </div>
 
   {% for p in providers %}
+    {% let active = form.provider == p.value %}
     <fieldset class="provider-group" data-provider="{{ p.value }}"
-      {% if form.provider != p.value %}hidden disabled{% endif %}>
+      {% if !active %}hidden disabled{% endif %}>
       {% if p.effort_kind == "fixed" %}
         <div class="row">
           <label>Reasoning effort</label>
-          <div class="segmented" role="radiogroup" aria-label="reasoning_effort">
+          <div class="segmented" role="radiogroup" aria-label="reasoning_effort"
+            {%- if active && form_errors.reasoning_effort.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-reasoning_effort-error"{% endif %}>
             <label class="segment{% if form.reasoning_effort.is_empty() %} is-active{% endif %}">
               <input type="radio" name="reasoning_effort" value=""
                 {% if form.reasoning_effort.is_empty() %}checked{% endif %}>
@@ -117,24 +139,29 @@
               </label>
             {% endfor %}
           </div>
+          {% if active %}{% if let Some(msg) = form_errors.reasoning_effort %}<p class="field-error" id="{{ form_id }}-reasoning_effort-error">{{ msg }}</p>{% endif %}{% endif %}
         </div>
       {% else if p.effort_kind == "free" %}
         <div class="row">
           <label>Reasoning effort (free text, optional)
-            <input type="text" name="reasoning_effort" value="{{ form.reasoning_effort }}">
+            <input type="text" name="reasoning_effort" value="{{ form.reasoning_effort }}"
+              {%- if active && form_errors.reasoning_effort.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-reasoning_effort-error"{% endif %}>
           </label>
+          {% if active %}{% if let Some(msg) = form_errors.reasoning_effort %}<p class="field-error" id="{{ form_id }}-reasoning_effort-error">{{ msg }}</p>{% endif %}{% endif %}
         </div>
       {% endif %}
       {% if p.service_tier %}
         <div class="row">
           <label>Service tier
-            <select name="service_tier">
+            <select name="service_tier"
+              {%- if active && form_errors.service_tier.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-service_tier-error"{% endif %}>
               <option value="" {% if form.service_tier.is_empty() %}selected{% endif %}>Default</option>
               <option value="flex" {% if form.service_tier == "flex" %}selected{% endif %}>Flex</option>
               <option value="priority" {% if form.service_tier == "priority" %}selected{% endif %}>Priority</option>
             </select>
             <small class="muted">Optional. Availability depends on the provider and model.</small>
           </label>
+          {% if active %}{% if let Some(msg) = form_errors.service_tier %}<p class="field-error" id="{{ form_id }}-service_tier-error">{{ msg }}</p>{% endif %}{% endif %}
         </div>
       {% endif %}
     </fieldset>
