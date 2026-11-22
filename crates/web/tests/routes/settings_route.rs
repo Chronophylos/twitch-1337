@@ -1329,6 +1329,17 @@ async fn link_correction_card_renders_all_controls() {
     let cap = tag_with_name(&html, "link_correction.max_links");
     assert_eq!(attr(cap, "min"), Some("1"));
     assert_eq!(attr(cap, "max"), Some("5"));
+    // The hint is plain text escaped exactly once: `<sub>` must reach the
+    // browser as an entity, never as a double-escaped `&lt;` literal (#703).
+    assert!(
+        html.contains("/r/&#60;sub&#62;/s/&#60;id&#62;")
+            || html.contains("/r/&lt;sub&gt;/s/&lt;id&gt;"),
+        "reddit hint escaped once"
+    );
+    assert!(
+        !html.contains("&#38;lt;") && !html.contains("&amp;lt;"),
+        "no double-escaped entities in settings hints"
+    );
 }
 
 #[tokio::test]

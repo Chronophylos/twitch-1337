@@ -15,7 +15,7 @@
   <input type="hidden" name="link_correction.__shown" value="1">
   <div class="settings-rows">
     {% call m::toggle_row("link_correction", self.knob("link_correction.mydealz"), "Unshorten and de-track mydealz.de links.", current.link_correction.mydealz, defaults.link_correction.mydealz) %}{% endcall %}
-    {% call m::toggle_row("link_correction", self.knob("link_correction.reddit"), "Resolve reddit.com /r/&lt;sub&gt;/s/&lt;id&gt; share links to their canonical post permalink.", current.link_correction.reddit, defaults.link_correction.reddit) %}{% endcall %}
+    {% call m::toggle_row("link_correction", self.knob("link_correction.reddit"), "Resolve reddit.com /r/<sub>/s/<id> share links to their canonical post permalink.", current.link_correction.reddit, defaults.link_correction.reddit) %}{% endcall %}
     {% call m::toggle_row("link_correction", self.knob("link_correction.x_twitter"), "Rewrite public x.com / twitter.com profile and status links to xnotme.com.", current.link_correction.x_twitter, defaults.link_correction.x_twitter) %}{% endcall %}
     {% call m::num_row("link_correction", self.knob("link_correction.max_links"), "Maximum number of links processed per message.", current.link_correction.max_links, defaults.link_correction.max_links, "") %}{% endcall %}
   </div>
