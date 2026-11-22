@@ -14,7 +14,7 @@
   <div class="settings-rows">
     {% let spoiler_profile = current.spoiler.profile.as_str() %}
     <div class="settings-row" data-section="spoiler">
-      {% call m::row_head("spoiler.profile", "Decision profile used for the check. Only decision-kind profiles are listed; empty turns it off.", "spoiler.profile") %}{% endcall %}
+      {% call m::row_head(self.knob("spoiler.profile").label(), "Decision profile used for the check. Only decision-kind profiles are listed; empty turns it off.", "spoiler.profile") %}{% endcall %}
       <div class="row-control-cell">
         <select id="spoiler.profile" name="spoiler.profile" data-key="spoiler.profile" data-default="{{ defaults.spoiler.profile }}">
           <option value="">(off)</option>

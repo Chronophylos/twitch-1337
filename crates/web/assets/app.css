@@ -1294,19 +1294,30 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .card-dirty[hidden] { display: none; }
 
 .settings-rows { display: flex; flex-direction: column; }
+/* One row layout for every control type (contract in settings/_macros.html):
+   label + hint, one control column, and the right column. Each row's
+   control box sits first in `.row-control-cell`, so every control in a card
+   shares the control column's left edge. */
 .settings-row {
   display: grid;
-  grid-template-columns: 1fr 240px 200px;
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) 240px 200px;
+  grid-template-areas: "head control meta";
+  column-gap: 20px;
+  row-gap: 8px;
   align-items: center;
   padding: 14px 22px;
   border-bottom: 1px solid var(--line);
   transition: background 0.12s ease;
 }
+/* Long free text and lists: the control spans the control and right
+   columns from the same left edge; the right column drops under it. */
+.settings-row.row-wide { grid-template-areas: "head control control" "head meta meta"; }
+/* Values too long for that: the control gets its own line under the label. */
+.settings-row.row-full { grid-template-areas: "head head meta" "control control control"; }
 .settings-row:last-child { border-bottom: 0; }
 .settings-row:hover { background: var(--bg-1); }
 
-.row-left { min-width: 0; }
+.row-left { grid-area: head; min-width: 0; }
 .row-label {
   display: flex;
   align-items: center;
@@ -1341,14 +1352,22 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 }
 
 .row-control-cell {
+  grid-area: control;
   position: relative;
   display: flex;
   align-items: center;
+  gap: 8px;
+  min-width: 0;
   min-height: 32px;
 }
+/* Under the label, line the control up with the label text and hint. */
+.settings-row.row-full .row-control-cell { padding-left: 14px; }
 
 .row-right {
+  grid-area: meta;
+  min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   justify-content: flex-end;
@@ -1361,6 +1380,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .settings-row:hover .row-right,
 .settings-row:focus-within .row-right,
 .settings-row.is-dirty .row-right { opacity: 1; }
+.row-default { overflow-wrap: anywhere; }
 .row-default .mono { color: var(--fg-2); }
 .row-reset {
   width: 24px;
@@ -1378,23 +1398,53 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .row-reset:hover { background: var(--bg-2); color: var(--accent); }
 .row-reset[hidden] { display: none; }
 
-.num-wrap {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
+/* Every boxed control (number and byte-size boxes, text/time inputs,
+   textareas, selects) shares one field frame: visible at rest, brighter on
+   row hover, accent on focus, accent-soft while dirty, danger when the
+   browser flags the value invalid. */
+.num-wrap,
+.bytes-wrap,
+.text-input,
+.row-control-cell select {
   background: var(--bg-3);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-2);
   border-radius: var(--r-sm);
-  padding: 0 10px 0 0;
-  transition: border-color 0.12s ease, background 0.12s ease;
-  width: 160px;
+  color: var(--fg);
+  transition: border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
 }
-.num-wrap:focus-within {
+.settings-row:hover .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
   border-color: var(--line-strong);
+}
+.settings-row.is-dirty .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
+  border-color: var(--accent-soft);
+}
+.settings-row .row-control-cell :is(.num-wrap:focus-within, .bytes-wrap:focus-within, .text-input:focus, select:focus) {
+  border-color: var(--accent);
   background: var(--bg-2);
 }
-.settings-row.is-dirty .num-wrap { border-color: var(--accent-soft); }
+.settings-row .row-control-cell :is(.num-wrap:has(:user-invalid), .bytes-wrap:has(:user-invalid), .text-input:user-invalid, select:user-invalid) {
+  border-color: var(--danger);
+}
+
+/* Width contract: the control box fills the control cell (and so the wide
+   and full variants); numbers and times stay compact. Toggles keep their
+   switch size. All start at the cell's left edge. */
+.row-control-cell > :is(.text-input, select, .bytes-wrap, .range-wrap) { width: 100%; }
+.num-wrap,
+.text-input.is-narrow { width: 160px; max-width: 100%; }
+
+/* Field with an attached suffix: the input fills the box, the unit (fixed
+   `.num-unit` or the `.bytes-units` switcher) sits inside it behind a
+   divider. */
+.num-wrap,
+.bytes-wrap {
+  display: inline-flex;
+  align-items: stretch;
+  overflow: hidden;
+}
 .num-input {
+  flex: 1;
+  min-width: 0;
   background: transparent;
   border: 0;
   font-family: var(--mono);
@@ -1402,45 +1452,31 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   font-variant-numeric: tabular-nums;
   color: var(--fg);
   width: 100%;
-  padding: 7px 6px 7px 12px;
+  padding: 7px 10px 7px 12px;
+  text-align: left;
   appearance: textfield;
   -moz-appearance: textfield;
 }
 .num-input::-webkit-outer-spin-button,
 .num-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.num-unit {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--fg-4);
-  flex-shrink: 0;
-}
-
-.bytes-wrap {
-  display: inline-flex;
-  align-items: stretch;
-  background: var(--bg-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  transition: border-color 0.12s ease, background 0.12s ease;
-  width: 220px;
-  overflow: hidden;
-}
-.bytes-wrap:focus-within {
-  border-color: var(--line-strong);
-  background: var(--bg-2);
-}
-.settings-row.is-dirty .bytes-wrap { border-color: var(--accent-soft); }
-.bytes-wrap .bytes-display {
-  flex: 1;
-  min-width: 0;
-  padding: 7px 10px;
-  text-align: right;
-}
+.num-unit,
 .bytes-units {
   display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-left: 1px solid var(--line-2);
+  background: var(--bg-2);
+}
+.num-unit {
+  padding: 0 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-3);
+}
+.bytes-units {
   align-items: stretch;
-  padding: 4px;
-  gap: 3px;
+  padding: 3px;
+  gap: 2px;
 }
 .bytes-units .bytes-unit {
   background: transparent;
@@ -1449,7 +1485,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   font-family: var(--mono);
   font-size: 12px;
   color: var(--fg-3);
-  padding: 0 10px;
+  padding: 0 8px;
   border-radius: 4px;
   cursor: pointer;
   display: inline-flex;
@@ -1463,70 +1499,30 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   font-weight: 600;
 }
 
-.text-input {
-  background: var(--bg-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
-  font-family: var(--mono);
-  font-size: 13.5px;
-  color: var(--fg);
-  padding: 7px 12px;
-  width: 260px;
-  transition: border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
-}
-.text-input.is-narrow { width: 160px; }
-.text-input.is-wide { width: 360px; }
-.text-input:focus {
-  border-color: var(--line-strong);
-  background: var(--bg-2);
-}
-.settings-row.is-dirty .text-input { border-color: var(--accent-soft); }
-
+.text-input,
 .row-control-cell select {
-  background: var(--bg-3);
-  border: 1px solid var(--line);
-  border-radius: var(--r-sm);
   font-family: var(--mono);
   font-size: 13.5px;
-  color: var(--fg);
   padding: 7px 12px;
-  width: 260px;
-  color-scheme: dark;
-  transition: border-color 0.12s ease, background 0.12s ease;
 }
-.row-control-cell select:focus {
-  border-color: var(--line-strong);
-  background: var(--bg-2);
-}
-.settings-row.is-dirty .row-control-cell select { border-color: var(--accent-soft); }
-
-/* Settings controls are always visible. At rest their frame is quiet;
-   hovering the row or focusing the control brings it back, and a dirty
-   row keeps its accent border. */
-.row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
-  border-color: transparent;
-  background: transparent;
-}
-.settings-row:hover .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
-  border-color: var(--line);
-  background: var(--bg-3);
-}
-.settings-row .row-control-cell :is(.num-wrap:focus-within, .bytes-wrap:focus-within, .text-input:focus, select:focus) {
-  border-color: var(--line-strong);
-  background: var(--bg-2);
-}
-.settings-row.is-dirty .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
-  border-color: var(--accent-soft);
+.row-control-cell select { color-scheme: dark; }
+/* List knobs: at least four lines, full control width, vertical resize. */
+textarea.text-input {
+  display: block;
+  line-height: 1.5;
+  min-height: calc(4 * 1.5em + 16px);
+  resize: vertical;
 }
 
 .range-wrap {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  width: 260px;
 }
 .range-wrap input[type=range] {
   flex: 1;
+  min-width: 0;
+  margin: 0;
   accent-color: var(--accent);
   cursor: pointer;
 }
@@ -2281,24 +2277,17 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   }
   .settings-card { scroll-margin-top: calc(var(--topbar-h) + 70px); }
   .settings-card-head { flex-wrap: wrap; padding: 14px 16px 12px; }
-  .settings-row {
+  .settings-row,
+  .settings-row.row-wide,
+  .settings-row.row-full {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "head" "control" "meta";
     gap: 10px;
     padding: 14px 16px;
   }
   .row-control-cell { padding-left: 14px; flex-wrap: wrap; }
   .row-right { opacity: 1; justify-content: flex-start; padding-left: 14px; }
-  /* No hover on touch: show control frames at rest. */
-  .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
-    border-color: var(--line);
-    background: var(--bg-3);
-  }
-  .text-input,
-  .text-input.is-narrow,
-  .text-input.is-wide,
-  .row-control-cell select,
-  .range-wrap { width: 100%; }
-  .bytes-wrap { max-width: 100%; }
+  .text-input.is-narrow { width: 100%; }
   .segmented { flex-wrap: wrap; }
 
   .save-bar { left: 0; padding: 0; }

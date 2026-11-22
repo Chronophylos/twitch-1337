@@ -51,10 +51,10 @@
     {% call m::num_row("ai_emotes", self.knob("ai.emotes.min_baseline_emotes"),
        "Minimum baseline emotes retained even when filtering by recency.",
        e.cur.min_baseline_emotes, e.def.min_baseline_emotes, "", "ai.emotes.enabled") %}{% endcall %}
-    <div class="settings-row" data-section="ai_emotes" data-card-enabled-by="ai.emotes.enabled">
+    <div class="settings-row row-wide" data-section="ai_emotes" data-card-enabled-by="ai.emotes.enabled">
       {% call m::row_head("pinned_emotes", "Emote codes (one per line) always injected into the prompt — the persona's reflex emotes. Names not in the glossary are dropped; total must not exceed max_prompt_emotes.", "ai.emotes.pinned_emotes") %}{% endcall %}
       <div class="row-control-cell">
-        <textarea class="text-input is-wide" rows="4" id="ai.emotes.pinned_emotes" name="ai.emotes.pinned_emotes" data-key="ai.emotes.pinned_emotes" data-default="{{ e.def.pinned_emotes.join("\n") }}">{{ e.cur.pinned_emotes.join("\n") }}</textarea>
+        <textarea class="text-input" rows="4" id="ai.emotes.pinned_emotes" name="ai.emotes.pinned_emotes" data-key="ai.emotes.pinned_emotes" data-default="{{ e.def.pinned_emotes.join("\n") }}">{{ e.cur.pinned_emotes.join("\n") }}</textarea>
       </div>
       <div class="row-right">
         {% call m::restart_badge(self.knob("ai.emotes.pinned_emotes")) %}{% endcall %}
