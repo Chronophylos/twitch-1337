@@ -1413,3 +1413,44 @@ async fn link_correction_cap_bounds_rejected_without_change() {
     }
     assert_eq!(state.settings.load().link_correction.max_links, 2);
 }
+
+#[tokio::test]
+async fn f1_alerts_card_renders_and_round_trips() {
+    let (state, _dirs) = owner_state().await;
+    let res = Owner::login(&state).get(&state, "/settings").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    assert!(html.contains("sec-alerts_f1"), "card section present");
+    let poll = tag_with_name(&html, "alerts.f1.poll_secs");
+    assert_eq!(attr(poll, "min"), Some("60"));
+    assert_eq!(attr(poll, "max"), Some("86400"));
+
+    let f1 = state.settings.load().alerts.f1.clone();
+    assert!(f1.enabled, "on by default");
+    assert_eq!(f1.poll_secs, 3600);
+
+    // Sentinel posted, checkbox omitted: saves as off.
+    let res = post_raw(
+        &state,
+        &[("alerts.f1.__shown", "1"), ("alerts.f1.poll_secs", "1800")],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let f1 = state.settings.load().alerts.f1.clone();
+    assert!(!f1.enabled);
+    assert_eq!(f1.poll_secs, 1800);
+
+    let res = post_raw(
+        &state,
+        &[
+            ("alerts.f1.__shown", "1"),
+            ("alerts.f1.enabled", "1"),
+            ("alerts.f1.poll_secs", "3600"),
+        ],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let f1 = state.settings.load().alerts.f1.clone();
+    assert!(f1.enabled);
+    assert_eq!(f1.poll_secs, 3600);
+}

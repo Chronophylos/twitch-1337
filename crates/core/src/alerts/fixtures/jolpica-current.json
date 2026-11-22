@@ -1,0 +1,119 @@
+{
+  "MRData": {
+    "xmlns": "",
+    "series": "f1",
+    "url": "https://api.jolpi.ca/ergast/f1/current.json",
+    "limit": "100",
+    "offset": "0",
+    "total": "23",
+    "RaceTable": {
+      "season": "2026",
+      "Races": [
+        {
+          "season": "2026",
+          "round": "1",
+          "url": "https://en.wikipedia.org/wiki/2026_Australian_Grand_Prix",
+          "raceName": "Australian Grand Prix",
+          "Circuit": {
+            "circuitId": "albert_park",
+            "url": "https://en.wikipedia.org/wiki/Albert_Park_Circuit",
+            "circuitName": "Albert Park Grand Prix Circuit",
+            "Location": {
+              "lat": "-37.8497",
+              "long": "144.968",
+              "locality": "Melbourne",
+              "country": "Australia"
+            }
+          },
+          "date": "2026-03-08",
+          "time": "04:00:00Z"
+        },
+        {
+          "season": "2026",
+          "round": "6",
+          "url": "https://en.wikipedia.org/wiki/2026_Monaco_Grand_Prix",
+          "raceName": "Monaco Grand Prix",
+          "Circuit": {
+            "circuitId": "monaco",
+            "url": "https://en.wikipedia.org/wiki/Circuit_de_Monaco",
+            "circuitName": "Circuit de Monaco",
+            "Location": {
+              "lat": "43.7347",
+              "long": "7.42056",
+              "locality": "Monte Carlo",
+              "country": "Monaco"
+            }
+          },
+          "date": "2026-06-07",
+          "time": "13:00:00Z"
+        },
+        {
+          "season": "2026",
+          "round": "21",
+          "url": "https://en.wikipedia.org/wiki/2026_Las_Vegas_Grand_Prix",
+          "raceName": "Las Vegas Grand Prix",
+          "Circuit": {
+            "circuitId": "vegas",
+            "url": "https://en.wikipedia.org/wiki/Las_Vegas_Grand_Prix#Circuit",
+            "circuitName": "Las Vegas Strip Street Circuit",
+            "Location": {
+              "lat": "36.1147",
+              "long": "-115.173",
+              "locality": "Las Vegas",
+              "country": "USA"
+            }
+          },
+          "date": "2026-11-22",
+          "time": "04:00:00Z"
+        },
+        {
+          "season": "2026",
+          "round": "22",
+          "url": "https://en.wikipedia.org/wiki/2026_Qatar_Grand_Prix",
+          "raceName": "Qatar Grand Prix",
+          "Circuit": {
+            "circuitId": "losail",
+            "url": "https://en.wikipedia.org/wiki/Lusail_International_Circuit",
+            "circuitName": "Lusail International Circuit",
+            "Location": {
+              "lat": "25.49",
+              "long": "51.4542",
+              "locality": "Lusail",
+              "country": "Qatar"
+            }
+          },
+          "date": "2026-11-29",
+          "time": "16:00:00Z"
+        },
+        {
+          "season": "2026",
+          "round": "98",
+          "url": "https://example.invalid",
+          "raceName": "Testing Grand Prix",
+          "Circuit": {
+            "circuitId": "test",
+            "url": "https://example.invalid",
+            "circuitName": "Test Circuit",
+            "Location": {
+              "lat": "0",
+              "long": "0",
+              "locality": "Teststadt",
+              "country": "Germany"
+            }
+          },
+          "date": "2026-12-13"
+        },
+        {
+          "season": "2026",
+          "round": "99",
+          "raceName": "Broken Grand Prix",
+          "Circuit": {
+            "circuitName": "Nowhere"
+          },
+          "date": "not-a-date",
+          "time": "13:00:00Z"
+        }
+      ]
+    }
+  }
+}

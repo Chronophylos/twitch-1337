@@ -1,0 +1,24 @@
+{# crates/web/templates/settings/cards/alerts_f1.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-alerts_f1" class="settings-card" data-section="alerts_f1">
+  {# Sentinel: the card was rendered, so an absent checkbox means "off". #}
+  <input type="hidden" name="alerts.f1.__shown" value="1">
+  <header class="settings-card-head">
+    <div>
+      <h2>Alerts · F1</h2>
+      <p>Race-Week Reminder from the Jolpica F1 calendar: one line at 18:00 Berlin on the Monday of each race week. Changes apply immediately.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% call m::toggle_row("alerts_f1", self.knob("alerts.f1.enabled"),
+       "Announce each F1 Race Week in chat.",
+       current.alerts.f1.enabled, defaults.alerts.f1.enabled) %}{% endcall %}
+    {% call m::num_row("alerts_f1", self.knob("alerts.f1.poll_secs"),
+       "How often the Jolpica season calendar is polled. Keep it below the catch-up cutoff, or a reminder is absorbed as stale.",
+       current.alerts.f1.poll_secs, defaults.alerts.f1.poll_secs, "s") %}{% endcall %}
+  </div>
+</section>

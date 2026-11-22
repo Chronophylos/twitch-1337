@@ -210,6 +210,6 @@ field syntax needs literals, so spans and logs rely on this table).
 |`aviation.tracker.decision`|flight tracker decision kind (`adsb_poll_result`, `phase_transition`, `diversion_decision`, `tracking_removal`, `flight_route_lookup`, `aviationstack_metadata`, `track_started`)|yes|
 |`aviation.tracker.detail`|JSON payload of a flight tracker decision, secrets stripped|**no**|
 |`bot.persist.file`|file written by `util::persist`: RON file name (`pings.ron`, …) or a fixed kind (`memory`); never a path|yes|
-|`alerts.feed`|`quake`, `solar`, `cme`|yes|
+|`alerts.feed`|`quake`, `solar`, `cme`, `f1`|yes|
 
 A new attribute gets a row here in the same change.

@@ -41,8 +41,8 @@ pub use ai::{
     AiRecapOverrides, AiSettings, AiWeb, AiWebOverrides, ProfileKind,
 };
 pub use alerts::{
-    AlertsOverrides, AlertsSettings, CmeAlerts, CmeAlertsOverrides, QuakeAlerts,
-    QuakeAlertsOverrides, SolarAlerts, SolarAlertsOverrides,
+    AlertsOverrides, AlertsSettings, CmeAlerts, CmeAlertsOverrides, F1Alerts, F1AlertsOverrides,
+    QuakeAlerts, QuakeAlertsOverrides, SolarAlerts, SolarAlertsOverrides,
 };
 #[cfg(any(test, feature = "testing"))]
 pub use audit::MemoryAuditLog;
