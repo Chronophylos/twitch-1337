@@ -87,7 +87,10 @@ async fn leaderboard_reply_reserves_the_transport_prefix_at_the_byte_boundary() 
         "link was cut: {out}"
     );
     assert!(out.contains(", 9. "), "ninth place missing: {out}");
-    assert!(!out.contains(", 10. "), "tenth place should be dropped: {out}");
+    assert!(
+        !out.contains(", 10. "),
+        "tenth place should be dropped: {out}"
+    );
 
     bot.shutdown().await;
 }

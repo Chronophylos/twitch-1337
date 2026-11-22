@@ -194,7 +194,11 @@ mod tests {
 
         let reply = format_top(&board(&refs), cmd.page_url.as_deref());
 
-        assert!(fits_outbound_reply(&reply), "{} bytes: {reply}", reply.len());
+        assert!(
+            fits_outbound_reply(&reply),
+            "{} bytes: {reply}",
+            reply.len()
+        );
         assert_eq!(sanitize_outbound(&reply), reply, "outbound clamp kicked in");
         assert!(!reply.contains('…'), "{reply}");
         let link = format!(" · Alle: {public_url}/1337");
