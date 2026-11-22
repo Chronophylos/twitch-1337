@@ -862,8 +862,7 @@ fn profile_card<'a>(html: &'a str, name: &str) -> &'a str {
         .split("<article")
         .find(|part| part.contains(&title))
         .unwrap_or_else(|| panic!("{name} profile card missing: {html}"));
-    card.split_once("</article>")
-        .map_or(card, |(card, _)| card)
+    card.split_once("</article>").map_or(card, |(card, _)| card)
 }
 
 #[tokio::test]
