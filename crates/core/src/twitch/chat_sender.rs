@@ -21,6 +21,9 @@ use twitch_irc::{
 /// framing tags injected by `say_in_reply_to`.
 const MAX_OUTBOUND_BYTES: usize = 480;
 
+/// `TwitchIRCClient::say_in_reply_to` adds this after sanitization.
+const REPLY_PREFIX: &str = ". ";
+
 /// Strip control characters and collapse whitespace runs. Does not trim
 /// leading/trailing whitespace and does not length-clamp — callers that
 /// need the 480-byte IRC ceiling go through [`sanitize_outbound`].
@@ -43,6 +46,19 @@ pub fn collapse_control_and_whitespace(input: &str) -> String {
         }
     }
     collapsed
+}
+
+/// Whether `input` passes [`sanitize_outbound`] without the `…` clamp:
+/// after control/whitespace collapse it fits [`MAX_OUTBOUND_BYTES`].
+/// Replies additionally need [`fits_outbound_reply`] to reserve their prefix.
+pub fn fits_outbound(input: &str) -> bool {
+    collapse_control_and_whitespace(input).len() <= MAX_OUTBOUND_BYTES
+}
+
+/// Whether `input` passes [`ChatSender::reply`] without the `…` clamp or
+/// exceeding [`MAX_OUTBOUND_BYTES`] after `say_in_reply_to` adds its prefix.
+pub fn fits_outbound_reply(input: &str) -> bool {
+    collapse_control_and_whitespace(input).len() + REPLY_PREFIX.len() <= MAX_OUTBOUND_BYTES
 }
 
 /// Strip control characters, collapse whitespace runs, and byte-clamp to
@@ -208,5 +224,32 @@ mod tests {
         let input = "a".repeat(600);
         let out = collapse_control_and_whitespace(&input);
         assert_eq!(out, input);
+    }
+
+    #[test]
+    fn reply_fit_reserves_say_in_reply_to_prefix() {
+        let exact = "a".repeat(MAX_OUTBOUND_BYTES - REPLY_PREFIX.len());
+        assert!(fits_outbound(&exact));
+        assert!(fits_outbound_reply(&exact));
+
+        let over = format!("{exact}a");
+        assert!(fits_outbound(&over));
+        assert!(!fits_outbound_reply(&over));
+    }
+
+    #[test]
+    fn fits_outbound_matches_the_clamp() {
+        let exact = "a".repeat(MAX_OUTBOUND_BYTES);
+        assert!(fits_outbound(&exact));
+        assert_eq!(sanitize_outbound(&exact), exact);
+
+        let over = "a".repeat(MAX_OUTBOUND_BYTES + 1);
+        assert!(!fits_outbound(&over));
+        assert!(sanitize_outbound(&over).ends_with('…'));
+
+        // Measured after collapse, like the send path: a whitespace run
+        // that collapses to one space brings the line back under the limit.
+        let collapsible = format!("{}\r\n\r\n", "a".repeat(MAX_OUTBOUND_BYTES - 1));
+        assert!(fits_outbound(&collapsible));
     }
 }

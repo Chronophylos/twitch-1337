@@ -21,6 +21,7 @@ mod memory_write;
 mod nav_gating;
 mod pings_filters;
 mod pings_routes;
+mod public_leaderboard_route;
 mod schedules_route;
 mod security_headers;
 mod settings_route;

@@ -1,0 +1,47 @@
+{#- Public 1337 leaderboard (/1337). Standalone on purpose: no sidebar, no
+    auth-only links, no scripts. Same ranking as !lb and /leaderboard. -#}
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="darkreader-lock">
+  <title>1337-Leaderboard — {{ channel }}</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v={{ env!("ASSET_V_FAVICON_SVG") }}">
+  <link rel="stylesheet" href="/assets/app.css?v={{ env!("ASSET_V_APP_CSS") }}">
+</head>
+<body>
+  <main class="public-page page">
+    <div class="page-head">
+      <div>
+        <h1>1337-Leaderboard <span class="count">({{ rows.len() }})</span></h1>
+        <p class="page-sub">Die schnellsten 1337 um 13:37 in #{{ channel }}, jeweils die persönliche Bestzeit. Im Chat zeigt <code>!lb</code> die Top 10.</p>
+      </div>
+    </div>
+
+    <div class="table leaderboard">
+      <div class="thead">
+        <div class="th col-rank">#</div>
+        <div class="th col-user">Name</div>
+        <div class="th col-best">Bestzeit</div>
+        <div class="th col-date">Datum</div>
+      </div>
+      {%- if rows.is_empty() %}
+      <div class="empty">Noch keine Einträge vorhanden</div>
+      {%- else %}
+      <div class="tbody">
+      {%- for row in rows %}
+        <div class="tr">
+          <div class="td col-rank mono" data-label="#">{{ row.rank }}</div>
+          <div class="td col-user mono" data-label="Name">{{ row.login }}</div>
+          <div class="td col-best mono num" data-label="Bestzeit">{{ row.ms }} ms</div>
+          <div class="td col-date mono" data-label="Datum">{{ row.date }}</div>
+        </div>
+      {%- endfor %}
+      </div>
+      {%- endif %}
+    </div>
+  </main>
+</body>
+</html>

@@ -5,6 +5,7 @@ use axum::Router;
 use axum::extract::{Extension, State};
 use axum::response::Response;
 use axum::routing::get;
+use twitch_1337_core::commands::leaderboard::ranking;
 
 use crate::auth::csrf;
 use crate::auth::session::Session;
@@ -40,26 +41,19 @@ async fn list(
     State(state): State<WebState>,
     Extension(session): Extension<Session>,
 ) -> Result<Response, WebError> {
-    let lb = state.leaderboard.read().await;
-    let mut entries: Vec<(String, u64, jiff::civil::Date)> = lb
-        .iter()
-        .map(|(login, pb)| (login.clone(), pb.ms, pb.date))
-        .collect();
-    drop(lb);
-
-    // Sort by best time ascending; break ties alphabetically by login.
-    entries.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-
-    let rows = entries
-        .into_iter()
-        .enumerate()
-        .map(|(i, (login, ms, date))| RowView {
-            rank: i + 1,
-            login,
-            ms,
-            date,
-        })
-        .collect();
+    let rows: Vec<RowView> = {
+        let lb = state.leaderboard.read().await;
+        ranking(&lb)
+            .into_iter()
+            .enumerate()
+            .map(|(i, (login, pb))| RowView {
+                rank: i + 1,
+                login: login.to_owned(),
+                ms: pb.ms,
+                date: pb.date,
+            })
+            .collect()
+    };
 
     let csrf = csrf::encode(&session.csrf_value);
     let is_mod = session.is_mod();

@@ -276,8 +276,9 @@ of Viewer, Mod, or Owner; each tier sees everything the tier below it sees.
 _Avoid_: role (ambiguous with Twitch chat roles), permission level.
 
 **Viewer**:
-An account on the viewer allowlist that is not a Mod. Reads the public pages
-(leaderboard, pings, flights) and changes nothing.
+An account on the viewer allowlist that is not a Mod. Reads the dashboard's
+read-only pages (leaderboard, pings, flights) and changes nothing. The
+always-public pages (`/commands`, `/1337`) need no account at all.
 _Avoid_: guest, read-only user.
 
 **Mod**:

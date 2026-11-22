@@ -361,6 +361,12 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         if secret_bytes_len < 32 {
             bail!("web.session_secret must be ≥32 bytes hex when web.enabled = true");
         }
+        if config.web.public_url.len() > 256 {
+            bail!(
+                "web.public_url must be at most 256 bytes when web.enabled = true (got {})",
+                config.web.public_url.len()
+            );
+        }
         if !config.web.public_url.starts_with("https://") {
             bail!(
                 "web.public_url must start with https:// when web.enabled = true (got {:?})",
@@ -456,6 +462,21 @@ mod tests {
         cfg.web.public_url = "http://insecure".into();
         let err = validate_config(&cfg).unwrap_err().to_string();
         assert!(err.contains("public_url"), "{err}");
+    }
+
+    #[test]
+    fn web_enabled_rejects_public_url_over_256_bytes() {
+        let mut cfg = Configuration::test_default();
+        cfg.web.enabled = true;
+        cfg.web.session_secret = secrecy::SecretString::new("00".repeat(32).into());
+        cfg.web.public_url = format!("https://bot.example/{}", "a".repeat(236));
+        validate_config(&cfg).expect("256-byte public_url must be accepted");
+        cfg.web.public_url.push('a');
+        assert_eq!(cfg.web.public_url.len(), 257);
+
+        let err = validate_config(&cfg).unwrap_err().to_string();
+        assert!(err.contains("web.public_url"), "{err}");
+        assert!(err.contains("256"), "{err}");
     }
 
     #[test]
