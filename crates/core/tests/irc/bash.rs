@@ -17,10 +17,19 @@ use common::{TestBot, TestBotBuilder};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
-const SYNTAX_EMOTES: [&str; 3] = ["4Head", "Keepo", "LUL"];
-const TIMEOUT_EMOTES: [&str; 3] = ["Waiting", "FeelsLateMan", "modCheck"];
-const RESOURCE_EMOTES: [&str; 3] = ["Bonk", "NOPE", "WICKED"];
-const NONZERO_EXIT_EMOTES: [&str; 3] = ["FDM", "NotLikeThis", "monkaS"];
+const INVALID_EMOTE: &str = "TestInvalid";
+const TIMEOUT_EMOTE: &str = "TestTimeout";
+const LIMIT_EMOTE: &str = "TestLimit";
+const FAILURE_EMOTE: &str = "TestFailure";
+
+fn builder() -> TestBotBuilder {
+    TestBotBuilder::new().with_settings(|o| {
+        o.reply_emotes.invalid = Some(vec![INVALID_EMOTE.into()]);
+        o.reply_emotes.timeout = Some(vec![TIMEOUT_EMOTE.into()]);
+        o.reply_emotes.limit = Some(vec![LIMIT_EMOTE.into()]);
+        o.reply_emotes.failure = Some(vec![FAILURE_EMOTE.into()]);
+    })
+}
 
 /// Run one script as `user`/`user_id` and return the reply.
 async fn run(bot: &mut TestBot, user: &str, user_id: &str, script: &str) -> String {
@@ -29,20 +38,9 @@ async fn run(bot: &mut TestBot, user: &str, user_id: &str, script: &str) -> Stri
     bot.expect_reply(TIMEOUT).await
 }
 
-/// Assert `reply` is `<prefix> <one emote of pool>` and return nothing.
-fn assert_pooled(reply: &str, prefix: &str, pool: &[&str; 3]) {
-    let emote = reply
-        .strip_prefix(prefix)
-        .unwrap_or_else(|| panic!("expected {prefix:?} prefix, got {reply:?}"));
-    assert!(
-        pool.contains(&emote),
-        "emote {emote:?} is not one of {pool:?} (reply {reply:?})"
-    );
-}
-
 #[tokio::test]
 async fn script_keeps_its_inner_whitespace() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     // Ingress splits args on whitespace; the script must come from the raw
     // message body instead, or the two spaces collapse and this prints 3.
@@ -54,7 +52,7 @@ async fn script_keeps_its_inner_whitespace() {
 
 #[tokio::test]
 async fn stdout_is_the_reply() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     assert_eq!(
         run(&mut bot, "alice", "1001", "printf hello").await,
@@ -66,20 +64,20 @@ async fn stdout_is_the_reply() {
 
 #[tokio::test]
 async fn silent_script_reports_the_exit_code() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     let blank = run(&mut bot, "alice", "1001", r"printf '   \n'").await;
     assert_eq!(blank, "exit 0");
 
     let failed = run(&mut bot, "bob", "1002", "exit 3").await;
-    assert_pooled(&failed, "exit 3 ", &NONZERO_EXIT_EMOTES);
+    assert_eq!(failed, format!("exit 3 {FAILURE_EMOTE}"));
 
     bot.shutdown().await;
 }
 
 #[tokio::test]
 async fn stderr_never_reaches_chat() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     let reply = run(&mut bot, "alice", "1001", "printf ignored >&2").await;
     assert_eq!(reply, "exit 0");
@@ -90,7 +88,7 @@ async fn stderr_never_reaches_chat() {
 
 #[tokio::test]
 async fn each_run_gets_a_fresh_filesystem() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     let wrote = run(&mut bot, "alice", "1001", "printf secret > /tmp/state").await;
     assert_eq!(wrote, "exit 0");
@@ -98,9 +96,10 @@ async fn each_run_gets_a_fresh_filesystem() {
     // Bob's interpreter is a different process in every sense that matters:
     // the file Alice wrote never existed for him.
     let read = run(&mut bot, "bob", "1002", "cat /tmp/state").await;
-    assert!(
-        read.starts_with("exit 1 "),
-        "a fresh run must not see another run's files; got: {read}"
+    assert_eq!(
+        read,
+        format!("exit 1 {FAILURE_EMOTE}"),
+        "a fresh run must not see another run's files"
     );
 
     bot.shutdown().await;
@@ -108,7 +107,7 @@ async fn each_run_gets_a_fresh_filesystem() {
 
 #[tokio::test]
 async fn sandbox_identity_is_virtual() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     let reply = run(
         &mut bot,
@@ -129,7 +128,7 @@ async fn sandbox_identity_is_virtual() {
 async fn host_environment_does_not_leak() {
     // The bot's own process has this; the sandbox must not.
     assert!(std::env::var("CARGO_MANIFEST_DIR").is_ok());
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     let reply = run(
         &mut bot,
@@ -145,40 +144,40 @@ async fn host_environment_does_not_leak() {
 
 #[tokio::test]
 async fn syntax_error_replies_with_the_syntax_pool() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     let reply = run(&mut bot, "alice", "1001", "if then fi").await;
-    assert_pooled(&reply, "Syntaxfehler ", &SYNTAX_EMOTES);
+    assert_eq!(reply, format!("Syntaxfehler {INVALID_EMOTE}"));
 
     bot.shutdown().await;
 }
 
 #[tokio::test]
 async fn runaways_reply_with_the_resource_pool() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     let reply = run(&mut bot, "alice", "1001", "f(){ f; }; f").await;
-    assert_pooled(&reply, "Ressourcenlimit erreicht ", &RESOURCE_EMOTES);
+    assert_eq!(reply, format!("Ressourcenlimit erreicht {LIMIT_EMOTE}"));
 
     bot.shutdown().await;
 }
 
 #[tokio::test]
 async fn slow_script_replies_with_the_timeout_pool() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_settings(|o| o.bash.timeout_ms = Some(100))
         .spawn()
         .await;
 
     let reply = run(&mut bot, "alice", "1001", "sleep 1").await;
-    assert_pooled(&reply, "Zeitlimit erreicht ", &TIMEOUT_EMOTES);
+    assert_eq!(reply, format!("Zeitlimit erreicht {TIMEOUT_EMOTE}"));
 
     bot.shutdown().await;
 }
 
 #[tokio::test]
 async fn stdout_cap_truncates_the_reply() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_settings(|o| o.bash.max_stdout_bytes = Some(16))
         .spawn()
         .await;
@@ -200,7 +199,7 @@ async fn stdout_cap_truncates_the_reply() {
 /// start of the body.
 #[tokio::test]
 async fn reply_prefixed_invocation_runs_the_script() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     bot.send_reply_to_mouth("alice", "!bash printf hi", "bot", "22222", "hello")
         .await;
@@ -212,11 +211,11 @@ async fn reply_prefixed_invocation_runs_the_script() {
 
 #[tokio::test]
 async fn empty_input_answers_with_usage_without_charging_cooldown() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     bot.send_privmsg_as("alice", "1001", "!bash").await;
     let usage = bot.expect_reply(TIMEOUT).await;
-    assert_eq!(usage, "Nutzung: !bash <script>");
+    assert_eq!(usage, format!("Nutzung: !bash <script> {INVALID_EMOTE}"));
 
     // No cooldown was charged: the next real script runs immediately.
     assert_eq!(run(&mut bot, "alice", "1001", "printf a").await, "a");
@@ -226,7 +225,7 @@ async fn empty_input_answers_with_usage_without_charging_cooldown() {
 
 #[tokio::test]
 async fn nonempty_stdout_is_not_decorated_even_on_a_nonzero_exit() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     let reply = run(&mut bot, "alice", "1001", "printf out; exit 7").await;
     assert_eq!(reply, "out");
@@ -238,7 +237,7 @@ async fn nonempty_stdout_is_not_decorated_even_on_a_nonzero_exit() {
 /// must not print its success marker.
 #[tokio::test]
 async fn vfs_byte_ceiling_blocks_the_write() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_settings(|o| o.bash.max_vfs_bytes = Some(32))
         .spawn()
         .await;
@@ -274,7 +273,7 @@ async fn vfs_byte_ceiling_blocks_the_write() {
 /// let alone charges, the cooldown.
 #[tokio::test]
 async fn busy_run_rejects_instead_of_queueing() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_settings(|o| {
             o.bash.timeout_ms = Some(1000);
             o.cooldowns.bash = Some(60);
@@ -289,10 +288,10 @@ async fn busy_run_rejects_instead_of_queueing() {
     bot.send_privmsg_as("alice", "2001", "!bash sleep 5").await;
 
     let same_user = run(&mut bot, "alice", "2001", "printf again").await;
-    assert_eq!(same_user, "zu viel zu tun");
+    assert_eq!(same_user, format!("zu viel zu tun {LIMIT_EMOTE}"));
 
     let long_run = bot.expect_reply(TIMEOUT).await;
-    assert_pooled(&long_run, "Zeitlimit erreicht ", &TIMEOUT_EMOTES);
+    assert_eq!(long_run, format!("Zeitlimit erreicht {TIMEOUT_EMOTE}"));
 
     assert_eq!(run(&mut bot, "bob", "2002", "printf hi").await, "hi");
 
@@ -305,7 +304,7 @@ async fn busy_run_rejects_instead_of_queueing() {
 /// it runs again as soon as the slot frees.
 #[tokio::test]
 async fn permit_held_elsewhere_rejects_without_waiting() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_settings(|o| o.bash.timeout_ms = Some(5_000))
         .spawn()
         .await;
@@ -317,7 +316,7 @@ async fn permit_held_elsewhere_rejects_without_waiting() {
         .expect("the only permit is free");
     let start = std::time::Instant::now();
     let busy = run(&mut bot, "alice", "3001", "printf hi").await;
-    assert_eq!(busy, "zu viel zu tun");
+    assert_eq!(busy, format!("zu viel zu tun {LIMIT_EMOTE}"));
     assert!(
         start.elapsed() < Duration::from_secs(2),
         "!bash waited for the permit ({:?})",
@@ -334,7 +333,7 @@ async fn permit_held_elsewhere_rejects_without_waiting() {
 /// token cancels the interpreter and the bot drains at once.
 #[tokio::test]
 async fn shutdown_cancels_a_running_script() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_settings(|o| o.bash.timeout_ms = Some(10_000))
         .spawn()
         .await;
@@ -345,7 +344,7 @@ async fn shutdown_cancels_a_running_script() {
     // the slot. Without this, a stalled dispatch would let the test pass
     // without exercising cancellation at all.
     let probe = run(&mut bot, "alice", "4001", "printf again").await;
-    assert_eq!(probe, "zu viel zu tun");
+    assert_eq!(probe, format!("zu viel zu tun {LIMIT_EMOTE}"));
 
     let start = std::time::Instant::now();
     bot.shutdown().await;
@@ -358,7 +357,7 @@ async fn shutdown_cancels_a_running_script() {
 
 #[tokio::test]
 async fn help_and_the_public_catalog_know_the_command() {
-    let mut bot = TestBotBuilder::new().with_web("127.0.0.1:0").spawn().await;
+    let mut bot = builder().with_web("127.0.0.1:0").spawn().await;
 
     let help = run_help(&mut bot, "alice").await;
     assert!(help.starts_with("!bash: "), "got: {help}");
@@ -390,7 +389,7 @@ async fn run_help(bot: &mut TestBot, user: &str) -> String {
 
 #[tokio::test]
 async fn suspend_silences_bash() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     bot.send_as_mod("modguy", "!suspend bash 1m").await;
     let confirm = bot.expect_say(TIMEOUT).await;

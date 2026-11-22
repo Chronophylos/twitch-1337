@@ -7,8 +7,11 @@ use tracing::debug;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::{FlightIdentifier, TrackerCommand};
-use crate::commands::{Command, CommandContext, ExecutionClass};
-use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use crate::commands::{
+    Command, CommandContext, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+};
+use crate::cooldown::PerUserCooldown;
 use crate::settings::{Settings, SettingsHandle};
 
 fn info_cooldown_duration(s: &Settings) -> Duration {
@@ -59,14 +62,26 @@ where
         let input = ctx.args.join(" ");
         if input.trim().is_empty() {
             ctx.sender
-                .reply(&ctx.privmsg, "Benutzung: !info <flight number> FDM")
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &ctx.settings,
+                        ReplyEmoteCategory::Invalid,
+                        "Benutzung: !info <flight number>",
+                    ),
+                )
                 .await;
             return Ok(());
         }
         let identifier = match FlightIdentifier::parse(&input) {
             Ok(id) => id,
             Err(e) => {
-                ctx.sender.reply(&ctx.privmsg, format!("{e} FDM")).await;
+                ctx.sender
+                    .reply(
+                        &ctx.privmsg,
+                        error_reply(&ctx.settings, ReplyEmoteCategory::Invalid, e),
+                    )
+                    .await;
                 return Ok(());
             }
         };
@@ -74,13 +89,7 @@ where
         if let Err(remaining) = self.cooldown.try_acquire(user).await {
             debug!(user = %user, remaining_secs = remaining.as_secs(), "!info on cooldown");
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&ctx.settings, remaining))
                 .await;
             return Ok(());
         }

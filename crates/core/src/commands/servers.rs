@@ -6,10 +6,14 @@ use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, ExecutionClass, servers_cooldown_duration};
+use super::{
+    Command, CommandContext, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+    servers_cooldown_duration,
+};
 use crate::{
     amp::{AmpClient, AmpDetails, AmpError, AmpServer},
-    cooldown::{PerUserCooldown, format_cooldown_remaining},
+    cooldown::PerUserCooldown,
     settings::SettingsHandle,
     twitch::announce::format_uptime,
     util::truncate_response,
@@ -35,21 +39,32 @@ impl ServersCommand {
         }
     }
 
-    /// Reply text, and whether it costs the viewer their cooldown. A "be more
-    /// specific" or "not found" answer is free so the retry goes through.
-    async fn reply_for(&self, query: &str) -> (String, bool) {
+    /// Reply text, whether it costs the viewer their cooldown, and its error
+    /// category. A "be more specific" or "not found" answer is free so the
+    /// retry goes through.
+    async fn categorized_reply(&self, query: &str) -> (String, bool, Option<ReplyEmoteCategory>) {
         let servers = match self.amp.servers().await {
             Ok(s) => s,
-            Err(e) => return (error_reply(e).to_owned(), true),
+            Err(e) => {
+                return (
+                    amp_error_reply(e).to_owned(),
+                    true,
+                    Some(ReplyEmoteCategory::Failure),
+                );
+            }
         };
         // Invisible chars (Chatterino's U+E0000 dedupe) normalize to empty.
         if normalize(query).is_empty() {
-            return (list_reply(&servers), true);
+            return (list_reply(&servers), true, None);
         }
         match pick_server(&servers, query) {
-            Pick::None => (NOT_FOUND_REPLY.to_owned(), false),
-            Pick::Many(m) => (many_reply(&m), false),
-            Pick::One(s) if !s.running => (detail_reply(s, None), true),
+            Pick::None => (
+                NOT_FOUND_REPLY.to_owned(),
+                false,
+                Some(ReplyEmoteCategory::Invalid),
+            ),
+            Pick::Many(m) => (many_reply(&m), false, Some(ReplyEmoteCategory::Invalid)),
+            Pick::One(s) if !s.running => (detail_reply(s, None), true, None),
             Pick::One(s) => {
                 let details =
                     match tokio::time::timeout(self.details_timeout, self.amp.details(&s.id)).await
@@ -64,9 +79,15 @@ impl ServersCommand {
                             None
                         }
                     };
-                (detail_reply(s, details.as_ref()), true)
+                (detail_reply(s, details.as_ref()), true, None)
             }
         }
+    }
+
+    #[cfg(test)]
+    async fn reply_for(&self, query: &str) -> (String, bool) {
+        let (reply, charged, _) = self.categorized_reply(query).await;
+        (reply, charged)
     }
 }
 
@@ -105,22 +126,20 @@ where
             Ok(stamp) => stamp,
             Err(remaining) => {
                 ctx.sender
-                    .reply(
-                        &ctx.privmsg,
-                        format!(
-                            "Bitte warte noch {} Waiting",
-                            format_cooldown_remaining(remaining)
-                        ),
-                    )
+                    .reply(&ctx.privmsg, cooldown_reply(&ctx.settings, remaining))
                     .await;
                 return Ok(());
             }
         };
-        let (reply, charged) = self.reply_for(ctx.args.join(" ").trim()).await;
+        let (reply, charged, category) = self.categorized_reply(ctx.args.join(" ").trim()).await;
         if !charged {
             self.cooldown.refund(user, stamp).await;
         }
         ctx.cancellation.check()?;
+        let reply = match category {
+            Some(category) => error_reply(&ctx.settings, category, reply),
+            None => reply,
+        };
         ctx.sender.reply(&ctx.privmsg, reply).await;
         Ok(())
     }
@@ -233,7 +252,7 @@ fn many_reply(hits: &[&AmpServer]) -> String {
     )
 }
 
-fn error_reply(e: AmpError) -> &'static str {
+fn amp_error_reply(e: AmpError) -> &'static str {
     match e {
         AmpError::Auth => "AMP-Login fehlgeschlagen",
         AmpError::Permission => "AMP-Rechte fehlen",

@@ -8,6 +8,7 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::AviationClient;
 use crate::lifecycle::Lifecycle;
+use crate::settings::SettingsHandle;
 use crate::twitch::ChatSender;
 use crate::util::clock::Clock;
 
@@ -20,11 +21,16 @@ use super::{
 
 /// Returns `Err` when a nested flight-poll child fails, which Faults the
 /// runtime.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "tracker loop threads command, reply, persistence, and lifecycle dependencies"
+)]
 pub async fn run_flight_tracker<T, L>(
     mut cmd_rx: mpsc::Receiver<TrackerCommand>,
     sender: Arc<ChatSender<T, L>>,
     channel: String,
     aviation_client: AviationClient,
+    settings: SettingsHandle,
     data_dir: PathBuf,
     clock: Arc<dyn Clock>,
     lifecycle: Lifecycle,
@@ -73,6 +79,7 @@ where
                 cmd,
                 &mut state,
                 &sender,
+                &settings,
                 &aviation_client,
                 &data_dir,
                 &*clock,
@@ -91,6 +98,7 @@ where
                             cmd,
                             &mut state,
                             &sender,
+                            &settings,
                             &aviation_client,
                             &data_dir,
                             &*clock,
@@ -138,6 +146,7 @@ where
                         cmd,
                         &mut state,
                         &sender,
+                        &settings,
                         &aviation_client,
                         &data_dir,
                         &*clock,
@@ -184,6 +193,7 @@ where
                 cmd,
                 &mut state,
                 &sender,
+                &settings,
                 &aviation_client,
                 &data_dir,
                 &*clock,

@@ -416,6 +416,7 @@ pub(crate) fn spawn_handlers<T, L>(
                     sender,
                     services.channel.clone(),
                     aviation,
+                    services.settings.clone(),
                     services.data_dir.clone(),
                     services.clock.clone(),
                     task_lifecycle,

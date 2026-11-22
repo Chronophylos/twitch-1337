@@ -5,8 +5,11 @@ use eyre::Result;
 use tokio::time::Duration;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandCancellation, CommandContext, ExecutionClass};
-use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use super::{
+    Command, CommandCancellation, CommandContext, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+};
+use crate::cooldown::PerUserCooldown;
 use crate::doener::format::{
     api_down_message, format_city, format_did_you_mean, format_global, format_not_found,
 };
@@ -60,14 +63,7 @@ where
         let user = &ctx.privmsg.sender.login;
         if let Err(remaining) = self.cooldown.try_acquire(user).await {
             ctx.cancellation.check()?;
-            send(
-                &ctx,
-                format!(
-                    "Bitte warte noch {} Waiting",
-                    format_cooldown_remaining(remaining)
-                ),
-            )
-            .await?;
+            send(&ctx, cooldown_reply(&ctx.settings, remaining)).await?;
             return Ok(());
         }
 
@@ -75,27 +71,43 @@ where
         let query = query.trim();
 
         ctx.cancellation.check()?;
-        let response = if query.is_empty() {
+        let (response, category) = if query.is_empty() {
             match self.client.stats().await {
-                Ok(s) => format_global(&s),
+                Ok(s) => (format_global(&s), None),
                 Err(e) => {
                     crate::log_handled!(error, e, "doeneratlas stats lookup failed");
-                    api_down_message().to_string()
+                    (
+                        api_down_message().to_string(),
+                        Some(ReplyEmoteCategory::Failure),
+                    )
                 }
             }
         } else {
             match self.client.search_city_hits(query).await {
                 Ok(hits) => {
-                    resolve_city_reply(self.client.as_ref(), query, hits, &ctx.cancellation).await?
+                    let category = (hits.is_empty()
+                        || (hits.len() > 1 && !equal_case_insensitive(&hits[0].city, query)))
+                    .then_some(ReplyEmoteCategory::Invalid);
+                    let response =
+                        resolve_city_reply(self.client.as_ref(), query, hits, &ctx.cancellation)
+                            .await?;
+                    (response, category)
                 }
                 Err(e) => {
                     crate::log_handled!(error, e, query, "doeneratlas city search failed");
-                    api_down_message().to_string()
+                    (
+                        api_down_message().to_string(),
+                        Some(ReplyEmoteCategory::Failure),
+                    )
                 }
             }
         };
 
         ctx.cancellation.check()?;
+        let response = match category {
+            Some(category) => error_reply(&ctx.settings, category, response),
+            None => response,
+        };
         send(&ctx, response).await?;
         Ok(())
     }
@@ -190,7 +202,7 @@ mod tests {
         let out = resolve_city_reply(&client, "xyz", vec![], &CommandCancellation::new())
             .await
             .unwrap();
-        assert_eq!(out, "FeelsDankMan keine Stadt für 'xyz' gefunden.");
+        assert_eq!(out, "keine Stadt für 'xyz' gefunden.");
     }
 
     #[tokio::test]

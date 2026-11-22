@@ -4,7 +4,10 @@ use tokio::sync::mpsc;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::TrackerCommand;
-use crate::commands::{Command, CommandContext, ExecutionClass};
+use crate::commands::{
+    Command, CommandContext, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, error_reply},
+};
 
 pub struct FlightsCommand {
     tracker_tx: mpsc::Sender<TrackerCommand>,
@@ -96,7 +99,14 @@ where
         let input = ctx.args.join(" ");
         if input.trim().is_empty() {
             ctx.sender
-                .reply(&ctx.privmsg, "Benutzung: !flight <callsign/hex> FDM")
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &ctx.settings,
+                        ReplyEmoteCategory::Invalid,
+                        "Benutzung: !flight <callsign/hex>",
+                    ),
+                )
                 .await;
             return Ok(());
         }

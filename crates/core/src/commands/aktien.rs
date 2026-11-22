@@ -13,9 +13,12 @@ use eyre::Result;
 use futures_util::{StreamExt as _, TryStreamExt as _, stream};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, ExecutionClass, aktien_cooldown_duration};
+use super::{
+    Command, CommandContext, ExecutionClass, aktien_cooldown_duration,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+};
 use crate::{
-    cooldown::{PerUserCooldown, format_cooldown_remaining},
+    cooldown::PerUserCooldown,
     finnhub::{FinnhubClient, FinnhubError},
     settings::SettingsHandle,
 };
@@ -105,7 +108,7 @@ pub struct AktienCommand {
     /// Last reply (pick or error line) and when it expires. The lock is held
     /// across the fetch, so viewers arriving mid-fetch wait for that round
     /// instead of starting their own.
-    cache: tokio::sync::Mutex<Option<(Instant, String)>>,
+    cache: tokio::sync::Mutex<Option<(Instant, String, bool)>>,
 }
 
 impl AktienCommand {
@@ -120,22 +123,27 @@ impl AktienCommand {
         }
     }
 
-    async fn reply(&self) -> String {
+    async fn categorized_reply(&self) -> (String, bool) {
         let mut cache = self.cache.lock().await;
-        if let Some((expires, reply)) = cache.as_ref()
+        if let Some((expires, reply, is_error)) = cache.as_ref()
             && Instant::now() < *expires
         {
-            return reply.clone();
+            return (reply.clone(), *is_error);
         }
-        let (reply, ttl) = match self.pick().await {
-            Ok(picks) => (picks_reply(&picks), self.cache_ttl),
+        let (reply, ttl, is_error) = match self.pick().await {
+            Ok(picks) => (picks_reply(&picks), self.cache_ttl, false),
             Err(error) => {
                 tracing::warn!(?error, "aktien pick failed");
-                (error_reply(&error).to_owned(), self.error_ttl)
+                (pick_error_reply(&error).to_owned(), self.error_ttl, true)
             }
         };
-        *cache = Some((Instant::now() + ttl, reply.clone()));
-        reply
+        *cache = Some((Instant::now() + ttl, reply.clone(), is_error));
+        (reply, is_error)
+    }
+
+    #[cfg(test)]
+    async fn reply(&self) -> String {
+        self.categorized_reply().await.0
     }
 
     async fn pick(&self) -> Result<Picks, PickError> {
@@ -191,7 +199,7 @@ fn picks_reply(p: &Picks) -> String {
     )
 }
 
-fn error_reply(e: &PickError) -> &'static str {
+fn pick_error_reply(e: &PickError) -> &'static str {
     match e {
         PickError::Upstream { .. } => UPSTREAM_ERROR_REPLY,
         PickError::TooFewQuotes { .. } => TOO_FEW_QUOTES_REPLY,
@@ -232,18 +240,17 @@ where
         ctx.cancellation.check()?;
         if let Err(remaining) = self.cooldown.try_acquire(&ctx.privmsg.sender.login).await {
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&ctx.settings, remaining))
                 .await;
             return Ok(());
         }
-        let reply = self.reply().await;
+        let (reply, is_error) = self.categorized_reply().await;
         ctx.cancellation.check()?;
+        let reply = if is_error {
+            error_reply(&ctx.settings, ReplyEmoteCategory::Failure, reply)
+        } else {
+            reply
+        };
         ctx.sender.reply(&ctx.privmsg, reply).await;
         Ok(())
     }

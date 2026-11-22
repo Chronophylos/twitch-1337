@@ -9,7 +9,7 @@ use eyre::Result;
 use tracing::warn;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use crate::cooldown::PerUserCooldown;
 use crate::doener::DoeneratlasClient;
 use crate::settings::{Settings, SettingsHandle};
 
@@ -17,7 +17,10 @@ fn doener_cooldown_duration(s: &Settings) -> Duration {
     Duration::from_secs(s.cooldowns.doener)
 }
 
-use super::{Command, CommandContext, ExecutionClass};
+use super::{
+    Command, CommandContext, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+};
 
 fn parse_euro_amount(raw: &str) -> Option<f64> {
     let mut t = raw.trim();
@@ -306,13 +309,7 @@ where
         if let Err(rem) = self.cooldown.try_acquire(user).await {
             ctx.cancellation.check()?;
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(rem)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&ctx.settings, rem))
                 .await;
             return Ok(());
         }
@@ -322,7 +319,11 @@ where
             ctx.sender
                 .reply(
                     &ctx.privmsg,
-                    "Nutze: !döner <Zahl> — Umrechnung nutzt den Döneratlas-Deutschland-Ø. Stadtpreise: !dpi <Suche> FDM",
+                    error_reply(
+                        &ctx.settings,
+                        ReplyEmoteCategory::Invalid,
+                        "Nutze: !döner <Zahl> — Umrechnung nutzt den Döneratlas-Deutschland-Ø. Stadtpreise: !dpi <Suche>",
+                    ),
                 )
                 .await;
             return Ok(());
@@ -331,7 +332,11 @@ where
         let amount_raw = ctx.args.join(" ");
         ctx.cancellation.check()?;
         let response = match parse_euro_amount(&amount_raw) {
-            None => "Das ist keine gültige Zahl FDM".to_string(),
+            None => error_reply(
+                &ctx.settings,
+                ReplyEmoteCategory::Invalid,
+                "Das ist keine gültige Zahl",
+            ),
             Some(amount_eur) => match self.client.national_average_eur().await {
                 Ok(avg) if avg > 0.0 => {
                     let n = calculate_doener_count(amount_eur, avg);
@@ -343,11 +348,19 @@ where
                 }
                 Ok(_) => {
                     warn!("doeneratlas returned non-positive national average");
-                    "Konnte den Deutschland-Ø auf Döneratlas nicht lesen FDM".to_string()
+                    error_reply(
+                        &ctx.settings,
+                        ReplyEmoteCategory::Failure,
+                        "Konnte den Deutschland-Ø auf Döneratlas nicht lesen",
+                    )
                 }
                 Err(e) => {
                     crate::log_handled!(warn, e, "doeneratlas stats fetch failed");
-                    "Döneratlas gerade nicht erreichbar FDM".to_string()
+                    error_reply(
+                        &ctx.settings,
+                        ReplyEmoteCategory::Failure,
+                        "Döneratlas gerade nicht erreichbar",
+                    )
                 }
             },
         };

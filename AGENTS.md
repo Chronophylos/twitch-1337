@@ -369,6 +369,15 @@ and the `/logs` ring stays fixed at `info`. Pipeline code:
 `[suspend]` is removed from config.toml entirely. `default_duration_secs`
 lives in `settings.ron`, managed via `/settings → Suspend`.
 
+Bot-authored chat error replies use the `reply_emotes` section in
+`settings.ron`, managed via `/settings → Chat · Error-Emotes`. The seven
+category pools (`invalid`, `denied`, `cooldown`, `timeout`, `limit`,
+`failure`, `unavailable`) are edited one emote per line and apply live to the
+next reply. An empty pool appends no emote and leaves no trailing space;
+success replies and user-generated output are unchanged. Entries are unique
+single tokens without whitespace or control characters, at most 25 characters
+each and 20 entries per pool.
+
 `[web]` bootstrap fields (`enabled`, `bind_addr`, `public_url`, `session_secret`)
 stay in config.toml; `session_ttl` and `mod_check_refresh` live in `settings.ron`,
 managed via `/settings → Web · Sessions`. Every `mod_check_refresh` a Mod

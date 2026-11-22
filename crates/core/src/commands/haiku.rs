@@ -9,20 +9,23 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 use llm::{ChatCompletionRequest, Message, TraceIds};
 
 use crate::ai::command::ChatContext;
-use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use crate::cooldown::PerUserCooldown;
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::util::observability::{self, metrics};
 
-use super::{Command, CommandContext, ExecutionClass};
+use super::{
+    Command, CommandContext, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+};
 
 const HAIKU_CONTEXT_MESSAGES: usize = 80;
 const HAIKU_LINE_MAX_CHARS: usize = 80;
 const HAIKU_PARTS: usize = 3;
 const HAIKU_SYSTEM_PROMPT: &str = "Du liest einen Twitch-Chat-Auszug und schreibst genau ein Haiku. Wähle intern ein salientes Thema aus dem Verlauf (erkläre die Wahl nicht). Antworte mit genau einer Zeile für Twitch: drei kurze Teile im 5-7-5-Silbenschema, getrennt durch \" / \" (Leerzeichen-Slash-Leerzeichen). Bei Deutsch ist die Silbenzählung näherungsweise. Kein Markdown, keine Anführungszeichen, keine erfundenen Chat-Ereignisse, keine Zusammenfassung oder Prosa.";
-const EMPTY_HISTORY_MESSAGE: &str = "Ich habe noch keinen Chat-Verlauf für ein Haiku FDM";
-const LLM_ERROR_MESSAGE: &str = "Da ist was schiefgelaufen FDM";
-const LLM_TIMEOUT_MESSAGE: &str = "Das hat zu lange gedauert Waiting";
+const EMPTY_HISTORY_MESSAGE: &str = "Ich habe noch keinen Chat-Verlauf für ein Haiku";
+const LLM_ERROR_MESSAGE: &str = "Da ist was schiefgelaufen";
+const LLM_TIMEOUT_MESSAGE: &str = "Das hat zu lange gedauert";
 
 pub struct HaikuCommand {
     registry: Arc<LlmRegistry>,
@@ -147,7 +150,16 @@ where
         let Some(history_lines) = self.relevant_history(user, &ctx.privmsg.message_text).await
         else {
             ctx.cancellation.check()?;
-            ctx.sender.reply(&ctx.privmsg, EMPTY_HISTORY_MESSAGE).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Invalid,
+                        EMPTY_HISTORY_MESSAGE,
+                    ),
+                )
+                .await;
             return Ok(());
         };
 
@@ -155,13 +167,7 @@ where
             ctx.cancellation.check()?;
             debug!(user = %user, remaining_secs = remaining.as_secs(), "Haiku command on cooldown");
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&self.settings, remaining))
                 .await;
             return Ok(());
         }
@@ -172,7 +178,16 @@ where
         else {
             error!("Haiku AI skipped, no usable LLM profile");
             ctx.cancellation.check()?;
-            ctx.sender.reply(&ctx.privmsg, LLM_ERROR_MESSAGE).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Failure,
+                        LLM_ERROR_MESSAGE,
+                    ),
+                )
+                .await;
             return Ok(());
         };
         let model = profile.model.clone();
@@ -217,16 +232,28 @@ where
                 Some(haiku) => haiku,
                 None => {
                     error!("Haiku AI returned invalid format");
-                    LLM_ERROR_MESSAGE.to_string()
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Failure,
+                        LLM_ERROR_MESSAGE,
+                    )
                 }
             },
             Ok(Err(e)) => {
                 crate::log_handled!(error, e, "Haiku AI execution failed");
-                LLM_ERROR_MESSAGE.to_string()
+                error_reply(
+                    &self.settings,
+                    ReplyEmoteCategory::Failure,
+                    LLM_ERROR_MESSAGE,
+                )
             }
             Err(_) => {
                 error!("Haiku AI execution timed out");
-                LLM_TIMEOUT_MESSAGE.to_string()
+                error_reply(
+                    &self.settings,
+                    ReplyEmoteCategory::Timeout,
+                    LLM_TIMEOUT_MESSAGE,
+                )
             }
         };
 

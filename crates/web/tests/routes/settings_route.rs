@@ -748,6 +748,61 @@ async fn emotes_card_pinned_emotes_persists_from_textarea() {
 }
 
 #[tokio::test]
+async fn reply_emotes_card_persists_pools_and_empty_means_disabled() {
+    let (state, _dirs) = owner_state().await;
+    let defaults = state.settings_store.defaults().clone();
+    let res = Owner::login(&state)
+        .save(
+            &state,
+            &defaults,
+            &[
+                ("reply_emotes.invalid", "OnlyThis"),
+                ("reply_emotes.failure", ""),
+            ],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    let current = state.settings.load();
+    assert_eq!(current.reply_emotes.invalid, ["OnlyThis"]);
+    assert!(current.reply_emotes.failure.is_empty());
+}
+
+#[tokio::test]
+async fn reply_emote_pool_validation_returns_400_with_pool_field() {
+    let (state, _dirs) = owner_state().await;
+    let defaults = state.settings_store.defaults().clone();
+    let owner = Owner::login(&state);
+    let too_many = (0..21)
+        .map(|n| format!("Emote{n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let cases = [
+        "two words".to_owned(),
+        "bad\u{1}token".to_owned(),
+        "x".repeat(26),
+        "Same\nSame".to_owned(),
+        too_many,
+    ];
+
+    for value in cases {
+        let res = owner
+            .save(
+                &state,
+                &defaults,
+                &[("reply_emotes.invalid", value.as_str())],
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "value {value:?}");
+        let body = body_string(res).await;
+        assert!(
+            body.contains("reply_emotes.invalid"),
+            "validation error must identify the pool path: {body}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn twitch_channels_save_persists() {
     let (state, _dirs) = owner_state().await;
     let defaults = state.settings_store.defaults().clone();
@@ -941,7 +996,7 @@ async fn seed_decision_profile(state: &WebState, point_spoiler: bool) {
 #[tokio::test]
 async fn spoiler_card_save_persists() {
     let (state, _dirs) = owner_state().await;
-    seed_decision_profile(&state, false).await;
+    Box::pin(seed_decision_profile(&state, false)).await;
     let res = post_settings(
         &state,
         &[
@@ -969,7 +1024,7 @@ async fn spoiler_card_save_persists() {
 #[tokio::test]
 async fn empty_spoiler_profile_persists_as_off() {
     let (state, _dirs) = owner_state().await;
-    seed_decision_profile(&state, true).await;
+    Box::pin(seed_decision_profile(&state, true)).await;
     assert_eq!(state.settings.load().spoiler.profile, "dec");
     let res = post_settings(
         &state,
@@ -989,7 +1044,7 @@ async fn empty_spoiler_profile_persists_as_off() {
 #[tokio::test]
 async fn save_without_spoiler_fields_keeps_persisted_spoiler_settings() {
     let (state, _dirs) = owner_state().await;
-    seed_decision_profile(&state, true).await;
+    Box::pin(seed_decision_profile(&state, true)).await;
     let res = post_settings(&state, &[("cooldowns.ai", "99")]).await;
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
     let s = state.settings.load();
@@ -1002,7 +1057,7 @@ async fn save_without_spoiler_fields_keeps_persisted_spoiler_settings() {
 #[tokio::test]
 async fn posted_spoiler_fields_round_trip_unchanged() {
     let (state, _dirs) = owner_state().await;
-    seed_decision_profile(&state, true).await;
+    Box::pin(seed_decision_profile(&state, true)).await;
     let before = state.settings.load().spoiler.clone();
     let res = post_settings(
         &state,
@@ -1022,7 +1077,7 @@ async fn posted_spoiler_fields_round_trip_unchanged() {
 #[tokio::test]
 async fn profile_pickers_list_only_eligible_profiles() {
     let (state, _dirs) = owner_state().await;
-    seed_decision_profile(&state, false).await;
+    Box::pin(seed_decision_profile(&state, false)).await;
     let res = Owner::login(&state).get(&state, "/settings").await;
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_string(res).await;

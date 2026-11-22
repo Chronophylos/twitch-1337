@@ -82,7 +82,10 @@ async fn help_marks_moderator_commands() {
 
 #[tokio::test]
 async fn hidden_and_unknown_commands_get_the_same_reply() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = TestBotBuilder::new()
+        .with_settings(|o| o.reply_emotes.invalid = Some(Vec::new()))
+        .spawn()
+        .await;
     create_hi_ping(&mut bot).await;
 
     let unknown = ask(&mut bot, "alice", "!help gibtsnicht").await;
@@ -124,7 +127,10 @@ async fn bare_commands_and_hilfe_behave_like_help() {
 
 #[tokio::test]
 async fn commands_and_hilfe_look_up_like_help() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = TestBotBuilder::new()
+        .with_settings(|o| o.reply_emotes.invalid = Some(Vec::new()))
+        .spawn()
+        .await;
 
     let help = ask(&mut bot, "alice", "!help lb").await;
     assert!(help.starts_with("!lb: "), "got: {help}");
@@ -216,6 +222,7 @@ async fn live_commands_page_uses_aurora_registration_catalog_but_help_stays_chat
         .with_ai()
         .with_dhl_base_url("http://127.0.0.1:1")
         .with_web("127.0.0.1:0")
+        .with_settings(|o| o.reply_emotes.invalid = Some(Vec::new()))
         .spawn()
         .await;
 

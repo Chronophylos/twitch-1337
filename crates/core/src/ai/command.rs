@@ -18,8 +18,9 @@ use crate::ai::recap::RecapHandle;
 use crate::ai::turn::{TurnInput, TurnOutcome, TurnReplyParent, TurnRunner, TurnSpeaker};
 use crate::commands::{
     Command, CommandContext, CommandInfo, CommandKind, ExecutionClass, Permission,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
 };
-use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use crate::cooldown::PerUserCooldown;
 use crate::settings::{Settings, SettingsHandle};
 use crate::twitch::mouth::{Agent, SpeakError};
 use crate::twitch::seventv::SevenTvEmoteProvider;
@@ -269,7 +270,12 @@ where
                 "Benutzung: !ai <anweisung>"
             };
             ctx.cancellation.check()?;
-            ctx.sender.reply(&ctx.privmsg, usage).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(&self.settings, ReplyEmoteCategory::Invalid, usage),
+                )
+                .await;
             return Ok(());
         }
 
@@ -279,13 +285,7 @@ where
             ctx.cancellation.check()?;
             debug!(user = %user, remaining_secs = remaining.as_secs(), "AI command on cooldown");
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&self.settings, remaining))
                 .await;
             return Ok(());
         }
@@ -316,9 +316,11 @@ where
         ctx.cancellation.check()?;
         let (line, display_name) = match outcome {
             TurnOutcome::Reply { text, display_name } => (text, display_name),
-            TurnOutcome::Notice(msg) => {
+            TurnOutcome::Notice { text, category } => {
                 ctx.cancellation.check()?;
-                ctx.sender.reply(&ctx.privmsg, msg).await;
+                ctx.sender
+                    .reply(&ctx.privmsg, error_reply(&self.settings, category, text))
+                    .await;
                 return Ok(());
             }
             TurnOutcome::Silent => return Ok(()),
@@ -368,9 +370,11 @@ where
                 // A short notice is not a resend — Err means chat saw nothing — and the
                 // realistic failure (mouth timed out, channel-restricted) is persistent,
                 // so without this the command is a black hole for every user.
-                if let Some(msg) = user_facing_mouth_message(&e) {
+                if let Some((category, msg)) = user_facing_mouth_message(&e) {
                     ctx.cancellation.check()?;
-                    ctx.sender.reply(&ctx.privmsg, msg).await;
+                    ctx.sender
+                        .reply(&ctx.privmsg, error_reply(&self.settings, category, msg))
+                        .await;
                 }
                 return Ok(());
             }
@@ -409,11 +413,17 @@ where
 /// account timed out, or a channel restriction) persist until someone
 /// intervenes. Staying quiet would make `!ai` and `@grok` look broken with no
 /// signal outside the logs.
-fn user_facing_mouth_message(err: &SpeakError) -> Option<&'static str> {
+fn user_facing_mouth_message(err: &SpeakError) -> Option<(ReplyEmoteCategory, &'static str)> {
     match err {
         SpeakError::Empty => None,
-        SpeakError::Dropped { .. } => Some("Twitch hat die Antwort verschluckt Stare"),
-        _ => Some("KI-Account kann gerade nicht reden FeelsBadMan"),
+        SpeakError::Dropped { .. } => Some((
+            ReplyEmoteCategory::Failure,
+            "Twitch hat die Antwort verschluckt",
+        )),
+        _ => Some((
+            ReplyEmoteCategory::Unavailable,
+            "KI-Account kann gerade nicht reden",
+        )),
     }
 }
 

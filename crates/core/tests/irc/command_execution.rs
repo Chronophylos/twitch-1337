@@ -260,7 +260,10 @@ async fn saturated_background_is_rejected_but_remains_in_history_and_transcript(
     );
     let mut bot = TestBotBuilder::new()
         .with_ai()
-        .with_settings(|settings| settings.ai.history.length = Some(20))
+        .with_settings(|settings| {
+            settings.ai.history.length = Some(20);
+            settings.reply_emotes.limit = Some(Vec::new());
+        })
         .with_command_registry(registry([slow]))
         .spawn()
         .await;
@@ -371,6 +374,7 @@ async fn registry_order_aliases_and_enabled_checks_remain_at_ingress() {
 async fn failed_command_gets_one_fallback_reply_and_cancelled_stays_silent() {
     for policy in [ExecutionClass::Inline, ExecutionClass::Background] {
         let mut bot = TestBotBuilder::new()
+            .with_settings(|o| o.reply_emotes.failure = Some(Vec::new()))
             .with_command_registry(registry([
                 FakeCommand::command("random_flight", "!fl", policy, Action::ending(End::Fail)),
                 FakeCommand::command("leaderboard", "!lb", policy, Action::ending(End::Cancel)),

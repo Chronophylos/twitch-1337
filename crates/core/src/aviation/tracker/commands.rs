@@ -11,7 +11,9 @@ use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Tr
 #[cfg(test)]
 use crate::aviation::NearbyAircraft;
 use crate::aviation::{AdsbProvider, AviationClient, AviationstackFlightMetadata};
+use crate::commands::reply_emotes::{ReplyEmoteCategory, error_reply};
 use crate::lifecycle::{Lifecycle, TaskCompletion, TaskGroup};
+use crate::settings::SettingsHandle;
 use crate::twitch::ChatSender;
 use crate::util::clock::Clock;
 
@@ -416,6 +418,7 @@ pub(crate) async fn process_command<T, L>(
     cmd: TrackerCommand,
     state: &mut FlightTrackerState,
     sender: &Arc<ChatSender<T, L>>,
+    settings: &SettingsHandle,
     aviation_client: &AviationClient,
     data_dir: &Path,
     clock: &dyn Clock,
@@ -435,6 +438,7 @@ pub(crate) async fn process_command<T, L>(
                 &reply_to,
                 state,
                 sender,
+                settings,
                 aviation_client,
                 data_dir,
                 clock,
@@ -454,6 +458,7 @@ pub(crate) async fn process_command<T, L>(
                 &reply_to,
                 state,
                 sender,
+                settings,
                 data_dir,
                 clock,
             )
@@ -463,7 +468,15 @@ pub(crate) async fn process_command<T, L>(
             identifier,
             reply_to,
         } => {
-            handle_status(identifier.as_deref(), &reply_to, state, sender, clock).await;
+            handle_status(
+                identifier.as_deref(),
+                &reply_to,
+                state,
+                sender,
+                settings,
+                clock,
+            )
+            .await;
         }
         TrackerCommand::Info {
             identifier,
@@ -474,6 +487,7 @@ pub(crate) async fn process_command<T, L>(
                 &reply_to,
                 state,
                 sender,
+                settings,
                 aviation_client,
                 data_dir,
                 clock,
@@ -496,6 +510,7 @@ async fn handle_track<T, L>(
     reply_to: &PrivmsgMessage,
     state: &mut FlightTrackerState,
     sender: &Arc<ChatSender<T, L>>,
+    settings: &SettingsHandle,
     aviation_client: &AviationClient,
     data_dir: &Path,
     clock: &dyn Clock,
@@ -504,12 +519,12 @@ async fn handle_track<T, L>(
     L: LoginCredentials,
 {
     if state.flights.len() >= MAX_TRACKED_FLIGHTS {
-        sender
-            .reply(
-                reply_to,
-                format!("Maximal {MAX_TRACKED_FLIGHTS} Flüge gleichzeitig FDM"),
-            )
-            .await;
+        let reply = error_reply(
+            settings,
+            ReplyEmoteCategory::Limit,
+            format_args!("Maximal {MAX_TRACKED_FLIGHTS} Flüge gleichzeitig"),
+        );
+        sender.reply(reply_to, reply).await;
         return;
     }
 
@@ -519,19 +534,22 @@ async fn handle_track<T, L>(
         .filter(|f| f.tracked_by == requested_by)
         .count();
     if user_count >= MAX_FLIGHTS_PER_USER {
-        sender
-            .reply(
-                reply_to,
-                format!("Du trackst schon {MAX_FLIGHTS_PER_USER} Flüge FDM"),
-            )
-            .await;
+        let reply = error_reply(
+            settings,
+            ReplyEmoteCategory::Limit,
+            format_args!("Du trackst schon {MAX_FLIGHTS_PER_USER} Flüge"),
+        );
+        sender.reply(reply_to, reply).await;
         return;
     }
 
     if duplicate_tracking_exists(state, &identifier, None, None) {
-        sender
-            .reply(reply_to, format!("{identifier} wird schon getrackt FDM"))
-            .await;
+        let reply = error_reply(
+            settings,
+            ReplyEmoteCategory::Invalid,
+            format_args!("{identifier} wird schon getrackt"),
+        );
+        sender.reply(reply_to, reply).await;
         return;
     }
 
@@ -544,9 +562,12 @@ async fn handle_track<T, L>(
         && !resolved.eq_ignore_ascii_case(identifier.as_str())
         && duplicate_tracking_exists(state, &identifier, Some(resolved), None)
     {
-        sender
-            .reply(reply_to, format!("{identifier} wird schon getrackt FDM"))
-            .await;
+        let reply = error_reply(
+            settings,
+            ReplyEmoteCategory::Invalid,
+            format_args!("{identifier} wird schon getrackt"),
+        );
+        sender.reply(reply_to, reply).await;
         return;
     }
 
@@ -644,9 +665,12 @@ async fn handle_track<T, L>(
         if aviationstack_cache_changed {
             save_tracker_state(data_dir, state).await;
         }
-        sender
-            .reply(reply_to, format!("{identifier} wird schon getrackt FDM"))
-            .await;
+        let reply = error_reply(
+            settings,
+            ReplyEmoteCategory::Invalid,
+            format_args!("{identifier} wird schon getrackt"),
+        );
+        sender.reply(reply_to, reply).await;
         return;
     }
 
@@ -660,11 +684,21 @@ async fn handle_track<T, L>(
             let plan = plan_adsb_lookup(&flight);
             let observation = fetch_observation(plan, aviation_client).await;
             let discard_reply = match &observation.outcome {
-                PollOutcome::Hit(_) | PollOutcome::Miss => {
-                    format!("{identifier} nicht gefunden im ADS-B FDM")
-                }
-                PollOutcome::Error => "ADS-B Anfrage fehlgeschlagen FDM".to_string(),
-                PollOutcome::Timeout => "ADS-B Anfrage Timeout FDM".to_string(),
+                PollOutcome::Hit(_) | PollOutcome::Miss => error_reply(
+                    settings,
+                    ReplyEmoteCategory::Invalid,
+                    format_args!("{identifier} nicht gefunden im ADS-B"),
+                ),
+                PollOutcome::Error => error_reply(
+                    settings,
+                    ReplyEmoteCategory::Failure,
+                    "ADS-B Anfrage fehlgeschlagen",
+                ),
+                PollOutcome::Timeout => error_reply(
+                    settings,
+                    ReplyEmoteCategory::Timeout,
+                    "ADS-B Anfrage Timeout",
+                ),
             };
             match complete_poll_cycle(&mut flight, observation, now, aviation_client).await {
                 Some(update) => {
@@ -721,13 +755,16 @@ async fn handle_track<T, L>(
         flight.callsign.as_deref(),
         flight.hex.as_deref(),
     ) {
-        sender
-            .reply(reply_to, format!("{identifier} wird schon getrackt FDM"))
-            .await;
+        let reply = error_reply(
+            settings,
+            ReplyEmoteCategory::Invalid,
+            format_args!("{identifier} wird schon getrackt"),
+        );
+        sender.reply(reply_to, reply).await;
         return;
     }
 
-    if let Some(rejection) = pending_unknown_rejection(state, &flight) {
+    if let Some(rejection) = pending_unknown_rejection(settings, state, &flight) {
         sender.reply(reply_to, rejection).await;
         return;
     }
@@ -756,7 +793,11 @@ async fn handle_track<T, L>(
 /// A pending-unknown flight (no ADS-B sighting, no Aviationstack schedule)
 /// holds a slot for up to 24 h, so their total and per-user count is capped
 /// below the slot limits: unknown callsigns cannot fill every slot.
-fn pending_unknown_rejection(state: &FlightTrackerState, flight: &TrackedFlight) -> Option<String> {
+fn pending_unknown_rejection(
+    settings: &SettingsHandle,
+    state: &FlightTrackerState,
+    flight: &TrackedFlight,
+) -> Option<String> {
     if !is_pending_unknown(flight) {
         return None;
     }
@@ -769,13 +810,21 @@ fn pending_unknown_rejection(state: &FlightTrackerState, flight: &TrackedFlight)
         }
     }
     if by_user >= MAX_PENDING_UNKNOWN_PER_USER {
-        return Some(format!(
-            "{identifier} nicht gefunden und du wartest schon auf einen unbekannten Flug FDM"
+        return Some(error_reply(
+            settings,
+            ReplyEmoteCategory::Limit,
+            format_args!(
+                "{identifier} nicht gefunden und du wartest schon auf einen unbekannten Flug"
+            ),
         ));
     }
     if total >= MAX_PENDING_UNKNOWN_FLIGHTS {
-        return Some(format!(
-            "{identifier} nicht gefunden und schon {MAX_PENDING_UNKNOWN_FLIGHTS} unbekannte Flüge warten auf ADS-B FDM"
+        return Some(error_reply(
+            settings,
+            ReplyEmoteCategory::Limit,
+            format_args!(
+                "{identifier} nicht gefunden und schon {MAX_PENDING_UNKNOWN_FLIGHTS} unbekannte Flüge warten auf ADS-B"
+            ),
         ));
     }
     None
@@ -792,6 +841,7 @@ async fn handle_untrack<T, L>(
     reply_to: &PrivmsgMessage,
     state: &mut FlightTrackerState,
     sender: &Arc<ChatSender<T, L>>,
+    settings: &SettingsHandle,
     data_dir: &Path,
     clock: &dyn Clock,
 ) where
@@ -799,9 +849,12 @@ async fn handle_untrack<T, L>(
     L: LoginCredentials,
 {
     let Some(idx) = find_flight_index(&state.flights, identifier) else {
-        sender
-            .reply(reply_to, format!("{identifier} nicht gefunden FDM"))
-            .await;
+        let reply = error_reply(
+            settings,
+            ReplyEmoteCategory::Invalid,
+            format_args!("{identifier} nicht gefunden"),
+        );
+        sender.reply(reply_to, reply).await;
         return;
     };
 
@@ -810,7 +863,11 @@ async fn handle_untrack<T, L>(
         sender
             .reply(
                 reply_to,
-                "Nur der Tracker oder Mods können das untracking machen FDM",
+                error_reply(
+                    settings,
+                    ReplyEmoteCategory::Denied,
+                    "Nur der Tracker oder Mods können das untracking machen",
+                ),
             )
             .await;
         return;
@@ -825,11 +882,16 @@ async fn handle_untrack<T, L>(
         .await;
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "command handler threads tracker state, client, and reply context"
+)]
 async fn handle_info<T, L>(
     identifier: FlightIdentifier,
     reply_to: &PrivmsgMessage,
     state: &mut FlightTrackerState,
     sender: &Arc<ChatSender<T, L>>,
+    settings: &SettingsHandle,
     aviation_client: &AviationClient,
     data_dir: &Path,
     clock: &dyn Clock,
@@ -863,11 +925,23 @@ async fn handle_info<T, L>(
     let response = if let Some(metadata) = lookup.metadata {
         msg_aviationstack_info(&metadata, now)
     } else if lookup.failed {
-        "AviationStack Anfrage fehlgeschlagen FDM".to_string()
+        error_reply(
+            settings,
+            ReplyEmoteCategory::Failure,
+            "AviationStack Anfrage fehlgeschlagen",
+        )
     } else if lookup.checked || aviation_client.aviationstack_enabled() {
-        format!("{identifier} nicht bei AviationStack gefunden FDM")
+        error_reply(
+            settings,
+            ReplyEmoteCategory::Invalid,
+            format_args!("{identifier} nicht bei AviationStack gefunden"),
+        )
     } else {
-        "AviationStack nicht konfiguriert FDM".to_string()
+        error_reply(
+            settings,
+            ReplyEmoteCategory::Unavailable,
+            "AviationStack nicht konfiguriert",
+        )
     };
 
     sender.reply(reply_to, response).await;
@@ -878,6 +952,7 @@ async fn handle_status<T, L>(
     reply_to: &PrivmsgMessage,
     state: &FlightTrackerState,
     sender: &Arc<ChatSender<T, L>>,
+    settings: &SettingsHandle,
     clock: &dyn Clock,
 ) where
     T: Transport,
@@ -887,7 +962,11 @@ async fn handle_status<T, L>(
         None => msg_flights_list(&state.flights),
         Some(id) => match find_flight_index(&state.flights, id) {
             Some(idx) => msg_flight_status(&state.flights[idx], clock.now_utc()),
-            None => format!("{id} nicht gefunden FDM"),
+            None => error_reply(
+                settings,
+                ReplyEmoteCategory::Invalid,
+                format_args!("{id} nicht gefunden"),
+            ),
         },
     };
 

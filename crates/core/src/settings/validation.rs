@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use super::knob::Knobs;
 use super::provider::Efforts;
 use super::spoiler::is_valid_game_name;
-use super::{AiProvider, AiSettings, FieldError, ProfileKind, Settings};
+use super::{AiProvider, AiSettings, FieldError, ProfileKind, ReplyEmotesSettings, Settings};
 
 /// Bootstrap-side context required for cross-field validation. `channel`
 /// is the IRC channel from config.toml, used to enforce that
@@ -37,6 +37,7 @@ impl Settings {
     ) -> Result<(), Vec<FieldError>> {
         let mut errs = Vec::new();
         self.check_knob_ranges("", &mut errs);
+        validate_reply_emotes(&self.reply_emotes, &mut errs);
         validate_ai(&self.ai, validate_agent_profile_targets, &mut errs);
         validate_spoiler(self, validate_agent_profile_targets, &mut errs);
         if let Some(v) = self.twitch.admin_channel.as_deref() {
@@ -119,6 +120,60 @@ impl Settings {
         validate_command_execution(&self.commands.execution, &mut errs);
         validate_observability(&self.observability, &mut errs);
         if errs.is_empty() { Ok(()) } else { Err(errs) }
+    }
+}
+
+fn validate_reply_emotes(settings: &ReplyEmotesSettings, errs: &mut Vec<FieldError>) {
+    let pools = [
+        ("reply_emotes.invalid", settings.invalid.as_slice()),
+        ("reply_emotes.denied", settings.denied.as_slice()),
+        ("reply_emotes.cooldown", settings.cooldown.as_slice()),
+        ("reply_emotes.timeout", settings.timeout.as_slice()),
+        ("reply_emotes.limit", settings.limit.as_slice()),
+        ("reply_emotes.failure", settings.failure.as_slice()),
+        ("reply_emotes.unavailable", settings.unavailable.as_slice()),
+    ];
+
+    for (field, pool) in pools {
+        if pool.len() > 20 {
+            errs.push(FieldError {
+                field: field.into(),
+                message: format!("must contain at most 20 entries (got {})", pool.len()),
+            });
+        }
+
+        let mut seen = BTreeSet::new();
+        for emote in pool {
+            if emote.is_empty() {
+                errs.push(FieldError {
+                    field: field.into(),
+                    message: "entries must not be empty".into(),
+                });
+            }
+            if emote
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch.is_control())
+            {
+                errs.push(FieldError {
+                    field: field.into(),
+                    message:
+                        "entries must be single tokens without whitespace or control characters"
+                            .into(),
+                });
+            }
+            if emote.chars().count() > 25 {
+                errs.push(FieldError {
+                    field: field.into(),
+                    message: "entries must contain at most 25 characters".into(),
+                });
+            }
+            if !seen.insert(emote) {
+                errs.push(FieldError {
+                    field: field.into(),
+                    message: format!("duplicate entry {emote:?}"),
+                });
+            }
+        }
     }
 }
 
@@ -1405,5 +1460,36 @@ mod tests {
         e.max_active_per_command = 3;
         e.max_pending = 8;
         assert!(s.validate(&ctx()).is_ok());
+    }
+
+    #[test]
+    fn reply_emote_pools_reject_invalid_entries() {
+        let cases = [
+            vec![String::new()],
+            vec!["two words".into()],
+            vec!["bad\u{1}token".into()],
+            vec!["x".repeat(26)],
+            vec!["Same".into(), "Same".into()],
+            (0..21).map(|n| format!("Emote{n}")).collect(),
+        ];
+
+        for pool in cases {
+            let mut s = Settings::compiled_defaults();
+            s.reply_emotes.invalid = pool;
+            let errs = s.validate(&ctx()).expect_err("invalid pool must fail");
+            assert!(
+                errs.iter().any(|e| e.field == "reply_emotes.invalid"),
+                "{errs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn reply_emote_pools_accept_empty_and_twenty_unicode_entries() {
+        let mut s = Settings::compiled_defaults();
+        s.reply_emotes.invalid.clear();
+        s.reply_emotes.denied = (0..20).map(|n| format!("Emöte{n}")).collect();
+
+        s.validate(&ctx()).expect("valid pools must pass");
     }
 }

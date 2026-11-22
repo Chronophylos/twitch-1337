@@ -7,8 +7,10 @@ use tokio::sync::watch;
 use tracing::debug;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, CommandInfo, CommandKind, ExecutionClass, Permission};
-use crate::cooldown::format_cooldown_remaining;
+use super::{
+    Command, CommandContext, CommandInfo, CommandKind, ExecutionClass, Permission,
+    reply_emotes::cooldown_reply,
+};
 use crate::ping::{PingHandle, TriggerDecision};
 
 pub struct PingTriggerCommand {
@@ -132,13 +134,7 @@ where
             TriggerDecision::OnCooldown(remaining) => {
                 debug!(ping = %ping_name, "Ping on cooldown");
                 ctx.sender
-                    .reply(
-                        &ctx.privmsg,
-                        format!(
-                            "Bitte warte noch {} Waiting",
-                            format_cooldown_remaining(remaining)
-                        ),
-                    )
+                    .reply(&ctx.privmsg, cooldown_reply(&self.settings, remaining))
                     .await;
                 return Ok(());
             }

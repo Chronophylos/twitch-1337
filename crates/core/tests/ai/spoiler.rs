@@ -107,6 +107,12 @@ async fn spawn_with(
                 ..Default::default()
             });
             o.spoiler.profile = Some(profile);
+            // These tests assert exact bot-authored error text.
+            o.reply_emotes.invalid = Some(Vec::new());
+            o.reply_emotes.failure = Some(Vec::new());
+            o.reply_emotes.timeout = Some(Vec::new());
+            o.reply_emotes.unavailable = Some(Vec::new());
+            o.reply_emotes.cooldown = Some(Vec::new());
         })
         .spawn()
         .await;

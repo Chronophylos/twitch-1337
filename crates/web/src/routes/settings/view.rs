@@ -96,6 +96,7 @@ const NAV: &[NavGroup] = &[
         items: &[
             item("cooldowns", "cooldowns", "Cooldowns"),
             item("commands_execution", "commands_execution", "Execution"),
+            item("reply_emotes", "reply_emotes", "Error-Emotes"),
             item("link_correction", "link_correction", "Link corrections"),
             item("bash", "bash", "Bash"),
             item("pings", "pings", "Pings"),

@@ -66,3 +66,25 @@ async fn emote_command_add_shows_actor() {
     assert_eq!(reply, expected);
     bot.shutdown().await;
 }
+
+#[tokio::test]
+async fn emote_command_errors_use_configured_invalid_pool() {
+    let mut bot = TestBotBuilder::new()
+        .with_emote_tracker()
+        .with_settings(|o| o.reply_emotes.invalid = Some(vec!["TestInvalid".into()]))
+        .spawn()
+        .await;
+
+    bot.send("alice", "!e").await;
+    let reply = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(
+        reply,
+        "Benutzung: !e <Name, ID oder https://7tv.app/emotes/…> TestInvalid"
+    );
+
+    bot.send("bob", "!e DoesNotExist").await;
+    let reply = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(reply, "Emote nicht gefunden TestInvalid");
+
+    bot.shutdown().await;
+}

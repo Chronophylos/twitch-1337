@@ -8,10 +8,13 @@ use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, CommandInfo, ExecutionClass, Permission};
+use super::{
+    Command, CommandContext, CommandInfo, ExecutionClass, Permission,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+};
 use crate::{
     ai::commands_tool::CatalogCell,
-    cooldown::{PerUserCooldown, format_cooldown_remaining},
+    cooldown::PerUserCooldown,
     settings::{Settings, SettingsHandle},
     util::truncate_response,
 };
@@ -43,19 +46,28 @@ impl HelpCommand {
         }
     }
 
-    fn reply_for(&self, query: Option<&str>) -> String {
+    fn categorized_reply(&self, query: Option<&str>) -> (String, bool) {
         let Some(query) = query else {
-            return match &self.page_url {
+            let reply = match &self.page_url {
                 Some(url) => format!("Alle Befehle: {url} · Details mit !help <befehl>"),
                 None => USAGE_REPLY.to_owned(),
             };
+            return (reply, false);
         };
         // The cell is set before the dispatcher starts, so `None` is not
         // reachable from chat; answering "unknown" keeps it harmless anyway.
         match self.catalog.get().and_then(|catalog| catalog.lookup(query)) {
-            Some(info) => truncate_response(&entry_line(&info), MAX_REPLY_CHARS),
-            None => UNKNOWN_REPLY.to_owned(),
+            Some(info) => (
+                truncate_response(&entry_line(&info), MAX_REPLY_CHARS),
+                false,
+            ),
+            None => (UNKNOWN_REPLY.to_owned(), true),
         }
+    }
+
+    #[cfg(test)]
+    fn reply_for(&self, query: Option<&str>) -> String {
+        self.categorized_reply(query).0
     }
 }
 
@@ -127,17 +139,16 @@ where
         ctx.cancellation.check()?;
         if let Err(remaining) = self.cooldown.try_acquire(&ctx.privmsg.sender.login).await {
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&ctx.settings, remaining))
                 .await;
             return Ok(());
         }
-        let reply = self.reply_for(visible_query(&ctx.args).as_deref());
+        let (reply, unknown) = self.categorized_reply(visible_query(&ctx.args).as_deref());
+        let reply = if unknown {
+            error_reply(&ctx.settings, ReplyEmoteCategory::Invalid, reply)
+        } else {
+            reply
+        };
         ctx.sender.reply(&ctx.privmsg, reply).await;
         Ok(())
     }

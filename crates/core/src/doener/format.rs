@@ -1,7 +1,7 @@
 use crate::doener::atlas::AtlasPublicStats;
 use crate::doener::types::CityHit;
 
-const API_DOWN_MESSAGE: &str = "FeelsDankMan Döneratlas API down";
+const API_DOWN_MESSAGE: &str = "Döneratlas API down";
 
 pub fn format_global(s: &AtlasPublicStats) -> String {
     let change = s
@@ -49,7 +49,7 @@ pub fn format_did_you_mean(hits: &[CityHit]) -> String {
 }
 
 pub fn format_not_found(query: &str) -> String {
-    format!("FeelsDankMan keine Stadt für '{query}' gefunden.")
+    format!("keine Stadt für '{query}' gefunden.")
 }
 
 pub fn api_down_message() -> &'static str {
