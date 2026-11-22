@@ -248,7 +248,7 @@ jobs:
           fail_on_failure: false
 
   deny:
-    # Advisories (RustSec), bans (aws-lc-sys, ADR-0007) and sources; see deny.toml.
+    # Advisories (RustSec), bans (aws-lc-sys, ADR-0007), licenses and sources; see deny.toml.
     name: cargo deny
     needs: changes
     if: always() && (github.event_name == 'pull_request' || github.event_name == 'schedule' || needs.changes.outputs.code == 'true')
@@ -262,4 +262,4 @@ jobs:
 
       - uses: EmbarkStudios/cargo-deny-action@v2.1.1
         with:
-          command: check advisories bans sources
+          command: check advisories bans licenses sources

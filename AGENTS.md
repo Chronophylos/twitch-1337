@@ -43,7 +43,7 @@ RUST_LOG=trace cargo run   # every ServerMessage
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo nextest run --workspace   # `cargo test --workspace` if nextest is missing
-cargo deny check                # optional locally; run when touching deps, CI fails on advisories/bans/sources
+cargo deny check                # optional locally; run when touching deps, CI fails on advisories/bans/licenses/sources
 
 # Deploy (Justfile, podman local → $DEPLOY_HOST over SSH, set in .deploy.env)
 just build | just push | just restart | just deploy
@@ -112,7 +112,7 @@ Linear history required, force-push + delete blocked, squash-only, conversations
 | `clippy` | ci.yml | cargo clippy --workspace --all-targets -- -D warnings, then `cargo doc` (broken intra-doc links) and `cargo machete` (unused deps) |
 | `test` | ci.yml | cargo llvm-cov nextest --workspace (lcov artifact; no threshold gate) |
 | `e2e` | ci.yml | web crate WebDriver tests (`--features e2e`, setup-chrome) |
-| `cargo deny` | ci.yml | `deny.toml`: RustSec advisories, banned crates (aws-lc-sys), allowed sources; also weekly on schedule |
+| `cargo deny` | ci.yml | `deny.toml`: RustSec advisories, banned crates (aws-lc-sys), license allow list, allowed sources; also weekly on schedule |
 | `hadolint (Dockerfile)` | sast.yml | Dockerfile lint, SARIF → Security tab |
 | `trivy config (IaC)` | sast.yml | IaC misconfig scan, HIGH/CRITICAL only |
 | `actionlint (workflows)` | sast.yml | Workflow YAML + shell lint |
@@ -195,6 +195,7 @@ preserve the `GIT_SHA` / build-number injection (Justfile `build` recipe).
   both must be resolved — usually by bumping the dep pulling in the old major.
 - Last resort: add the id to `[advisories] ignore` in `deny.toml` with a `reason`.
 - New git dependency: add its repo to `[sources] allow-git` in `deny.toml`.
+- License rejected: add the SPDX id to `[licenses] allow` in `deny.toml` only if it is permissive (or MPL-style file-level copyleft); otherwise drop the dependency.
 
 **When Dependabot cargo PRs break `clippy` or `test`:**
 - Breaking-API bump; adapt code on the dependabot branch and force-push
