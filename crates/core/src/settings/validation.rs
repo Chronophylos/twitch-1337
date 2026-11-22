@@ -116,6 +116,7 @@ impl Settings {
             }
         }
         validate_alerts(&self.alerts, &mut errs);
+        validate_command_execution(&self.commands.execution, &mut errs);
         validate_observability(&self.observability, &mut errs);
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
@@ -470,6 +471,50 @@ fn validate_observability(o: &crate::settings::ObservabilitySettings, errs: &mut
                 message: format!(
                     "{error} (got {directives:?}; expected comma-separated \
                      `target=level` directives like `warn,twitch_1337=debug`)"
+                ),
+            });
+        }
+    }
+}
+
+/// A per-user or per-command limit above its global counterpart could never
+/// be reached, so it is rejected instead of silently capped. The error names
+/// the narrower knob, the one the owner most likely just raised.
+fn validate_command_execution(
+    e: &crate::settings::CommandExecutionSettings,
+    errs: &mut Vec<FieldError>,
+) {
+    for (field, value, global_field, global) in [
+        (
+            "max_active_per_user",
+            e.max_active_per_user,
+            "max_active",
+            e.max_active,
+        ),
+        (
+            "max_active_per_command",
+            e.max_active_per_command,
+            "max_active",
+            e.max_active,
+        ),
+        (
+            "max_pending_per_user",
+            e.max_pending_per_user,
+            "max_pending",
+            e.max_pending,
+        ),
+        (
+            "max_pending_per_command",
+            e.max_pending_per_command,
+            "max_pending",
+            e.max_pending,
+        ),
+    ] {
+        if value > global {
+            errs.push(FieldError {
+                field: format!("commands.execution.{field}"),
+                message: format!(
+                    "must be <= commands.execution.{global_field} ({global}) (got {value})"
                 ),
             });
         }
@@ -1241,5 +1286,124 @@ mod tests {
         assert!(fields.contains(&"alerts.quake.min_mag_tenths"));
         assert!(fields.contains(&"alerts.quake.poll_secs"));
         assert!(fields.contains(&"alerts.cme.poll_secs"));
+    }
+
+    #[test]
+    fn command_execution_defaults_validate() {
+        let s = Settings::compiled_defaults();
+        assert!(s.validate(&ctx()).is_ok());
+        let e = &s.commands.execution;
+        assert_eq!(
+            (
+                e.max_active,
+                e.max_pending,
+                e.max_active_per_user,
+                e.max_pending_per_user,
+                e.max_active_per_command,
+                e.max_pending_per_command,
+            ),
+            (32, 128, 3, 8, 8, 8)
+        );
+    }
+
+    type CommandExecutionCase = (
+        &'static str,
+        fn(&mut crate::settings::CommandExecutionSettings),
+    );
+
+    #[test]
+    fn command_execution_ranges_reject_out_of_bound_values() {
+        // Each knob just outside its constant range. The check looks for the
+        // range message (`lo..=hi`) on that knob's dotted path, independent
+        // of any cross-field error the same value also triggers.
+        let cases: [CommandExecutionCase; 9] = [
+            ("max_active", |e| e.max_active = 0),
+            ("max_active", |e| e.max_active = 129),
+            ("max_pending", |e| e.max_pending = 1025),
+            ("max_active_per_user", |e| e.max_active_per_user = 0),
+            ("max_active_per_user", |e| e.max_active_per_user = 33),
+            ("max_pending_per_user", |e| e.max_pending_per_user = 65),
+            ("max_active_per_command", |e| e.max_active_per_command = 0),
+            ("max_active_per_command", |e| {
+                e.max_active = 128;
+                e.max_active_per_command = 65;
+            }),
+            ("max_pending_per_command", |e| {
+                e.max_pending_per_command = 65;
+            }),
+        ];
+        for (knob, mutate) in cases {
+            let mut s = Settings::compiled_defaults();
+            mutate(&mut s.commands.execution);
+            let errs = s.validate(&ctx()).expect_err(knob);
+            let field = format!("commands.execution.{knob}");
+            assert!(
+                errs.iter()
+                    .any(|e| e.field == field && e.message.contains("..=")),
+                "{knob}: {errs:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn command_execution_zero_pending_is_valid() {
+        let mut s = Settings::compiled_defaults();
+        let e = &mut s.commands.execution;
+        e.max_pending = 0;
+        e.max_pending_per_user = 0;
+        e.max_pending_per_command = 0;
+        assert!(s.validate(&ctx()).is_ok());
+    }
+
+    #[test]
+    fn command_execution_scoped_limits_cannot_exceed_global() {
+        let cases: [CommandExecutionCase; 4] = [
+            ("max_active_per_user", |e| {
+                e.max_active = 4;
+                e.max_active_per_user = 5;
+                e.max_active_per_command = 4;
+            }),
+            ("max_active_per_command", |e| {
+                e.max_active = 4;
+                e.max_active_per_user = 4;
+                e.max_active_per_command = 5;
+            }),
+            ("max_pending_per_user", |e| {
+                e.max_pending = 4;
+                e.max_pending_per_user = 5;
+                e.max_pending_per_command = 4;
+            }),
+            ("max_pending_per_command", |e| {
+                e.max_pending = 4;
+                e.max_pending_per_user = 4;
+                e.max_pending_per_command = 5;
+            }),
+        ];
+        for (knob, mutate) in cases {
+            let mut s = Settings::compiled_defaults();
+            mutate(&mut s.commands.execution);
+            let errs = s.validate(&ctx()).expect_err(knob);
+            assert_eq!(
+                errs,
+                [FieldError {
+                    field: format!("commands.execution.{knob}"),
+                    message: errs[0].message.clone(),
+                }],
+                "{knob}: only the scoped knob is flagged"
+            );
+            assert!(
+                errs[0].message.contains("<= commands.execution.max_"),
+                "{knob}: {errs:?}"
+            );
+        }
+
+        // Equal to the global is allowed.
+        let mut s = Settings::compiled_defaults();
+        let e = &mut s.commands.execution;
+        e.max_active = 3;
+        e.max_active_per_user = 3;
+        e.max_active_per_command = 3;
+        e.max_pending = 8;
+        assert!(s.validate(&ctx()).is_ok());
     }
 }

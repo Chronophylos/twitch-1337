@@ -91,7 +91,7 @@ async fn seed_profiles(state: &twitch_1337_web::WebState, rows: Vec<AiProfile>, 
 async fn delete_refuses_to_remove_the_last_profile() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("only")], "only").await;
+    Box::pin(seed_profiles(&state, vec![profile("only")], "only")).await;
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
@@ -162,7 +162,7 @@ async fn the_page_is_owner_gated() {
 async fn mod_cannot_delete_a_profile() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a"), profile("b")], "a")).await;
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "mod", twitch_1337_web::auth::Role::Mod);
     let app = build_router(state.clone());
@@ -188,7 +188,7 @@ async fn mod_cannot_delete_a_profile() {
 async fn add_rejects_an_effort_the_provider_does_not_support() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
@@ -213,7 +213,7 @@ async fn add_rejects_an_effort_the_provider_does_not_support() {
 async fn add_profile_persists_and_renders() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
@@ -251,7 +251,7 @@ async fn add_profile_persists_and_renders() {
 async fn add_rejects_openai_profile_without_key() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
@@ -290,7 +290,7 @@ async fn add_rejects_openai_profile_without_key() {
 async fn edit_renaming_profile_rewrites_all_five_agent_pointers() {
     install_crypto();
     let (state, _td_p, _td_m, td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("old")], "old").await;
+    Box::pin(seed_profiles(&state, vec![profile("old")], "old")).await;
     state
         .settings_store
         .apply(
@@ -354,7 +354,7 @@ async fn delete_refuses_every_referenced_agent_pointer() {
     for pointer in ["aurora", "grok", "dreamer", "media", "recap"] {
         install_crypto();
         let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-        seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
+        Box::pin(seed_profiles(&state, vec![profile("a"), profile("b")], "a")).await;
         let mut ai = twitch_1337_core::settings::AiOverrides::default();
         match pointer {
             "aurora" => ai.aurora.profile = Some(Some("b".into())),
@@ -408,7 +408,7 @@ async fn delete_refuses_every_referenced_agent_pointer() {
 async fn delete_allows_unreferenced_profile_when_recap_is_off() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a"), profile("b")], "a")).await;
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
@@ -439,7 +439,7 @@ async fn delete_allows_unreferenced_profile_when_recap_is_off() {
 async fn edit_rename_with_rejected_field_reopens_under_the_original_name_then_succeeds() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("old")], "old").await;
+    Box::pin(seed_profiles(&state, vec![profile("old")], "old")).await;
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
@@ -511,7 +511,12 @@ async fn edit_form_action_round_trips_names_with_reserved_chars() {
     install_crypto();
     let name = "a/b 50%#x";
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile(name), profile("a")], "a").await;
+    Box::pin(seed_profiles(
+        &state,
+        vec![profile(name), profile("a")],
+        "a",
+    ))
+    .await;
     let (sid, csrf_cookie, bare_csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let app = build_router(state.clone());
@@ -595,7 +600,7 @@ async fn point_spoiler_at(state: &twitch_1337_web::WebState, name: &str) {
 async fn add_decision_profile_on_open_router_persists_kind() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -620,7 +625,7 @@ async fn add_decision_profile_on_open_router_persists_kind() {
 async fn add_decision_profile_on_other_provider_is_rejected() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -650,7 +655,12 @@ async fn add_decision_profile_on_other_provider_is_rejected() {
 async fn editing_a_decision_profile_keeps_its_kind() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a"), decision("dec")], "a").await;
+    Box::pin(seed_profiles(
+        &state,
+        vec![profile("a"), decision("dec")],
+        "a",
+    ))
+    .await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -676,7 +686,12 @@ async fn editing_a_decision_profile_keeps_its_kind() {
 async fn edit_form_preselects_the_profile_kind() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a"), decision("dec")], "a").await;
+    Box::pin(seed_profiles(
+        &state,
+        vec![profile("a"), decision("dec")],
+        "a",
+    ))
+    .await;
     let (sid, cc, _) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let req = Request::builder()
@@ -697,7 +712,12 @@ async fn edit_form_preselects_the_profile_kind() {
 async fn renaming_the_spoiler_profile_rewrites_spoiler_pointer() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a"), decision("dec")], "a").await;
+    Box::pin(seed_profiles(
+        &state,
+        vec![profile("a"), decision("dec")],
+        "a",
+    ))
+    .await;
     point_spoiler_at(&state, "dec").await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
@@ -722,7 +742,12 @@ async fn renaming_the_spoiler_profile_rewrites_spoiler_pointer() {
 async fn delete_refuses_the_spoiler_profile() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a"), decision("dec")], "a").await;
+    Box::pin(seed_profiles(
+        &state,
+        vec![profile("a"), decision("dec")],
+        "a",
+    ))
+    .await;
     point_spoiler_at(&state, "dec").await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
@@ -753,7 +778,7 @@ async fn test_connection_uses_unsaved_values_without_persisting_the_profile() {
         .await;
 
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -804,7 +829,7 @@ async fn test_connection_sends_openrouter_credentials_and_advanced_options() {
             HashMap::from([("k".to_owned(), SecretString::from("test-secret"))]),
         ),
     );
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -835,11 +860,11 @@ async fn test_connection_sends_openrouter_credentials_and_advanced_options() {
 async fn cards_show_assignment_links_and_name_delete_blockers() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(
+    Box::pin(seed_profiles(
         &state,
         vec![profile("active"), profile("unused"), decision("classifier")],
         "active",
-    )
+    ))
     .await;
     state
         .settings_store
@@ -966,7 +991,7 @@ fn assert_summary_has_no_storage_paths(summary: &str) {
 async fn add_duplicate_name_is_flagged_beside_the_name_input() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -1009,7 +1034,12 @@ async fn add_duplicate_name_is_flagged_beside_the_name_input() {
 async fn edit_invalid_service_tier_is_flagged_beside_the_tier_select() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("other"), profile("a")], "other").await;
+    Box::pin(seed_profiles(
+        &state,
+        vec![profile("other"), profile("a")],
+        "other",
+    ))
+    .await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -1052,7 +1082,7 @@ async fn edit_invalid_service_tier_is_flagged_beside_the_tier_select() {
 async fn edit_rename_onto_an_existing_name_is_flagged_beside_the_name_input() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a"), profile("b")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -1083,7 +1113,7 @@ async fn edit_rename_onto_an_existing_name_is_flagged_beside_the_name_input() {
 async fn add_non_numeric_timeout_is_flagged_beside_the_timeout_input() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -1119,7 +1149,7 @@ async fn add_non_numeric_timeout_is_flagged_beside_the_timeout_input() {
 async fn test_connection_form_error_is_flagged_inline() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -1148,11 +1178,11 @@ async fn test_connection_form_error_is_flagged_inline() {
 async fn delete_in_use_profile_names_it_in_the_summary() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(
+    Box::pin(seed_profiles(
         &state,
         vec![profile("spare"), profile("busy-profile")],
         "busy-profile",
-    )
+    ))
     .await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
@@ -1183,7 +1213,7 @@ async fn delete_in_use_profile_names_it_in_the_summary() {
 async fn error_for_a_hidden_control_falls_back_to_the_summary() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(

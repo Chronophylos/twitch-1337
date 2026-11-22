@@ -793,7 +793,12 @@ mod trace_tests {
         let cancellation = CommandCancellation::new();
         let (admission, receiver) = command_admission_channel();
         let manager = tokio::spawn(
-            CommandExecutionManager::new(receiver, registry.clone()).run(cancellation.clone()),
+            CommandExecutionManager::new(
+                receiver,
+                registry.clone(),
+                crate::settings::test_handle(),
+            )
+            .run(cancellation.clone()),
         );
         let (tx, rx) = broadcast::channel(4);
         let dispatcher = tokio::spawn(dispatch(rx, registry, admission, cancellation.clone()));

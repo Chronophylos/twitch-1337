@@ -688,8 +688,11 @@ pub(crate) fn spawn_handlers<T, L>(
     let command_cancellation =
         commands::CommandCancellation::from_token(lifecycle.cancellation_token());
     let (command_admission, command_receiver) = commands::command_admission_channel();
-    let command_manager =
-        commands::CommandExecutionManager::new(command_receiver, Arc::clone(&command_registry));
+    let command_manager = commands::CommandExecutionManager::new(
+        command_receiver,
+        Arc::clone(&command_registry),
+        services.settings.clone(),
+    );
     let command_task_group = command_manager.task_group();
     supervisor.register_finalizer("command task group", async move {
         command_task_group

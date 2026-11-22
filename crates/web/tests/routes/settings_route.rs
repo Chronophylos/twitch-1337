@@ -364,7 +364,7 @@ async fn validation_error_renders_form_with_errors() {
 #[tokio::test]
 async fn a_required_dreamer_profile_round_trips_through_the_settings_post() {
     let (state, _dirs) = owner_state().await;
-    seed_chat_profiles(&state, &["default", "a", "b"], "a").await;
+    Box::pin(seed_chat_profiles(&state, &["default", "a", "b"], "a")).await;
 
     let owner = Owner::login(&state);
     let current = state.settings.load();
@@ -404,7 +404,7 @@ async fn a_required_dreamer_profile_round_trips_through_the_settings_post() {
 #[tokio::test]
 async fn a_recap_profile_round_trips_through_the_settings_post() {
     let (state, _dirs) = owner_state().await;
-    seed_chat_profiles(&state, &["a", "b"], "a").await;
+    Box::pin(seed_chat_profiles(&state, &["a", "b"], "a")).await;
 
     let owner = Owner::login(&state);
     let current = state.settings.load();
@@ -874,7 +874,7 @@ async fn web_runtime_save_persists() {
 #[tokio::test]
 async fn validation_error_preserves_stored_ai_settings() {
     let (state, _dirs) = owner_state().await;
-    seed_chat_profiles(&state, &["a", "b"], "b").await;
+    Box::pin(seed_chat_profiles(&state, &["a", "b"], "b")).await;
 
     let current = state.settings.load();
     // Fail validation on a different card: the inject budget must cover
@@ -1346,6 +1346,124 @@ async fn bash_max_concurrent_flashes_restart() {
         flash.contains("Restart bot to apply: bash.max_concurrent"),
         "restart flash must list bash.max_concurrent; got {flash:?}",
     );
+}
+
+/// The six Commands · Execution rows save, read back, and apply live: no
+/// restart flash, the handle carries the new limits right after the save.
+#[tokio::test]
+async fn commands_execution_card_save_persists_without_restart() {
+    let (state, _dirs) = owner_state().await;
+    let res = post_settings(
+        &state,
+        &[
+            ("commands.execution.max_active", "16"),
+            ("commands.execution.max_pending", "0"),
+            ("commands.execution.max_active_per_user", "2"),
+            ("commands.execution.max_pending_per_user", "0"),
+            ("commands.execution.max_active_per_command", "4"),
+            ("commands.execution.max_pending_per_command", "0"),
+        ],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let flash = read_flash(&res);
+    assert!(
+        flash.as_deref().is_none_or(|f| !f.contains("Restart")),
+        "execution limits apply live; got {flash:?}",
+    );
+    let snapshot = state.settings.load();
+    let saved = &snapshot.commands.execution;
+    assert_eq!(saved.max_active, 16);
+    assert_eq!(saved.max_pending, 0);
+    assert_eq!(saved.max_active_per_user, 2);
+    assert_eq!(saved.max_pending_per_user, 0);
+    assert_eq!(saved.max_active_per_command, 4);
+    assert_eq!(saved.max_pending_per_command, 0);
+}
+
+/// Every execution knob outside its constant range is a 400 naming that
+/// knob's dotted path, and nothing is saved.
+#[tokio::test]
+async fn commands_execution_out_of_range_returns_400_on_knob_path() {
+    let (state, _dirs) = owner_state().await;
+    let before = state.settings.load().commands.execution.clone();
+    for (knob, bad) in [
+        ("max_active", "0"),
+        ("max_active", "129"),
+        ("max_pending", "1025"),
+        ("max_pending", "-1"),
+        ("max_active_per_user", "0"),
+        ("max_active_per_user", "33"),
+        ("max_pending_per_user", "65"),
+        ("max_active_per_command", "0"),
+        ("max_active_per_command", "65"),
+        ("max_pending_per_command", "65"),
+    ] {
+        let field = format!("commands.execution.{knob}");
+        let res = post_raw(&state, &[(field.as_str(), bad)]).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{field}={bad}");
+        let html = body_string(res).await;
+        assert!(
+            html.contains(&format!("<code>{field}</code>")),
+            "{field}={bad}: error must name the field; got: {html}",
+        );
+        assert_eq!(
+            state.settings.load().commands.execution,
+            before,
+            "{field}={bad}"
+        );
+    }
+}
+
+/// A per-user or per-command limit above its global counterpart is a 400 on
+/// the scoped knob's dotted path, and nothing is saved.
+#[tokio::test]
+async fn commands_execution_cross_field_violation_returns_400_on_scoped_knob() {
+    let (state, _dirs) = owner_state().await;
+    let before = state.settings.load().commands.execution.clone();
+    let cases: [(&str, &[(&str, &str)]); 4] = [
+        (
+            "max_active_per_user",
+            &[
+                ("commands.execution.max_active", "4"),
+                ("commands.execution.max_active_per_command", "4"),
+                ("commands.execution.max_active_per_user", "5"),
+            ],
+        ),
+        (
+            "max_active_per_command",
+            &[
+                ("commands.execution.max_active", "4"),
+                ("commands.execution.max_active_per_command", "5"),
+            ],
+        ),
+        (
+            "max_pending_per_user",
+            &[
+                ("commands.execution.max_pending", "4"),
+                ("commands.execution.max_pending_per_command", "4"),
+                ("commands.execution.max_pending_per_user", "5"),
+            ],
+        ),
+        (
+            "max_pending_per_command",
+            &[
+                ("commands.execution.max_pending", "4"),
+                ("commands.execution.max_pending_per_user", "4"),
+                ("commands.execution.max_pending_per_command", "5"),
+            ],
+        ),
+    ];
+    for (knob, fields) in cases {
+        let res = post_raw(&state, fields).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{knob}");
+        let html = body_string(res).await;
+        assert!(
+            html.contains(&format!("<code>commands.execution.{knob}</code>")),
+            "{knob}: error must name the scoped knob; got: {html}",
+        );
+        assert_eq!(state.settings.load().commands.execution, before, "{knob}");
+    }
 }
 
 #[tokio::test]

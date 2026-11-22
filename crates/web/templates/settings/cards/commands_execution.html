@@ -1,0 +1,41 @@
+{# crates/web/templates/settings/cards/commands_execution.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-commands_execution" class="settings-card" data-section="commands_execution">
+  <header class="settings-card-head">
+    <div>
+      <h2>Commands · Execution</h2>
+      <p>Capacity for commands that run in the background, such as
+        <code>!news</code> or <code>!aktien</code>. An
+        invocation runs when an <em>active</em> slot is free at every level;
+        otherwise it waits in a first-in, first-out <em>pending</em> queue, and
+        when the queue is full chat gets "zu viel zu tun". Changes apply
+        immediately: raising a limit starts queued work right away, lowering
+        one never stops a running command or drops a queued one.
+        <code>!bash</code> also keeps its own concurrency limit.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% call m::num_row("commands_execution", self.knob("commands.execution.max_active"),
+       "Background commands running at once, across all users and commands. Per-user and per-command active limits cannot exceed it.",
+       current.commands.execution.max_active, defaults.commands.execution.max_active, "") %}{% endcall %}
+    {% call m::num_row("commands_execution", self.knob("commands.execution.max_pending"),
+       "Accepted commands waiting for a free slot, across all users and commands. 0 = no queue: a command that cannot start is rejected at once.",
+       current.commands.execution.max_pending, defaults.commands.execution.max_pending, "") %}{% endcall %}
+    {% call m::num_row("commands_execution", self.knob("commands.execution.max_active_per_user"),
+       "Commands one user may have running at once. At most the global active limit.",
+       current.commands.execution.max_active_per_user, defaults.commands.execution.max_active_per_user, "") %}{% endcall %}
+    {% call m::num_row("commands_execution", self.knob("commands.execution.max_pending_per_user"),
+       "Commands one user may have waiting at once. 0 = that user's commands never queue. At most the global pending limit.",
+       current.commands.execution.max_pending_per_user, defaults.commands.execution.max_pending_per_user, "") %}{% endcall %}
+    {% call m::num_row("commands_execution", self.knob("commands.execution.max_active_per_command"),
+       "Invocations of one command running at once. At most the global active limit.",
+       current.commands.execution.max_active_per_command, defaults.commands.execution.max_active_per_command, "") %}{% endcall %}
+    {% call m::num_row("commands_execution", self.knob("commands.execution.max_pending_per_command"),
+       "Invocations of one command waiting at once. 0 = that command never queues. At most the global pending limit.",
+       current.commands.execution.max_pending_per_command, defaults.commands.execution.max_pending_per_command, "") %}{% endcall %}
+  </div>
+</section>
