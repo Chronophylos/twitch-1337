@@ -95,11 +95,22 @@
   </div>
 
   <div class="row">
-    <label>Model
-      <input type="text" name="model" value="{{ form.model }}" placeholder="provider/model-id" required
+    <label for="{{ form_id }}-model">Model</label>
+    <div class="model-control">
+      <input id="{{ form_id }}-model" type="text" name="model" value="{{ form.model }}" placeholder="provider/model-id" required
+        list="{{ form_id }}-model-options"
         {%- if form_errors.model.is_some() %} aria-invalid="true" aria-describedby="{{ form_id }}-model-error"{% endif %}>
-      <small class="muted">Use the exact upstream model ID.</small>
-    </label>
+      {% for p in providers %}
+        {% if p.model_listing %}
+          <button type="button" class="btn ghost" data-load-models-provider="{{ p.value }}"
+            hx-post="/ai-profiles/models" hx-include="closest form"
+            hx-target="#{{ form_id }}-model-options" hx-swap="outerHTML"
+            {% if form.provider != p.value %}hidden{% endif %}>Load models</button>
+        {% endif %}
+      {% endfor %}
+    </div>
+    <small class="muted">Use the exact upstream model ID, or load suggestions from the provider.</small>
+    <datalist id="{{ form_id }}-model-options"></datalist>
     {% if let Some(msg) = form_errors.model %}<p class="field-error" id="{{ form_id }}-model-error">{{ msg }}</p>{% endif %}
   </div>
 
