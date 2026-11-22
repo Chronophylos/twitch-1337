@@ -324,7 +324,7 @@ const unsavedGuards = [];
   }
 
   function commitBytes(b, bytes) {
-    const clamped = Math.max(0, Math.round(bytes));
+    const clamped = Math.max(1, Math.round(bytes));
     if (Number(b.hidden.value) === clamped) return;
     b.hidden.value = String(clamped);
     b.hidden.dispatchEvent(new Event('input', { bubbles: true }));
@@ -332,8 +332,13 @@ const unsavedGuards = [];
 
   for (const b of bytesRows) {
     b.display.addEventListener('input', () => {
-      const v = Number(b.display.value);
-      if (!Number.isFinite(v) || v < 0) return;
+      // Empty, non-numeric or non-positive input never commits: every
+      // byte-size knob needs at least 1 byte, and blur restores the last
+      // committed value via syncBytesRow.
+      const raw = b.display.value.trim();
+      if (raw === '') return;
+      const v = Number(raw);
+      if (!Number.isFinite(v) || v <= 0) return;
       commitBytes(b, v * BYTES_UNIT_FACTOR[activeUnit(b)]);
     });
     b.display.addEventListener('keydown', (e) => {

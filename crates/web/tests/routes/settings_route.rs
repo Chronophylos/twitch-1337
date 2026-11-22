@@ -1229,6 +1229,82 @@ async fn malformed_media_size_returns_400_and_keeps_saved_value() {
     }
 }
 
+const BYTE_SIZE_PATHS: [&str; 10] = [
+    "ai.media.max_image_size",
+    "ai.media.max_pdf_size",
+    "ai.media.max_audio_size",
+    "ai.media.max_video_size",
+    "ai.media.max_text_size",
+    "ai.memory.soul_bytes",
+    "ai.memory.lore_bytes",
+    "ai.memory.user_bytes",
+    "ai.memory.scratch_bytes",
+    "ai.memory.inject_byte_budget",
+];
+
+/// #640: a 0 byte-size limit rejects every fetch or memory write, so each of
+/// the ten byte-size knobs must refuse 0 with a field error and keep the
+/// stored settings untouched.
+#[tokio::test]
+async fn zero_byte_size_returns_400_with_field_error() {
+    let (state, (_p, _m, settings_dir)) = owner_state().await;
+    let settings_ron = settings_dir.path().join("settings.ron");
+    let res = post_settings(&state, &[]).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    let saved = std::fs::read(&settings_ron).expect("settings.ron persisted");
+    let before = state.settings.load().ai.clone();
+
+    for path in BYTE_SIZE_PATHS {
+        let res = post_settings(&state, &[(path, "0")]).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{path}");
+        let html = body_string(res).await;
+        assert!(
+            html.contains(&format!("<code>{path}</code>: must be")),
+            "{path}: response must surface the min-bound field error; got: {html}",
+        );
+        assert_eq!(state.settings.load().ai, before, "{path}");
+        assert_eq!(std::fs::read(&settings_ron).unwrap(), saved, "{path}");
+    }
+}
+
+/// #640: 1 byte is the smallest accepted value for every byte-size knob. The
+/// inject budget must still cover SOUL + LORE, so it is posted as 2.
+#[tokio::test]
+async fn one_byte_size_is_accepted() {
+    let (state, _dirs) = owner_state().await;
+    let fields: Vec<(&str, &str)> = BYTE_SIZE_PATHS
+        .iter()
+        .map(|&p| {
+            (
+                p,
+                if p == "ai.memory.inject_byte_budget" {
+                    "2"
+                } else {
+                    "1"
+                },
+            )
+        })
+        .collect();
+    let res = post_settings(&state, &fields).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+    let ai = state.settings.load().ai.clone();
+    for size in [
+        ai.media.max_image_size,
+        ai.media.max_pdf_size,
+        ai.media.max_audio_size,
+        ai.media.max_video_size,
+        ai.media.max_text_size,
+    ] {
+        assert_eq!(size.as_u64(), 1);
+    }
+    assert_eq!(ai.memory.soul_bytes, 1);
+    assert_eq!(ai.memory.lore_bytes, 1);
+    assert_eq!(ai.memory.user_bytes, 1);
+    assert_eq!(ai.memory.scratch_bytes, 1);
+    assert_eq!(ai.memory.inject_byte_budget, 2);
+}
+
 /// The four Bash rows and the `!bash` cooldown save and read back, proving the
 /// card is wired to the same knob table the derive generates.
 #[tokio::test]
