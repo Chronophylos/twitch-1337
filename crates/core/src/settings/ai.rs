@@ -198,14 +198,19 @@ pub struct AiRecap {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiMemory {
+    #[knob(min = 1)]
     pub soul_bytes: usize,
+    #[knob(min = 1)]
     pub lore_bytes: usize,
+    #[knob(min = 1)]
     pub user_bytes: usize,
     /// ADR-0003 renamed `state` to `scratch`. The alias reads settings.ron
     /// files written before the rename; the next dashboard save rewrites them
     /// under the new key, so no migration pass is needed.
     #[serde(alias = "state_bytes")]
+    #[knob(min = 1)]
     pub scratch_bytes: usize,
+    #[knob(min = 1)]
     pub inject_byte_budget: usize,
     #[serde(alias = "max_state_files")]
     pub max_scratch_files: usize,
@@ -319,10 +324,15 @@ pub struct AiMedia {
     #[knob(required_profile)]
     pub profile: String,
     pub timeout: u64,
+    #[knob(min = bytesize::ByteSize::b(1))]
     pub max_image_size: bytesize::ByteSize,
+    #[knob(min = bytesize::ByteSize::b(1))]
     pub max_pdf_size: bytesize::ByteSize,
+    #[knob(min = bytesize::ByteSize::b(1))]
     pub max_audio_size: bytesize::ByteSize,
+    #[knob(min = bytesize::ByteSize::b(1))]
     pub max_video_size: bytesize::ByteSize,
+    #[knob(min = bytesize::ByteSize::b(1))]
     pub max_text_size: bytesize::ByteSize,
 }
 

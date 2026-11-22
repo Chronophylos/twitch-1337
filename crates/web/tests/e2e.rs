@@ -166,6 +166,83 @@ async fn settings_save_cooldown() {
     s.close().await;
 }
 
+/// #640: clearing a byte-size display input must not commit 0 to the hidden
+/// canonical input; blur restores the display and a save keeps the value.
+#[tokio::test]
+async fn settings_cleared_byte_size_keeps_value() {
+    let s = E2eSession::start_as_owner().await;
+    s.goto("/settings").await;
+
+    let hidden = "input[name=\"ai.media.max_image_size\"]";
+    let display = "#ai\\.media\\.max_image_size_display";
+    const DISPLAY_VALUE_JS: &str =
+        "return document.getElementById('ai.media.max_image_size_display').value;";
+    let hidden_value = || async {
+        s.find(hidden)
+            .await
+            .prop("value")
+            .await
+            .unwrap_or_default()
+            .unwrap_or_default()
+    };
+    s.wait_for(hidden).await;
+    let original = hidden_value().await;
+    assert!(
+        original.parse::<u64>().is_ok_and(|n| n > 0),
+        "fixture must start with a positive image cap, got {original:?}"
+    );
+
+    // Select all and delete like a user would, so real input events fire.
+    let el = s.wait_for(display).await;
+    el.click().await.expect("focus display");
+    el.send_keys("\u{E009}a\u{E000}\u{E003}")
+        .await
+        .expect("clear display");
+    assert_eq!(
+        s.eval(DISPLAY_VALUE_JS).await,
+        serde_json::Value::String(String::new()),
+        "display input must be empty after clearing"
+    );
+    assert_eq!(
+        hidden_value().await,
+        original,
+        "empty display must not commit"
+    );
+
+    s.exec("document.getElementById('ai.media.max_image_size_display').blur();")
+        .await;
+    assert_eq!(hidden_value().await, original, "blur must not commit");
+    let restored = s.eval(DISPLAY_VALUE_JS).await;
+    assert_ne!(
+        restored,
+        serde_json::Value::String(String::new()),
+        "blur must restore the display value"
+    );
+
+    // Nothing is dirty, so the save bar stays hidden; submit the form
+    // directly and wait for the post-save page to replace this one.
+    s.exec(
+        "window.__e2eBeforeSave = true; \
+         document.getElementById('settings-form').requestSubmit();",
+    )
+    .await;
+    s.wait_js(
+        "return window.__e2eBeforeSave === undefined \
+         && document.getElementById('settings-form') !== null;",
+    )
+    .await;
+    assert!(
+        s.find_all(".flash.error").await.is_empty(),
+        "save must not hit a validation error"
+    );
+
+    s.goto("/settings").await;
+    s.wait_for(hidden).await;
+    assert_eq!(hidden_value().await, original, "saved image cap changed");
+
+    s.close().await;
+}
+
 /// Discard restores the load-time value in place. A reload would let
 /// Firefox's form restoration put the edit straight back, so the page must
 /// survive the click (the marker set before it is still there).
