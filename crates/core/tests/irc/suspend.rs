@@ -15,6 +15,16 @@ use twitch_1337::PersonalBest;
 /// for the earlier sends to age out of the rate window.
 const RATE_LIMIT_DRAIN_DELAY: Duration = Duration::from_millis(800);
 
+const INVALID_EMOTE: &str = "TestInvalid";
+const DENIED_EMOTE: &str = "TestDenied";
+
+fn builder() -> TestBotBuilder {
+    TestBotBuilder::new().with_settings(|o| {
+        o.reply_emotes.invalid = Some(vec![INVALID_EMOTE.into()]);
+        o.reply_emotes.denied = Some(vec![DENIED_EMOTE.into()]);
+    })
+}
+
 /// Insert a single seeded PB so that `!lb` produces a deterministic reply
 /// (instead of the empty-state message).
 fn seeded_lb_with_alice() -> HashMap<String, PersonalBest> {
@@ -31,7 +41,7 @@ async fn assert_lb_works(bot: &mut TestBot) {
 
 #[tokio::test]
 async fn broadcaster_can_suspend_lb_then_unsuspend() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_seeded_leaderboard(seeded_lb_with_alice())
         .spawn()
         .await;
@@ -70,7 +80,7 @@ async fn broadcaster_can_suspend_lb_then_unsuspend() {
 
 #[tokio::test]
 async fn mod_can_suspend_lb() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_seeded_leaderboard(seeded_lb_with_alice())
         .spawn()
         .await;
@@ -91,7 +101,7 @@ async fn mod_can_suspend_lb() {
 #[tokio::test]
 async fn hidden_admin_can_suspend_lb() {
     // irc_line::privmsg sets user-id=67890; add it as a hidden admin.
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_seeded_leaderboard(seeded_lb_with_alice())
         .with_settings(|o| {
             o.twitch.hidden_admins = Some(vec!["67890".into()]);
@@ -115,17 +125,14 @@ async fn hidden_admin_can_suspend_lb() {
 
 #[tokio::test]
 async fn non_admin_cannot_suspend() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_seeded_leaderboard(seeded_lb_with_alice())
         .spawn()
         .await;
 
     bot.send("random_user", "!suspend lb").await;
-    let rejection = bot.expect_say(Duration::from_secs(2)).await;
-    assert!(
-        rejection.contains("darfst du nicht") || rejection.contains("FDM"),
-        "expected rejection, got: {rejection}"
-    );
+    let rejection = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(rejection, format!("Das darfst du nicht {DENIED_EMOTE}"));
 
     // !lb must still work since the suspend never took effect.
     assert_lb_works(&mut bot).await;
@@ -135,15 +142,16 @@ async fn non_admin_cannot_suspend() {
 
 #[tokio::test]
 async fn exempt_commands_rejected() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     for exempt in ["suspend", "unsuspend", "p"] {
         bot.send_as_broadcaster("broadcaster", &format!("!suspend {exempt}"))
             .await;
-        let reply = bot.expect_say(Duration::from_secs(2)).await;
-        assert!(
-            reply.contains("kann nicht gesperrt werden"),
-            "expected exempt rejection for '{exempt}', got: {reply}"
+        let reply = bot.expect_reply(Duration::from_secs(2)).await;
+        assert_eq!(
+            reply,
+            format!("Das kann nicht gesperrt werden {DENIED_EMOTE}"),
+            "unexpected exempt rejection for '{exempt}'"
         );
     }
 
@@ -152,7 +160,7 @@ async fn exempt_commands_rejected() {
 
 #[tokio::test]
 async fn custom_default_from_config() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_seeded_leaderboard(seeded_lb_with_alice())
         .with_settings(|o| {
             o.suspend.default_duration_secs = Some(90);
@@ -172,20 +180,17 @@ async fn custom_default_from_config() {
 
 #[tokio::test]
 async fn bad_duration_format_rejected() {
-    let mut bot = TestBotBuilder::new()
+    let mut bot = builder()
         .with_seeded_leaderboard(seeded_lb_with_alice())
         .spawn()
         .await;
 
     bot.send_as_broadcaster("broadcaster", "!suspend lb wat")
         .await;
-    let reply = bot.expect_say(Duration::from_secs(2)).await;
-    // Actual reply for UnknownUnit: "Unbekannte Einheit. Erlaubt: s, m, h, d FDM".
-    // Check for the unit-list substring so minor wording changes don't break
-    // the test.
-    assert!(
-        reply.contains("s, m, h, d"),
-        "expected accepted-units list in rejection, got: {reply}"
+    let reply = bot.expect_reply(Duration::from_secs(2)).await;
+    assert_eq!(
+        reply,
+        format!("Unbekannte Einheit. Erlaubt: s, m, h, d {INVALID_EMOTE}")
     );
 
     // Suspend did not take effect.
@@ -196,7 +201,7 @@ async fn bad_duration_format_rejected() {
 
 #[tokio::test]
 async fn suspending_ai_also_blocks_grok_alias() {
-    let bot = TestBotBuilder::new()
+    let bot = builder()
         .with_ai()
         .with_settings(|o| {
             o.ai.history.length = Some(0);
@@ -229,7 +234,7 @@ async fn suspending_ai_also_blocks_grok_alias() {
 
 #[tokio::test]
 async fn suspending_doener_blocks_umlaut_alias() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     bot.send_as_broadcaster("broadcaster", "!suspend doener 1m")
         .await;
@@ -247,7 +252,7 @@ async fn suspending_doener_blocks_umlaut_alias() {
 
 #[tokio::test]
 async fn suspending_umlaut_doener_blocks_ascii_alias() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     bot.send_as_broadcaster("broadcaster", "!suspend döner 1m")
         .await;
@@ -265,7 +270,7 @@ async fn suspending_umlaut_doener_blocks_ascii_alias() {
 
 #[tokio::test]
 async fn ping_can_be_suspended() {
-    let mut bot = TestBotBuilder::new().spawn().await;
+    let mut bot = builder().spawn().await;
 
     // Create ping as broadcaster.
     bot.send_as_broadcaster("broadcaster", "!p create hi yo {mentions}")

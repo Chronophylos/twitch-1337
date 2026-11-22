@@ -7,7 +7,9 @@ use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Tr
 
 use crate::commands::{
     Command, CommandCancellation, CommandContext, CommandTaskGroup, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, error_reply},
 };
+use crate::settings::SettingsHandle;
 use crate::twitch::ChatSender;
 use crate::util::parse_flight_duration;
 
@@ -43,6 +45,7 @@ where
         flight_command(
             &ctx.privmsg,
             &ctx.sender,
+            &ctx.settings,
             ctx.args.first().map(String::as_str),
             ctx.args.get(1).map(String::as_str),
             ctx.cancellation.clone(),
@@ -55,6 +58,7 @@ where
 pub(crate) async fn flight_command<T, L>(
     privmsg: &PrivmsgMessage,
     sender: &Arc<ChatSender<T, L>>,
+    settings: &SettingsHandle,
     aircraft_code: Option<&str>,
     duration_str: Option<&str>,
     cancellation: CommandCancellation,
@@ -64,25 +68,42 @@ where
     L: LoginCredentials,
 {
     cancellation.check()?;
-    const USAGE_MSG: &str = "Gib mir nen Flugzeug und ne Zeit, z.B. !fl A20N 1h FDM";
+    const USAGE_MSG: &str = "Gib mir nen Flugzeug und ne Zeit, z.B. !fl A20N 1h";
 
     let (Some(aircraft_code), Some(duration_str)) = (aircraft_code, duration_str) else {
         cancellation.check()?;
-        sender.reply(privmsg, USAGE_MSG).await;
+        sender
+            .reply(
+                privmsg,
+                error_reply(settings, ReplyEmoteCategory::Invalid, USAGE_MSG),
+            )
+            .await;
         return Ok(());
     };
 
     let Some(aircraft) = twitch_1337_data::flight::aircraft_by_icao_type(aircraft_code) else {
         cancellation.check()?;
         sender
-            .reply(privmsg, "Das Flugzeug kenn ich nich FDM")
+            .reply(
+                privmsg,
+                error_reply(
+                    settings,
+                    ReplyEmoteCategory::Invalid,
+                    "Das Flugzeug kenn ich nich",
+                ),
+            )
             .await;
         return Ok(());
     };
 
     let Some(duration) = parse_flight_duration(duration_str) else {
         cancellation.check()?;
-        sender.reply(privmsg, USAGE_MSG).await;
+        sender
+            .reply(
+                privmsg,
+                error_reply(settings, ReplyEmoteCategory::Invalid, USAGE_MSG),
+            )
+            .await;
         return Ok(());
     };
 
@@ -110,10 +131,14 @@ where
             sender
                 .reply(
                     privmsg,
-                    &format!(
-                        "Mit dem {} schaffste maximal {}, da geht keine Minute mehr FDM",
-                        aircraft.icao_type,
-                        crate::cooldown::format_duration_hm(max)
+                    error_reply(
+                        settings,
+                        ReplyEmoteCategory::Invalid,
+                        format!(
+                            "Mit dem {} schaffste maximal {}, da geht keine Minute mehr",
+                            aircraft.icao_type,
+                            crate::cooldown::format_duration_hm(max)
+                        ),
                     ),
                 )
                 .await;
@@ -124,7 +149,11 @@ where
             sender
                 .reply(
                     privmsg,
-                    "Hab keine Route gefunden, versuch mal ne andere Zeit FDM",
+                    error_reply(
+                        settings,
+                        ReplyEmoteCategory::Invalid,
+                        "Hab keine Route gefunden, versuch mal ne andere Zeit",
+                    ),
                 )
                 .await;
             return Ok(());

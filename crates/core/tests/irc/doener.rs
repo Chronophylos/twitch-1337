@@ -81,6 +81,64 @@ async fn dpi_unicode_exact_match_prefers_city_details() {
 }
 
 #[tokio::test]
+async fn dpi_unknown_city_uses_only_configured_reply_pool_emote() {
+    for (pool, expected) in [
+        (
+            vec!["TestInvalid".to_owned()],
+            "keine Stadt für 'Atlantis' gefunden. TestInvalid",
+        ),
+        (Vec::new(), "keine Stadt für 'Atlantis' gefunden."),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app-api/public/search"))
+            .and(wiremock::matchers::query_param("q", "Atlantis"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                br#"{"cities":[],"shops":[]}"#.as_slice(),
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+
+        let mut bot = TestBotBuilder::new()
+            .with_doener_base_url(server.uri())
+            .with_settings(|o| o.reply_emotes.invalid = Some(pool))
+            .spawn()
+            .await;
+        bot.send("alice", "!dpi Atlantis").await;
+        assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, expected);
+        bot.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn dpi_upstream_outage_uses_only_configured_reply_pool_emote() {
+    for (pool, expected) in [
+        (
+            vec!["TestFailure".to_owned()],
+            "Döneratlas API down TestFailure",
+        ),
+        (Vec::new(), "Döneratlas API down"),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app-api/public/stats"))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+
+        let mut bot = TestBotBuilder::new()
+            .with_doener_base_url(server.uri())
+            .with_settings(|o| o.reply_emotes.failure = Some(pool))
+            .spawn()
+            .await;
+        bot.send("alice", "!dpi").await;
+        assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, expected);
+        bot.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn doener_calc_accepts_ascii_alias_and_formats_reply() {
     let (_server, mut bot) = spawn_with_stats().await;
 

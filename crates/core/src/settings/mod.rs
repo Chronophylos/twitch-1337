@@ -25,6 +25,7 @@ pub mod knob;
 pub mod link_correction;
 pub mod observability;
 pub mod provider;
+pub mod reply_emotes;
 mod resolve;
 pub mod schedules;
 pub mod spoiler;
@@ -63,6 +64,7 @@ pub use observability::{
     ObservabilityOverrides, ObservabilitySettings, OtelOverrides, OtelSettings,
 };
 pub use provider::{AiProvider, Efforts, ModelListing, ProviderCaps};
+pub use reply_emotes::{ReplyEmotesOverrides, ReplyEmotesSettings};
 pub use schedules::Schedule;
 pub use spoiler::{SpoilerOverrides, SpoilerSettings};
 pub use store::{Actor, SettingsStore};
@@ -166,7 +168,7 @@ impl Subscription {
     }
 }
 
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 
 pub(crate) fn default_schema_version() -> u32 {
     SCHEMA_VERSION
@@ -180,6 +182,8 @@ pub struct Settings {
     pub cooldowns: Cooldowns,
     #[knob(nested)]
     pub link_correction: LinkCorrectionSettings,
+    #[knob(nested)]
+    pub reply_emotes: ReplyEmotesSettings,
     #[knob(nested)]
     pub pings: PingsSettings,
     #[knob(nested)]
@@ -304,6 +308,7 @@ impl Settings {
                 bash: 20,
             },
             link_correction: LinkCorrectionSettings::default(),
+            reply_emotes: ReplyEmotesSettings::default(),
             pings: PingsSettings {
                 cooldown: 300,
                 public: false,

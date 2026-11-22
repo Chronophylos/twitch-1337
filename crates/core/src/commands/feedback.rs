@@ -8,8 +8,11 @@ use tokio::time::Duration;
 use tracing::info;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, ExecutionClass};
-use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use super::{
+    Command, CommandContext, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+};
+use crate::cooldown::PerUserCooldown;
 use crate::settings::{Settings, SettingsHandle};
 
 const FEEDBACK_FILENAME: &str = "feedback.txt";
@@ -65,20 +68,21 @@ where
         // Check for empty message
         if message.trim().is_empty() {
             ctx.sender
-                .reply(&ctx.privmsg, "Benutzung: !fb <nachricht>")
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &ctx.settings,
+                        ReplyEmoteCategory::Invalid,
+                        "Benutzung: !fb <nachricht>",
+                    ),
+                )
                 .await;
             return Ok(());
         }
 
         if let Err(remaining) = self.cooldown.try_acquire(user).await {
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&ctx.settings, remaining))
                 .await;
             return Ok(());
         }
@@ -98,7 +102,14 @@ where
                 if let Err(e) = file.write_all(line.as_bytes()).await {
                     crate::log_handled!(error, e, "Failed to write feedback to file");
                     ctx.sender
-                        .reply(&ctx.privmsg, "Da ist was schiefgelaufen FDM")
+                        .reply(
+                            &ctx.privmsg,
+                            error_reply(
+                                &ctx.settings,
+                                ReplyEmoteCategory::Failure,
+                                "Da ist was schiefgelaufen",
+                            ),
+                        )
                         .await;
                     return Ok(());
                 }
@@ -106,7 +117,14 @@ where
             Err(e) => {
                 crate::log_handled!(error, e, "Failed to open feedback file");
                 ctx.sender
-                    .reply(&ctx.privmsg, "Da ist was schiefgelaufen FDM")
+                    .reply(
+                        &ctx.privmsg,
+                        error_reply(
+                            &ctx.settings,
+                            ReplyEmoteCategory::Failure,
+                            "Da ist was schiefgelaufen",
+                        ),
+                    )
                     .await;
                 return Ok(());
             }

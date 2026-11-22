@@ -30,6 +30,7 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 use super::{
     ADMIN_DENIED_MSG, Command, CommandContext, ExecutionClass, Permission, is_admin,
     normalize_command_name,
+    reply_emotes::{ReplyEmoteCategory, error_reply},
 };
 use crate::cooldown::format_cooldown_remaining;
 use crate::settings::SettingsHandle;
@@ -40,17 +41,13 @@ use crate::suspend::{ParseDurationError, SuspensionManager, parse_duration};
 const EXEMPT_COMMANDS: &[&str] = &["suspend", "unsuspend", "p"];
 
 /// Map a [`ParseDurationError`] to a user-facing German message.
-fn duration_error_message(err: &ParseDurationError) -> String {
+fn duration_error_message(err: &ParseDurationError) -> &'static str {
     match err {
-        ParseDurationError::Empty => "Dauer fehlt. Nutze z.B. 30s, 10m, 2h, 1d FDM".to_string(),
-        ParseDurationError::InvalidNumber => {
-            "Ungültige Zahl. Nutze z.B. 30s, 10m, 2h, 1d FDM".to_string()
-        }
-        ParseDurationError::UnknownUnit => {
-            "Unbekannte Einheit. Erlaubt: s, m, h, d FDM".to_string()
-        }
-        ParseDurationError::Zero => "Dauer muss größer als 0 sein FDM".to_string(),
-        ParseDurationError::TooLong => "Dauer zu lang (max 7 Tage) FDM".to_string(),
+        ParseDurationError::Empty => "Dauer fehlt. Nutze z.B. 30s, 10m, 2h, 1d",
+        ParseDurationError::InvalidNumber => "Ungültige Zahl. Nutze z.B. 30s, 10m, 2h, 1d",
+        ParseDurationError::UnknownUnit => "Unbekannte Einheit. Erlaubt: s, m, h, d",
+        ParseDurationError::Zero => "Dauer muss größer als 0 sein",
+        ParseDurationError::TooLong => "Dauer zu lang (max 7 Tage)",
     }
 }
 
@@ -106,7 +103,12 @@ where
         drop(s);
 
         if !is_admin_user {
-            ctx.sender.reply(&ctx.privmsg, ADMIN_DENIED_MSG).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(&self.settings, ReplyEmoteCategory::Denied, ADMIN_DENIED_MSG),
+                )
+                .await;
             return Ok(());
         }
 
@@ -114,7 +116,14 @@ where
             Some(c) => c.as_str(),
             None => {
                 ctx.sender
-                    .reply(&ctx.privmsg, "Nutze: !suspend <command> [dauer]")
+                    .reply(
+                        &ctx.privmsg,
+                        error_reply(
+                            &self.settings,
+                            ReplyEmoteCategory::Invalid,
+                            "Nutze: !suspend <command> [dauer]",
+                        ),
+                    )
                     .await;
                 return Ok(());
             }
@@ -124,7 +133,14 @@ where
 
         if EXEMPT_COMMANDS.contains(&cmd.as_str()) {
             ctx.sender
-                .reply(&ctx.privmsg, "Das kann nicht gesperrt werden FDM")
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Denied,
+                        "Das kann nicht gesperrt werden",
+                    ),
+                )
                 .await;
             return Ok(());
         }
@@ -135,7 +151,14 @@ where
                 Ok(d) => d,
                 Err(err) => {
                     ctx.sender
-                        .reply(&ctx.privmsg, duration_error_message(&err))
+                        .reply(
+                            &ctx.privmsg,
+                            error_reply(
+                                &self.settings,
+                                ReplyEmoteCategory::Invalid,
+                                duration_error_message(&err),
+                            ),
+                        )
                         .await;
                     return Ok(());
                 }
@@ -206,7 +229,12 @@ where
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let s = self.settings.load();
         if !is_admin(&ctx.privmsg, &s.twitch.hidden_admins) {
-            ctx.sender.reply(&ctx.privmsg, ADMIN_DENIED_MSG).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(&self.settings, ReplyEmoteCategory::Denied, ADMIN_DENIED_MSG),
+                )
+                .await;
             return Ok(());
         }
         drop(s);
@@ -215,7 +243,14 @@ where
             Some(c) => c.as_str(),
             None => {
                 ctx.sender
-                    .reply(&ctx.privmsg, "Nutze: !unsuspend <command>")
+                    .reply(
+                        &ctx.privmsg,
+                        error_reply(
+                            &self.settings,
+                            ReplyEmoteCategory::Invalid,
+                            "Nutze: !unsuspend <command>",
+                        ),
+                    )
                     .await;
                 return Ok(());
             }
@@ -226,7 +261,11 @@ where
         let reply = if self.manager.unsuspend(&cmd).await {
             format!("!{cmd} entsperrt Okayge")
         } else {
-            format!("!{cmd} war nicht gesperrt FDM")
+            error_reply(
+                &self.settings,
+                ReplyEmoteCategory::Invalid,
+                format!("!{cmd} war nicht gesperrt"),
+            )
         };
 
         ctx.sender.reply(&ctx.privmsg, reply).await;

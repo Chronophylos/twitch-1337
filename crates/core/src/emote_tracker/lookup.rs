@@ -7,8 +7,8 @@ use super::db::{get_emote, resolve_active_name};
 use super::format::format_berlin_millis;
 use super::types::{EmoteRow, SetEventKind, SetEventRow};
 
-pub const EMOTE_CMD_USAGE: &str = "Benutzung: !e <Name, ID oder https://7tv.app/emotes/…> FDM";
-pub const EMOTE_NOT_FOUND: &str = "Emote nicht gefunden FDM";
+pub const EMOTE_CMD_USAGE: &str = "Benutzung: !e <Name, ID oder https://7tv.app/emotes/…>";
+pub const EMOTE_NOT_FOUND: &str = "Emote nicht gefunden";
 
 pub enum EmoteQueryParse<'a> {
     Missing,

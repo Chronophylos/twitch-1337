@@ -10,24 +10,26 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 use llm::{ChatCompletionRequest, Message, TraceIds};
 
 use crate::ai::command::ChatContext;
-use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use crate::cooldown::PerUserCooldown;
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;
 use crate::twitch::whisper::{WHISPER_MAX_CHARS, WhisperSender};
 use crate::util::observability::{self, metrics};
 use crate::util::truncate_response;
 
-use super::{Command, CommandContext, ExecutionClass};
+use super::{
+    Command, CommandContext, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+};
 
 const NEWS_PREFIX: &str = "ICYMI:";
 const NEWS_SYSTEM_PROMPT: &str = "Du fasst Twitch-Chat-Verläufe hilfreich zusammen. Antworte auf Deutsch, erfinde keine Details und konzentriere dich auf Themen, Highlights und wichtige Antworten. Beginne die Antwort mit \"ICYMI:\". Wenn du mehrere Themen auflistest, trenne sie mit \" | \". Bleibe kompakt, aber du musst dich nicht auf eine einzelne Twitch-Chatnachricht beschränken.";
 const TLDR_PREFIX: &str = "In den letzten 24h:";
 const TLDR_SYSTEM_PROMPT: &str = "Du erstellst ein hilfreiches TLDR der letzten verfügbaren 24 Stunden eines Twitch-Chats. Antworte auf Deutsch, erfinde keine Details und strukturiere die wichtigsten Themen, Highlights, Fragen/Antworten, Running Gags und offenen Punkte knapp. Twitch zeigt nur Plain Text an: Verwende kein Markdown. Beginne die Antwort mit \"In den letzten 24h:\".";
-const EMPTY_HISTORY_MESSAGE: &str =
-    "Ich habe noch keine Chat-Historie für eine Zusammenfassung FDM";
+const EMPTY_HISTORY_MESSAGE: &str = "Ich habe noch keine Chat-Historie für eine Zusammenfassung";
 const NO_NEW_MESSAGES_MESSAGE: &str =
-    "Seit deiner letzten Nachricht ist noch nichts Neues passiert FDM";
-const NO_TLDR_MESSAGES_MESSAGE: &str = "chat dead no tldr Deadge";
+    "Seit deiner letzten Nachricht ist noch nichts Neues passiert";
+const NO_TLDR_MESSAGES_MESSAGE: &str = "chat dead no tldr";
 const RECENT_USER_CONTEXT_MESSAGES: usize = 20;
 const TLDR_WINDOW_HOURS: i64 = 24;
 
@@ -225,7 +227,14 @@ where
         else {
             ctx.cancellation.check()?;
             ctx.sender
-                .reply(&ctx.privmsg, self.mode.empty_message())
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Invalid,
+                        self.mode.empty_message(),
+                    ),
+                )
                 .await;
             return Ok(());
         };
@@ -235,10 +244,14 @@ where
             ctx.sender
                 .reply(
                     &ctx.privmsg,
-                    match self.mode {
-                        NewsMode::News => NO_NEW_MESSAGES_MESSAGE,
-                        NewsMode::Tldr => NO_TLDR_MESSAGES_MESSAGE,
-                    },
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Invalid,
+                        match self.mode {
+                            NewsMode::News => NO_NEW_MESSAGES_MESSAGE,
+                            NewsMode::Tldr => NO_TLDR_MESSAGES_MESSAGE,
+                        },
+                    ),
                 )
                 .await;
             return Ok(());
@@ -248,13 +261,7 @@ where
             ctx.cancellation.check()?;
             debug!(user = %user, remaining_secs = remaining.as_secs(), "News command on cooldown");
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&self.settings, remaining))
                 .await;
             return Ok(());
         }
@@ -267,7 +274,14 @@ where
             error!("News AI skipped, no usable LLM profile");
             ctx.cancellation.check()?;
             ctx.sender
-                .reply(&ctx.privmsg, "Da ist was schiefgelaufen FDM")
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Failure,
+                        "Da ist was schiefgelaufen",
+                    ),
+                )
                 .await;
             return Ok(());
         };
@@ -324,11 +338,25 @@ where
             ),
             Ok(Err(e)) => {
                 crate::log_handled!(error, e, "News AI execution failed");
-                ("Da ist was schiefgelaufen FDM".to_string(), false)
+                (
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Failure,
+                        "Da ist was schiefgelaufen",
+                    ),
+                    false,
+                )
             }
             Err(_) => {
                 error!("News AI execution timed out");
-                ("Das hat zu lange gedauert Waiting".to_string(), false)
+                (
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Timeout,
+                        "Das hat zu lange gedauert",
+                    ),
+                    false,
+                )
             }
         };
 

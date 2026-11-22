@@ -11,7 +11,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument as _, Span, debug, info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
-use super::{Command, CommandId, CommandRegistry, ExecutionClass, normalize_username};
+use super::{
+    Command, CommandId, CommandRegistry, ExecutionClass, normalize_username,
+    reply_emotes::{ReplyEmoteCategory, error_reply},
+};
 use crate::settings::{CommandExecutionSettings, SettingsHandle};
 use crate::twitch::ChatSender;
 
@@ -22,7 +25,7 @@ pub const COMMAND_ADMISSION_CAPACITY: usize = 256;
 pub const CAPACITY_REJECTION_MESSAGE: &str = "zu viel zu tun";
 /// Chat fallback for a command whose `execute` returned a non-cancellation
 /// `Err` (ADR-0012 rule 7).
-pub const COMMAND_FAILURE_MESSAGE: &str = "Da ist was schiefgelaufen FDM";
+pub const COMMAND_FAILURE_MESSAGE: &str = "Da ist was schiefgelaufen";
 /// Upper bound on a capacity reply attempt before the manager resumes scheduling.
 const CAPACITY_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(100);
 /// Maximum number of login/ID pairs retained only for discrepancy tracing.
@@ -125,6 +128,8 @@ where
     pub privmsg: PrivmsgMessage,
     /// Shared sanitizing sender owned by the process composition seam.
     pub sender: Arc<ChatSender<T, L>>,
+    /// Live runtime settings, read again whenever a reply is formatted.
+    pub settings: SettingsHandle,
     /// The first word that matched the command.
     pub trigger: String,
     /// Remaining words after the command name.
@@ -154,10 +159,15 @@ where
     L: LoginCredentials,
 {
     /// Build an invocation after the caller has resolved the canonical ID.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "constructor assembles the complete owned command invocation"
+    )]
     pub fn new(
         command_id: CommandId,
         privmsg: PrivmsgMessage,
         sender: Arc<ChatSender<T, L>>,
+        settings: SettingsHandle,
         trigger: String,
         args: Vec<String>,
         cancellation: CommandCancellation,
@@ -169,6 +179,7 @@ where
             context: CommandContext {
                 privmsg,
                 sender,
+                settings,
                 trigger,
                 args,
                 cancellation,
@@ -236,10 +247,14 @@ where
         );
         if tokio::time::timeout(
             CAPACITY_REPLY_TIMEOUT,
-            invocation
-                .context
-                .sender
-                .reply(&invocation.context.privmsg, CAPACITY_REJECTION_MESSAGE),
+            invocation.context.sender.reply(
+                &invocation.context.privmsg,
+                error_reply(
+                    &invocation.context.settings,
+                    ReplyEmoteCategory::Limit,
+                    CAPACITY_REJECTION_MESSAGE,
+                ),
+            ),
         )
         .await
         .is_err()
@@ -260,6 +275,7 @@ where
 pub(crate) async fn reply_command_failure<T, L>(
     sender: &ChatSender<T, L>,
     privmsg: &PrivmsgMessage,
+    settings: &SettingsHandle,
     cancellation: &CommandCancellation,
 ) where
     T: Transport,
@@ -268,7 +284,16 @@ pub(crate) async fn reply_command_failure<T, L>(
     if cancellation.is_cancelled() {
         return;
     }
-    sender.reply(privmsg, COMMAND_FAILURE_MESSAGE).await;
+    sender
+        .reply(
+            privmsg,
+            error_reply(
+                settings,
+                ReplyEmoteCategory::Failure,
+                COMMAND_FAILURE_MESSAGE,
+            ),
+        )
+        .await;
 }
 
 /// Non-blocking send side of the bounded ingress-to-manager handoff.
@@ -994,6 +1019,7 @@ impl CommandTaskGroup {
             // `execute` consumes the context; keep what the fallback reply needs.
             let privmsg = context.privmsg.clone();
             let sender = context.sender.clone();
+            let settings = context.settings.clone();
             let cancellation = context.cancellation.clone();
             let result = match command.execute(context).await {
                 Ok(()) => TaskResult::Succeeded,
@@ -1003,7 +1029,7 @@ impl CommandTaskGroup {
                 Err(error) => {
                     // Replied from the command task so a slow send never
                     // stalls the manager; `finish` logs the error.
-                    reply_command_failure(&sender, &privmsg, &cancellation).await;
+                    reply_command_failure(&sender, &privmsg, &settings, &cancellation).await;
                     TaskResult::Failed(error)
                 }
             };
@@ -1696,10 +1722,14 @@ mod tests {
         user: &str,
         trigger: &str,
     ) -> CommandInvocation<TestTransport, TestLogin> {
+        let mut settings = crate::settings::Settings::compiled_defaults();
+        settings.reply_emotes.limit.clear();
+        settings.reply_emotes.failure.clear();
         CommandInvocation::new(
             CommandId::new(id).unwrap(),
             privmsg(user, &format!("id-{user}")),
             sender,
+            crate::settings::SettingsHandle::from_settings(settings),
             trigger.to_owned(),
             vec![trigger.to_owned()],
             CommandCancellation::new(),

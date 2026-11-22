@@ -4,7 +4,10 @@ use async_trait::async_trait;
 use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use super::{Command, CommandContext, ExecutionClass};
+use super::{
+    Command, CommandContext, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, error_reply},
+};
 use crate::emote_tracker::{
     EMOTE_CMD_USAGE, EMOTE_NOT_FOUND, EmoteQueryParse, EmoteTrackerHandle, format_emote_chat_reply,
     parse_emote_query,
@@ -51,14 +54,24 @@ where
         match parse_emote_query(&args) {
             EmoteQueryParse::Missing => {
                 ctx.sender
-                    .reply(&ctx.privmsg, EMOTE_CMD_USAGE.to_owned())
+                    .reply(
+                        &ctx.privmsg,
+                        error_reply(&ctx.settings, ReplyEmoteCategory::Invalid, EMOTE_CMD_USAGE),
+                    )
                     .await;
                 return Ok(());
             }
             EmoteQueryParse::Query(query) => {
                 let Some(emote) = self.tracker.resolve_emote_query(query.as_ref()).await? else {
                     ctx.sender
-                        .reply(&ctx.privmsg, EMOTE_NOT_FOUND.to_owned())
+                        .reply(
+                            &ctx.privmsg,
+                            error_reply(
+                                &ctx.settings,
+                                ReplyEmoteCategory::Invalid,
+                                EMOTE_NOT_FOUND,
+                            ),
+                        )
                         .await;
                     return Ok(());
                 };

@@ -32,14 +32,14 @@ use crate::ai::model_catalog::ModelCatalog;
 use crate::ai::recap::RecapHandle;
 use crate::ai::reply::{ReplyLimits, RewordOpts, prepare_agent_reply};
 use crate::ai::viewer_tools::{AuroraToolAvailability, AuroraToolCatalog, ViewerTool};
-use crate::commands::CommandCancellation;
+use crate::commands::{CommandCancellation, reply_emotes::ReplyEmoteCategory};
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
 use crate::twitch::seventv::SevenTvEmoteProvider;
 use crate::util::observability::{self, metrics};
 
 /// Sent to the invoking viewer when a round exceeds the profile timeout.
-pub(crate) const TIMEOUT_NOTICE: &str = "hat zu hart gedacht, nochmal probieren Stare";
+pub(crate) const TIMEOUT_NOTICE: &str = "hat zu hart gedacht, nochmal probieren";
 
 /// Tool calls executed per agent round; the rest get
 /// [`llm::TOOL_BUDGET_EXHAUSTED`]. Matches the default `max_writes_per_turn`.
@@ -137,8 +137,11 @@ pub enum TurnOutcome {
     /// The agent's answer, plus the persona it should be recorded under.
     Reply { text: String, display_name: String },
     /// A short notice for the invoking viewer, sent over plain IRC rather
-    /// than the agent's mouth.
-    Notice(&'static str),
+    /// than the agent's mouth. The Twitch adapter picks the emote at send time.
+    Notice {
+        text: &'static str,
+        category: ReplyEmoteCategory,
+    },
     /// Nothing to say. Covers a missing profile, an empty model, the round
     /// cap, and a whitespace-only answer; the cause is in the logs.
     Silent,
@@ -609,7 +612,7 @@ impl TurnRunner {
                                 model = %model,
                                 "AI per-round timeout"
                             );
-                            Err(TIMEOUT_NOTICE)
+                            Err((TIMEOUT_NOTICE, ReplyEmoteCategory::Timeout))
                         }
                         Ok(AgentOutcome::DeadlineExceeded { round }) => {
                             warn!(
@@ -618,7 +621,7 @@ impl TurnRunner {
                                 model = %model,
                                 "AI turn deadline exceeded"
                             );
-                            Err(TIMEOUT_NOTICE)
+                            Err((TIMEOUT_NOTICE, ReplyEmoteCategory::Timeout))
                         }
                         Err(e) => {
                             crate::log_handled!(error, e, "AI llm error");
@@ -657,7 +660,7 @@ impl TurnRunner {
                             }
                         }
                         Ok(None) => TurnOutcome::Silent,
-                        Err(notice) => TurnOutcome::Notice(notice),
+                        Err((text, category)) => TurnOutcome::Notice { text, category },
                     }
                 },
             )),
@@ -669,7 +672,7 @@ impl TurnRunner {
         }
         let outcome_kind = match &outcome {
             TurnOutcome::Reply { .. } => "reply",
-            TurnOutcome::Notice(_) => "notice",
+            TurnOutcome::Notice { .. } => "notice",
             TurnOutcome::Silent => "silent",
         };
         info!(
@@ -848,12 +851,12 @@ fn recap_enabled_for_profile(recap_profile: Option<&str>, parked: bool) -> bool 
 /// error! and are usually transient. Authentication, payment, and rate-limit
 /// problems get a hint in chat so the bot doesn't appear to silently swallow
 /// `!ai` requests when, e.g., the OpenRouter wallet is empty.
-fn user_facing_provider_message(err: &LlmError) -> Option<&'static str> {
+fn user_facing_provider_message(err: &LlmError) -> Option<(&'static str, ReplyEmoteCategory)> {
     match err {
         LlmError::Provider { status, .. } => match *status {
-            402 => Some("KI-Konto leer FeelsBadMan"),
-            429 => Some("KI gerade rate-limited Stare"),
-            401 | 403 => Some("KI-Konfiguration kaputt FeelsBadMan"),
+            402 => Some(("KI-Konto leer", ReplyEmoteCategory::Failure)),
+            429 => Some(("KI gerade rate-limited", ReplyEmoteCategory::Limit)),
+            401 | 403 => Some(("KI-Konfiguration kaputt", ReplyEmoteCategory::Failure)),
             _ => None,
         },
         _ => None,
@@ -1245,7 +1248,13 @@ mod turn_tests {
     async fn timeout_maps_to_a_notice() {
         let f = fixture(Answer::Hang, 1).await;
         let out = f.runner.run_turn(input(Agent::Aurora, "hi")).await.unwrap();
-        assert_eq!(out, TurnOutcome::Notice(TIMEOUT_NOTICE));
+        assert_eq!(
+            out,
+            TurnOutcome::Notice {
+                text: TIMEOUT_NOTICE,
+                category: ReplyEmoteCategory::Timeout,
+            }
+        );
     }
 
     #[tokio::test]
@@ -1256,7 +1265,10 @@ mod turn_tests {
                 .run_turn(input(Agent::Aurora, "hi"))
                 .await
                 .unwrap(),
-            TurnOutcome::Notice("KI-Konto leer FeelsBadMan"),
+            TurnOutcome::Notice {
+                text: "KI-Konto leer",
+                category: ReplyEmoteCategory::Failure,
+            },
         );
 
         // 500 stays silent: transient, already logged at error!.

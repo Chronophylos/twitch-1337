@@ -13,7 +13,7 @@ use twitch_1337::aviation::tracker::{
 };
 use twitch_1337::config::AviationstackBootstrap;
 use twitch_1337::lifecycle::Lifecycle;
-use twitch_1337::settings::SettingsOverrides;
+use twitch_1337::settings::{Settings, SettingsHandle, SettingsOverrides};
 use twitch_1337::twitch::ChatSender;
 use twitch_irc::ClientConfig;
 use twitch_irc::login::StaticLoginCredentials;
@@ -796,7 +796,10 @@ async fn aviationstack_codeshare_confirms_operating_callsign_alias() {
 async fn duplicate_tracking_rejects_existing_operating_alias() {
     let bot = TestBotBuilder::new()
         .with_config(enable_aviationstack)
-        .with_settings(set_aviationstack_enabled)
+        .with_settings(|o| {
+            set_aviationstack_enabled(o);
+            o.reply_emotes.invalid = Some(vec!["TestInvalid".into()]);
+        })
         .spawn()
         .await;
 
@@ -845,11 +848,8 @@ async fn duplicate_tracking_rejects_existing_operating_alias() {
     assert!(ack.contains("KLM1234"), "got: {ack}");
 
     bot.send("bob", "!track AFR1234").await;
-    let duplicate = bot.expect_say(Duration::from_secs(5)).await;
-    assert!(
-        duplicate.contains("wird schon getrackt"),
-        "got: {duplicate}"
-    );
+    let duplicate = bot.expect_reply(Duration::from_secs(5)).await;
+    assert_eq!(duplicate, "AFR1234 wird schon getrackt TestInvalid");
 
     bot.shutdown().await;
 }
@@ -1357,6 +1357,7 @@ async fn pending_unknown_cap_rejects_second_unknown_track_per_user() {
         .with_settings(|o| {
             set_aviationstack_enabled(o);
             o.cooldowns.track = Some(1);
+            o.reply_emotes.limit = Some(vec!["TestLimit".into()]);
         })
         .spawn()
         .await;
@@ -1387,10 +1388,10 @@ async fn pending_unknown_cap_rejects_second_unknown_track_per_user() {
     // Outlast the 1 s `!track` cooldown so the cap, not the cooldown, answers.
     tokio::time::sleep(Duration::from_millis(1100)).await;
     bot.send("alice", "!track DLH5678").await;
-    let rejection = bot.expect_say(Duration::from_secs(5)).await;
-    assert!(
-        rejection.contains("DLH5678 nicht gefunden") && rejection.contains("unbekannten Flug"),
-        "got: {rejection}"
+    let rejection = bot.expect_reply(Duration::from_secs(5)).await;
+    assert_eq!(
+        rejection,
+        "DLH5678 nicht gefunden und du wartest schon auf einen unbekannten Flug TestLimit"
     );
 
     let state_path = bot.data_dir.path().join("flights.ron");
@@ -1892,6 +1893,7 @@ async fn tracker_answers_dashboard_commands_while_polling() {
         sender,
         "test_channel".to_string(),
         aviation,
+        SettingsHandle::from_settings(Settings::compiled_defaults()),
         data_dir.path().to_path_buf(),
         clock,
         lifecycle.clone(),

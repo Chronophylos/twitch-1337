@@ -7,8 +7,11 @@ use eyre::{Result, WrapErr as _};
 use tracing::{debug, error, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
-use crate::commands::{CommandCancellation, CommandTaskGroup};
-use crate::cooldown::format_cooldown_remaining;
+use crate::commands::{
+    CommandCancellation, CommandTaskGroup,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+};
+use crate::settings::SettingsHandle;
 use crate::twitch::ChatSender;
 
 use super::super::client::AviationClient;
@@ -45,6 +48,7 @@ fn cone_distance_nm(ac: &NearbyAircraft, center_lat: f64, center_lon: f64) -> Op
 pub async fn up_command<T, L>(
     privmsg: &PrivmsgMessage,
     sender: &Arc<ChatSender<T, L>>,
+    settings: &SettingsHandle,
     aviation_client: &AviationClient,
     input: &str,
     cooldown: &crate::cooldown::PerUserCooldown,
@@ -62,7 +66,14 @@ where
     if input.is_empty() {
         cancellation.check()?;
         sender
-            .reply(privmsg, "Benutzung: !up <PLZ/ICAO/IATA/Ort> FDM")
+            .reply(
+                privmsg,
+                error_reply(
+                    settings,
+                    ReplyEmoteCategory::Invalid,
+                    "Benutzung: !up <PLZ/ICAO/IATA/Ort>",
+                ),
+            )
             .await;
         return Ok(());
     }
@@ -71,13 +82,7 @@ where
         cancellation.check()?;
         debug!(user = %user, remaining_secs = remaining.as_secs(), "!up on cooldown");
         sender
-            .reply(
-                privmsg,
-                format!(
-                    "Bitte warte noch {} Waiting",
-                    format_cooldown_remaining(remaining)
-                ),
-            )
+            .reply(privmsg, cooldown_reply(settings, remaining))
             .await;
         return Ok(());
     }
@@ -88,18 +93,41 @@ where
         Ok(ResolveResult::Found(loc)) => loc,
         Ok(ResolveResult::PlzNotFound) => {
             cancellation.check()?;
-            sender.reply(privmsg, "Kenne ich nicht die PLZ FDM").await;
+            sender
+                .reply(
+                    privmsg,
+                    error_reply(
+                        settings,
+                        ReplyEmoteCategory::Invalid,
+                        "Kenne ich nicht die PLZ",
+                    ),
+                )
+                .await;
             return Ok(());
         }
         Ok(ResolveResult::NotFound) => {
             cancellation.check()?;
-            sender.reply(privmsg, "Kenne ich nicht FDM").await;
+            sender
+                .reply(
+                    privmsg,
+                    error_reply(settings, ReplyEmoteCategory::Invalid, "Kenne ich nicht"),
+                )
+                .await;
             return Ok(());
         }
         Err(e) => {
             cancellation.check()?;
             crate::log_handled!(error, e, input = %input, "Location resolution failed");
-            sender.reply(privmsg, "Da ist was schiefgelaufen FDM").await;
+            sender
+                .reply(
+                    privmsg,
+                    error_reply(
+                        settings,
+                        ReplyEmoteCategory::Failure,
+                        "Da ist was schiefgelaufen",
+                    ),
+                )
+                .await;
             return Ok(());
         }
     };
@@ -272,11 +300,19 @@ where
         }
         Ok(Err(e)) => {
             crate::log_handled!(error, e, input = %input, "!up command failed");
-            "Da ist was schiefgelaufen FDM".to_string()
+            error_reply(
+                settings,
+                ReplyEmoteCategory::Failure,
+                "Da ist was schiefgelaufen",
+            )
         }
         Err(_) => {
             error!(input = %input, "!up command timed out");
-            "Da ist was schiefgelaufen FDM".to_string()
+            error_reply(
+                settings,
+                ReplyEmoteCategory::Timeout,
+                "Da ist was schiefgelaufen",
+            )
         }
     };
 

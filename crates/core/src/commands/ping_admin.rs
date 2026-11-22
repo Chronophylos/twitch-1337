@@ -5,12 +5,13 @@ use eyre::Result;
 use tracing::debug;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use crate::cooldown::PerUserCooldown;
 use crate::ping::{PingError, PingHandle};
 use crate::settings::{Settings, SettingsHandle};
 
 use super::{
     ADMIN_DENIED_MSG, Command, CommandContext, ExecutionClass, is_admin, normalize_username,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
 };
 
 fn membership_cooldown_duration(s: &Settings) -> Duration {
@@ -22,29 +23,57 @@ fn normalize_ping_name(name: &str) -> String {
 }
 
 /// Chat wording for a ping failure. `Persist` details are logged, never shown.
-fn chat_error(e: &PingError) -> String {
-    match e {
-        PingError::NotFound { name } => format!("Ping \"{name}\" gibt es nicht FDM"),
-        PingError::AlreadyExists { name } => format!("Ping \"{name}\" gibt es schon FDM"),
-        PingError::ReservedCommand { name } => format!("Ping \"{name}\" ist schon ein Befehl FDM"),
-        PingError::EmptyName => "Ping-Name darf nicht leer sein FDM".to_string(),
-        PingError::InvalidName => {
-            "Ping-Name darf nur Buchstaben, Zahlen, - und _ enthalten FDM".to_string()
-        }
-        PingError::ControlChars => {
-            "Template darf keine Steuerzeichen (z.B. Zeilenumbrüche) enthalten FDM".to_string()
-        }
-        PingError::InvalidMember { .. } => {
-            "Mitglieder müssen gültige Twitch-Namen sein (a-z, 0-9, _) FDM".to_string()
-        }
-        PingError::AlreadyMember { ping, user } => format!("{user} ist schon in \"{ping}\" FDM"),
-        PingError::NotMember { ping, user } => format!("{user} ist nicht in \"{ping}\" FDM"),
-        PingError::Unavailable => "Ping-System ist gerade nicht verfügbar FDM".to_string(),
+fn chat_error(settings: &SettingsHandle, e: &PingError) -> String {
+    let (category, text) = match e {
+        PingError::NotFound { name } => (
+            ReplyEmoteCategory::Invalid,
+            format!("Ping \"{name}\" gibt es nicht"),
+        ),
+        PingError::AlreadyExists { name } => (
+            ReplyEmoteCategory::Invalid,
+            format!("Ping \"{name}\" gibt es schon"),
+        ),
+        PingError::ReservedCommand { name } => (
+            ReplyEmoteCategory::Invalid,
+            format!("Ping \"{name}\" ist schon ein Befehl"),
+        ),
+        PingError::EmptyName => (
+            ReplyEmoteCategory::Invalid,
+            "Ping-Name darf nicht leer sein".to_string(),
+        ),
+        PingError::InvalidName => (
+            ReplyEmoteCategory::Invalid,
+            "Ping-Name darf nur Buchstaben, Zahlen, - und _ enthalten".to_string(),
+        ),
+        PingError::ControlChars => (
+            ReplyEmoteCategory::Invalid,
+            "Template darf keine Steuerzeichen (z.B. Zeilenumbrüche) enthalten".to_string(),
+        ),
+        PingError::InvalidMember { .. } => (
+            ReplyEmoteCategory::Invalid,
+            "Mitglieder müssen gültige Twitch-Namen sein (a-z, 0-9, _)".to_string(),
+        ),
+        PingError::AlreadyMember { ping, user } => (
+            ReplyEmoteCategory::Invalid,
+            format!("{user} ist schon in \"{ping}\""),
+        ),
+        PingError::NotMember { ping, user } => (
+            ReplyEmoteCategory::Invalid,
+            format!("{user} ist nicht in \"{ping}\""),
+        ),
+        PingError::Unavailable => (
+            ReplyEmoteCategory::Unavailable,
+            "Ping-System ist gerade nicht verfügbar".to_string(),
+        ),
         PingError::Persist(_) => {
             crate::log_handled!(error, e, "Failed to persist ping change");
-            "Konnte Pings nicht speichern FDM".to_string()
+            (
+                ReplyEmoteCategory::Failure,
+                "Konnte Pings nicht speichern".to_string(),
+            )
         }
-    }
+    };
+    error_reply(settings, category, text)
 }
 
 #[derive(Clone, Copy)]
@@ -143,7 +172,12 @@ where
         if let Some(op) = admin_op {
             let hidden_admins = self.settings.load();
             if !is_admin(&ctx.privmsg, &hidden_admins.twitch.hidden_admins) {
-                ctx.sender.reply(&ctx.privmsg, ADMIN_DENIED_MSG).await;
+                ctx.sender
+                    .reply(
+                        &ctx.privmsg,
+                        error_reply(&self.settings, ReplyEmoteCategory::Denied, ADMIN_DENIED_MSG),
+                    )
+                    .await;
                 return Ok(());
             }
             return match op {
@@ -161,7 +195,11 @@ where
                 ctx.sender
                     .reply(
                         &ctx.privmsg,
-                        "Nutze: join, leave, list (oder create, delete, edit, add, remove als Mod)",
+                        error_reply(
+                            &self.settings,
+                            ReplyEmoteCategory::Invalid,
+                            "Nutze: join, leave, list (oder create, delete, edit, add, remove als Mod)",
+                        ),
                     )
                     .await;
                 Ok(())
@@ -178,7 +216,14 @@ impl PingAdminCommand {
     {
         if ctx.args.len() < 3 {
             ctx.sender
-                .reply(&ctx.privmsg, "Nutze: !p create <name> <template>")
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Invalid,
+                        "Nutze: !p create <name> <template>",
+                    ),
+                )
                 .await;
             return Ok(());
         }
@@ -200,7 +245,9 @@ impl PingAdminCommand {
                     .await;
             }
             Err(e) => {
-                ctx.sender.reply(&ctx.privmsg, chat_error(&e)).await;
+                ctx.sender
+                    .reply(&ctx.privmsg, chat_error(&self.settings, &e))
+                    .await;
             }
         }
         Ok(())
@@ -215,7 +262,14 @@ impl PingAdminCommand {
             Some(n) => normalize_ping_name(n),
             None => {
                 ctx.sender
-                    .reply(&ctx.privmsg, "Nutze: !p delete <name>")
+                    .reply(
+                        &ctx.privmsg,
+                        error_reply(
+                            &self.settings,
+                            ReplyEmoteCategory::Invalid,
+                            "Nutze: !p delete <name>",
+                        ),
+                    )
                     .await;
                 return Ok(());
             }
@@ -227,7 +281,9 @@ impl PingAdminCommand {
                     .await;
             }
             Err(e) => {
-                ctx.sender.reply(&ctx.privmsg, chat_error(&e)).await;
+                ctx.sender
+                    .reply(&ctx.privmsg, chat_error(&self.settings, &e))
+                    .await;
             }
         }
         Ok(())
@@ -240,7 +296,14 @@ impl PingAdminCommand {
     {
         if ctx.args.len() < 3 {
             ctx.sender
-                .reply(&ctx.privmsg, "Nutze: !p edit <name> <template>")
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Invalid,
+                        "Nutze: !p edit <name> <template>",
+                    ),
+                )
                 .await;
             return Ok(());
         }
@@ -253,7 +316,9 @@ impl PingAdminCommand {
                     .await;
             }
             Err(e) => {
-                ctx.sender.reply(&ctx.privmsg, chat_error(&e)).await;
+                ctx.sender
+                    .reply(&ctx.privmsg, chat_error(&self.settings, &e))
+                    .await;
             }
         }
         Ok(())
@@ -268,7 +333,11 @@ impl PingAdminCommand {
             ctx.sender
                 .reply(
                     &ctx.privmsg,
-                    format!("Nutze: !p {} <name> <user>", op.as_str()),
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Invalid,
+                        format!("Nutze: !p {} <name> <user>", op.as_str()),
+                    ),
                 )
                 .await;
             return Ok(());
@@ -288,7 +357,9 @@ impl PingAdminCommand {
                 ctx.sender.reply(&ctx.privmsg, msg).await;
             }
             Err(e) => {
-                ctx.sender.reply(&ctx.privmsg, chat_error(&e)).await;
+                ctx.sender
+                    .reply(&ctx.privmsg, chat_error(&self.settings, &e))
+                    .await;
             }
         }
         Ok(())
@@ -303,7 +374,14 @@ impl PingAdminCommand {
             Some(n) => normalize_ping_name(n),
             None => {
                 ctx.sender
-                    .reply(&ctx.privmsg, format!("Nutze: !p {} <name>", op.as_str()))
+                    .reply(
+                        &ctx.privmsg,
+                        error_reply(
+                            &self.settings,
+                            ReplyEmoteCategory::Invalid,
+                            format!("Nutze: !p {} <name>", op.as_str()),
+                        ),
+                    )
                     .await;
                 return Ok(());
             }
@@ -312,13 +390,7 @@ impl PingAdminCommand {
         if let Err(remaining) = self.membership_cooldown.try_acquire(user).await {
             debug!(user = %user, remaining_secs = remaining.as_secs(), "!p {} on cooldown", op.as_str());
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&self.settings, remaining))
                 .await;
             return Ok(());
         }
@@ -343,12 +415,14 @@ impl PingAdminCommand {
             Err(e) => {
                 let msg = match (op, &e) {
                     (SelfOp::Join, PingError::AlreadyMember { .. }) => {
-                        "Bist du schon FDM".to_string()
+                        error_reply(&self.settings, ReplyEmoteCategory::Invalid, "Bist du schon")
                     }
-                    (SelfOp::Leave, PingError::NotMember { .. }) => {
-                        "Bist du nicht drin FDM".to_string()
-                    }
-                    _ => chat_error(&e),
+                    (SelfOp::Leave, PingError::NotMember { .. }) => error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Invalid,
+                        "Bist du nicht drin",
+                    ),
+                    _ => chat_error(&self.settings, &e),
                 };
                 ctx.sender.reply(&ctx.privmsg, msg).await;
             }

@@ -781,7 +781,7 @@ async fn renaming_the_spoiler_profile_rewrites_spoiler_pointer() {
         "a",
     ))
     .await;
-    point_spoiler_at(&state, "dec").await;
+    Box::pin(point_spoiler_at(&state, "dec")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -811,7 +811,7 @@ async fn delete_refuses_the_spoiler_profile() {
         "a",
     ))
     .await;
-    point_spoiler_at(&state, "dec").await;
+    Box::pin(point_spoiler_at(&state, "dec")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!("_csrf={}", urlencoding::encode(&csrf));
@@ -1266,7 +1266,7 @@ async fn cards_show_assignment_links_and_name_delete_blockers() {
         )
         .await
         .expect("assign recap");
-    point_spoiler_at(&state, "classifier").await;
+    Box::pin(point_spoiler_at(&state, "classifier")).await;
     let (sid, cc, _csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let req = Request::builder()

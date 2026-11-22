@@ -66,6 +66,7 @@ where
         crate::aviation::up_command(
             &ctx.privmsg,
             &ctx.sender,
+            &ctx.settings,
             client,
             &input,
             &self.cooldown,

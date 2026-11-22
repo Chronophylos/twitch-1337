@@ -23,6 +23,7 @@ pub mod ping_admin;
 pub mod ping_trigger;
 pub mod pw;
 pub mod registry;
+pub mod reply_emotes;
 pub mod servers;
 pub mod spoiler;
 pub mod suspend;
@@ -39,7 +40,7 @@ pub use registry::{CommandEntry, CommandId, CommandRegistry, ExecutionClass, Reg
 
 /// German rejection reply used by admin-gated commands when the sender
 /// lacks the required badge or id.
-pub const ADMIN_DENIED_MSG: &str = "Das darfst du nicht FDM";
+pub const ADMIN_DENIED_MSG: &str = "Das darfst du nicht";
 
 /// Per-user cooldown duration for `!spoiler`.
 pub fn spoiler_cooldown_duration(s: &crate::settings::Settings) -> Duration {

@@ -16,6 +16,7 @@ use crate::{
         self, CommandAdmissionError, CommandAdmissionSender, CommandCancellation, CommandEntry,
         CommandId, CommandInvocation, CommandRegistry, ExecutionClass,
     },
+    settings::SettingsHandle,
     suspend::SuspensionManager,
     twitch::{ChatSender, echo::EchoGuard, handlers::Inbound, mouth::Agent},
 };
@@ -87,6 +88,7 @@ where
         services.suspension.clone(),
         services.echo.clone(),
         sender,
+        services.settings.clone(),
         registry,
         admission,
         cancellation,
@@ -180,6 +182,7 @@ where
     entry: &'a CommandEntry<T, L>,
     privmsg: twitch_irc::message::PrivmsgMessage,
     sender: Arc<ChatSender<T, L>>,
+    settings: &'a SettingsHandle,
     admission: &'a CommandAdmissionSender<T, L>,
     trigger: String,
     args: Vec<String>,
@@ -197,6 +200,7 @@ where
         entry,
         privmsg,
         sender,
+        settings,
         admission,
         trigger,
         args,
@@ -237,6 +241,7 @@ where
         command_id,
         privmsg,
         sender,
+        settings.clone(),
         trigger.clone(),
         args,
         cancellation.clone(),
@@ -256,6 +261,7 @@ where
                 // `execute` consumes the context; keep what the fallback reply needs.
                 let reply_privmsg = context.privmsg.clone();
                 let reply_sender = context.sender.clone();
+                let reply_settings = context.settings.clone();
                 if let Err(e) = command.execute(context).await {
                     if e.downcast_ref::<commands::CommandCancelled>().is_some() {
                         debug!(command = %trigger, "Inline command cancelled");
@@ -270,6 +276,7 @@ where
                         commands::execution::reply_command_failure(
                             &reply_sender,
                             &reply_privmsg,
+                            &reply_settings,
                             cancellation,
                         )
                         .await;
@@ -307,6 +314,7 @@ pub(crate) async fn run_command_dispatcher<T, L>(
     suspension_manager: Arc<SuspensionManager>,
     echo: Arc<EchoGuard>,
     sender: Arc<ChatSender<T, L>>,
+    settings: SettingsHandle,
     registry: Arc<CommandRegistry<T, L>>,
     admission: CommandAdmissionSender<T, L>,
     cancellation: CommandCancellation,
@@ -381,6 +389,7 @@ where
                         entry,
                         privmsg: privmsg.clone(),
                         sender: sender.clone(),
+                        settings: &settings,
                         admission: &admission,
                         trigger: inv.trigger.to_owned(),
                         args: inv.args.into_iter().map(str::to_owned).collect(),
@@ -405,6 +414,7 @@ where
                         entry,
                         privmsg: privmsg.clone(),
                         sender: sender.clone(),
+                        settings: &settings,
                         admission: &admission,
                         trigger: inv.trigger.to_owned(),
                         args: inv.args.into_iter().map(str::to_owned).collect(),
@@ -451,6 +461,7 @@ where
                     entry,
                     privmsg: privmsg.clone(),
                     sender: sender.clone(),
+                    settings: &settings,
                     admission: &admission,
                     trigger: trigger.to_owned(),
                     args: rest.iter().map(|arg| (*arg).to_owned()).collect(),
@@ -760,6 +771,7 @@ mod trace_tests {
             Arc::new(SuspensionManager::new()),
             Arc::new(EchoGuard::disabled()),
             chat_sender(),
+            crate::settings::test_handle(),
             registry,
             admission,
             cancellation,

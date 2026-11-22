@@ -9,12 +9,16 @@ use tracing::{debug, error};
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::ai::content::client::fetch_client;
-use crate::cooldown::{PerUserCooldown, format_cooldown_remaining};
+use crate::cooldown::PerUserCooldown;
 use crate::llm_factory::LlmRegistry;
 use crate::settings::{SettingsHandle, spoiler::is_valid_game_name};
 use crate::spoiler::{self, Outcome, url::find_url, verdict::render};
 
-use super::{Command, CommandContext, ExecutionClass, spoiler_cooldown_duration};
+use super::{
+    Command, CommandContext, ExecutionClass,
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
+    spoiler_cooldown_duration,
+};
 
 const USAGE: &str = "Nutzung: !spoiler <link> [spiel]";
 const BAD_GAME: &str = "ungültiger Spielname";
@@ -104,7 +108,12 @@ where
             .as_ref()
             .map(|p| p.message_text.as_str());
         let Some((url, game_words)) = target(&ctx.args, parent) else {
-            ctx.sender.reply(&ctx.privmsg, USAGE).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(&self.settings, ReplyEmoteCategory::Invalid, USAGE),
+                )
+                .await;
             return Ok(());
         };
 
@@ -115,13 +124,27 @@ where
             game_words.join(" ")
         };
         if !is_valid_game_name(&game) {
-            ctx.sender.reply(&ctx.privmsg, BAD_GAME).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(&self.settings, ReplyEmoteCategory::Invalid, BAD_GAME),
+                )
+                .await;
             return Ok(());
         }
         let game = game.trim();
 
         let Some(prepared) = spoiler::prepare(&self.registry, &settings) else {
-            ctx.sender.reply(&ctx.privmsg, NOT_CONFIGURED).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(
+                        &self.settings,
+                        ReplyEmoteCategory::Unavailable,
+                        NOT_CONFIGURED,
+                    ),
+                )
+                .await;
             return Ok(());
         };
 
@@ -130,19 +153,13 @@ where
         if let Err(remaining) = self.cooldown.try_acquire(user).await {
             debug!(user = %user, remaining_secs = remaining.as_secs(), "Spoiler command on cooldown");
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&self.settings, remaining))
                 .await;
             return Ok(());
         }
 
         let budget = prepared.overall_timeout();
-        let outcome = match tokio::time::timeout(
+        let (outcome, timed_out) = match tokio::time::timeout(
             budget,
             spoiler::check(
                 &self.http,
@@ -155,19 +172,29 @@ where
         )
         .await
         {
-            Ok(outcome) => outcome,
+            Ok(outcome) => (outcome, false),
             Err(_) => {
                 // The fetch steps have their own shorter budgets, so an outer
                 // elapse almost always means the decision call hung.
                 error!(budget_secs = budget.as_secs(), "spoiler check timed out");
-                Outcome::Broken
+                (Outcome::Broken, true)
             }
         };
 
         let line = match &outcome {
             Outcome::Verdict(v) => render(v, game),
-            Outcome::Unreadable => UNREADABLE.to_string(),
-            Outcome::Broken => BROKEN.to_string(),
+            Outcome::Unreadable => {
+                error_reply(&self.settings, ReplyEmoteCategory::Invalid, UNREADABLE)
+            }
+            Outcome::Broken => error_reply(
+                &self.settings,
+                if timed_out {
+                    ReplyEmoteCategory::Timeout
+                } else {
+                    ReplyEmoteCategory::Failure
+                },
+                BROKEN,
+            ),
         };
         ctx.cancellation.check()?;
         ctx.sender.reply(&ctx.privmsg, line).await;

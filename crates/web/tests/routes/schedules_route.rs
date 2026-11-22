@@ -263,7 +263,7 @@ async fn add_calendar_schedule_with_single_weekday() {
 async fn edit_schedule_renames() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(&state, vec![interval_schedule("old", "hi")]).await;
+    Box::pin(seed_schedules(&state, vec![interval_schedule("old", "hi")])).await;
     let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
     let app = build_router(state.clone());
 
@@ -286,10 +286,10 @@ async fn edit_schedule_renames() {
 async fn edit_duplicate_name_returns_error_without_persisting() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(
+    Box::pin(seed_schedules(
         &state,
         vec![interval_schedule("a", "hi"), interval_schedule("b", "hi")],
-    )
+    ))
     .await;
     let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
     let app = build_router(state.clone());
@@ -319,7 +319,11 @@ async fn edit_duplicate_name_returns_error_without_persisting() {
 async fn create_duplicate_name_restores_form_without_phantom_card() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(&state, vec![interval_schedule("dup", "original")]).await;
+    Box::pin(seed_schedules(
+        &state,
+        vec![interval_schedule("dup", "original")],
+    ))
+    .await;
     let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
     let app = build_router(state.clone());
 
@@ -368,7 +372,7 @@ async fn create_duplicate_name_restores_form_without_phantom_card() {
 async fn delete_schedule_removes_row() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(&state, vec![interval_schedule("gone", "x")]).await;
+    Box::pin(seed_schedules(&state, vec![interval_schedule("gone", "x")])).await;
     let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
     let app = build_router(state.clone());
 
@@ -414,13 +418,13 @@ fn card_post(
 async fn toggle_via_htmx_returns_card_and_oob_stats() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(
+    Box::pin(seed_schedules(
         &state,
         vec![
             interval_schedule("flip", "x"),
             interval_schedule("other", "y"),
         ],
-    )
+    ))
     .await;
     let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
     let res = build_router(state.clone())
@@ -462,7 +466,7 @@ async fn toggle_via_htmx_returns_card_and_oob_stats() {
 async fn toggle_without_htmx_redirects() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(&state, vec![interval_schedule("flip", "x")]).await;
+    Box::pin(seed_schedules(&state, vec![interval_schedule("flip", "x")])).await;
     let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
     let res = build_router(state.clone())
         .oneshot(card_post(
@@ -485,7 +489,7 @@ async fn toggle_without_htmx_redirects() {
 async fn delete_via_htmx_returns_only_oob_stats() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(&state, vec![interval_schedule("gone", "x")]).await;
+    Box::pin(seed_schedules(&state, vec![interval_schedule("gone", "x")])).await;
     let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
     let res = build_router(state.clone())
         .oneshot(card_post(
@@ -520,7 +524,7 @@ async fn delete_via_htmx_returns_only_oob_stats() {
 async fn list_wires_cards_for_htmx() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(&state, vec![interval_schedule("flip", "x")]).await;
+    Box::pin(seed_schedules(&state, vec![interval_schedule("flip", "x")])).await;
     let (sid, csrf_cookie, _bare) = insert_session(&state, "999", "mod");
     let req = Request::builder()
         .uri("/schedules")
@@ -541,13 +545,13 @@ async fn list_wires_cards_for_htmx() {
 async fn edit_validation_failure_reopens_form_with_new_name() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(
+    Box::pin(seed_schedules(
         &state,
         vec![
             interval_schedule("keep", "hi"),
             interval_schedule("b", "hi"),
         ],
-    )
+    ))
     .await;
     let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
     let app = build_router(state.clone());
@@ -582,10 +586,10 @@ async fn edit_form_action_round_trips_names_needing_encoding() {
     install_crypto();
     let name = "grüße;<x>";
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_schedules(
+    Box::pin(seed_schedules(
         &state,
         vec![interval_schedule(name, "hi"), interval_schedule("a", "hi")],
-    )
+    ))
     .await;
     let (sid, csrf_cookie, bare_csrf) = insert_session(&state, "999", "mod");
     let app = build_router(state.clone());

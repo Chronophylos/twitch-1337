@@ -27,12 +27,9 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 use super::{
     Command, CommandContext, ExecutionClass, bash_cooldown_duration,
     execution::{CommandCancelled, UserKey},
+    reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
 };
-use crate::{
-    cooldown::{PerUserCooldown, format_cooldown_remaining},
-    settings::SettingsHandle,
-    twitch::handlers::tracker_1337::one_of,
-};
+use crate::{cooldown::PerUserCooldown, settings::SettingsHandle};
 
 /// Ingress buffer for one script. Anything longer is rejected by Bashkit's
 /// own input check, which maps onto the resource-limit reply. `run_bash`
@@ -53,11 +50,6 @@ const SANDBOX_HOME: &str = "/home/unpaid-intern";
 
 const USAGE: &str = "Nutzung: !bash <script>";
 const BUSY: &str = "zu viel zu tun";
-
-const SYNTAX_EMOTES: [&str; 3] = ["4Head", "Keepo", "LUL"];
-const TIMEOUT_EMOTES: [&str; 3] = ["Waiting", "FeelsLateMan", "modCheck"];
-const RESOURCE_EMOTES: [&str; 3] = ["Bonk", "NOPE", "WICKED"];
-const NONZERO_EXIT_EMOTES: [&str; 3] = ["FDM", "NotLikeThis", "monkaS"];
 
 /// The one interpreter semaphore every Bashkit run takes a permit from:
 /// `!bash` and Aurora's `run_bash` tool alike. Sized once from
@@ -195,7 +187,7 @@ fn skip_leading_mentions(text: &str) -> &str {
 
 /// One ordinary chat line for a completed run: stdout when it says anything,
 /// the exit code otherwise.
-fn reply_for(output: &ExecResult) -> String {
+fn reply_for(output: &ExecResult, settings: &SettingsHandle) -> String {
     let stdout = output.stdout.text_lossy();
     if !stdout.trim().is_empty() {
         return stdout.into_owned();
@@ -203,7 +195,11 @@ fn reply_for(output: &ExecResult) -> String {
     if output.exit_code == 0 {
         return "exit 0".to_owned();
     }
-    format!("exit {} {}", output.exit_code, one_of(&NONZERO_EXIT_EMOTES))
+    error_reply(
+        settings,
+        ReplyEmoteCategory::Failure,
+        format_args!("exit {}", output.exit_code),
+    )
 }
 
 /// Sandbox-level class of an interpreter error. `!bash` turns it into chat
@@ -242,19 +238,15 @@ enum Failure {
     Unexpected,
 }
 
-fn classify(error: &BashkitError) -> Failure {
-    match failure_kind(error) {
-        FailureKind::Syntax => Failure::Reply(format!("Syntaxfehler {}", one_of(&SYNTAX_EMOTES))),
-        FailureKind::Timeout => {
-            Failure::Reply(format!("Zeitlimit erreicht {}", one_of(&TIMEOUT_EMOTES)))
-        }
-        FailureKind::ResourceLimit => Failure::Reply(format!(
-            "Ressourcenlimit erreicht {}",
-            one_of(&RESOURCE_EMOTES)
-        )),
-        FailureKind::Cancelled => Failure::Cancelled,
-        FailureKind::Unexpected => Failure::Unexpected,
-    }
+fn classify(error: &BashkitError, settings: &SettingsHandle) -> Failure {
+    let (category, text) = match failure_kind(error) {
+        FailureKind::Syntax => (ReplyEmoteCategory::Invalid, "Syntaxfehler"),
+        FailureKind::Timeout => (ReplyEmoteCategory::Timeout, "Zeitlimit erreicht"),
+        FailureKind::ResourceLimit => (ReplyEmoteCategory::Limit, "Ressourcenlimit erreicht"),
+        FailureKind::Cancelled => return Failure::Cancelled,
+        FailureKind::Unexpected => return Failure::Unexpected,
+    };
+    Failure::Reply(error_reply(settings, category, text))
 }
 
 #[async_trait]
@@ -287,7 +279,12 @@ where
         ctx.cancellation.check()?;
         let script = script_of(&ctx);
         if script.is_empty() {
-            ctx.sender.reply(&ctx.privmsg, USAGE).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(&self.settings, ReplyEmoteCategory::Invalid, USAGE),
+                )
+                .await;
             return Ok(());
         }
 
@@ -296,22 +293,26 @@ where
         // the same user, and an active cooldown all answer immediately. Only
         // a run that reaches the interpreter is charged.
         let Ok(permit) = self.permits.clone().try_acquire_owned() else {
-            ctx.sender.reply(&ctx.privmsg, BUSY).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(&self.settings, ReplyEmoteCategory::Limit, BUSY),
+                )
+                .await;
             return Ok(());
         };
         let Some(active_user) = self.claim_user(&ctx.user_key) else {
-            ctx.sender.reply(&ctx.privmsg, BUSY).await;
+            ctx.sender
+                .reply(
+                    &ctx.privmsg,
+                    error_reply(&self.settings, ReplyEmoteCategory::Limit, BUSY),
+                )
+                .await;
             return Ok(());
         };
         if let Err(remaining) = self.cooldown.try_acquire(&ctx.user_key.to_string()).await {
             ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    format!(
-                        "Bitte warte noch {} Waiting",
-                        format_cooldown_remaining(remaining)
-                    ),
-                )
+                .reply(&ctx.privmsg, cooldown_reply(&self.settings, remaining))
                 .await;
             return Ok(());
         }
@@ -337,12 +338,14 @@ where
         match result {
             Ok(output) => {
                 ctx.cancellation.check()?;
-                ctx.sender.reply(&ctx.privmsg, reply_for(&output)).await;
+                ctx.sender
+                    .reply(&ctx.privmsg, reply_for(&output, &self.settings))
+                    .await;
                 Ok(())
             }
             Err(error) => {
                 ctx.cancellation.check()?;
-                match classify(&error) {
+                match classify(&error, &self.settings) {
                     Failure::Reply(reply) => {
                         ctx.sender.reply(&ctx.privmsg, reply).await;
                         Ok(())
