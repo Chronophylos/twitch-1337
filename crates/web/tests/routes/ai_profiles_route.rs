@@ -856,6 +856,99 @@ async fn test_connection_sends_openrouter_credentials_and_advanced_options() {
     assert_eq!(state.settings.load().ai.profiles.len(), 1);
 }
 
+fn profile_card<'a>(html: &'a str, name: &str) -> &'a str {
+    let title = format!("card-title\">{name}</span>");
+    let card = html
+        .split("<article")
+        .find(|part| part.contains(&title))
+        .unwrap_or_else(|| panic!("{name} profile card missing: {html}"));
+    card.split_once("</article>")
+        .map_or(card, |(card, _)| card)
+}
+
+#[tokio::test]
+async fn cards_label_metadata_and_warn_about_missing_models() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    let mut chat = profile("chat");
+    chat.base_url = Some("https://example.com/v1".into());
+    chat.reasoning_effort = Some("high".into());
+    chat.service_tier = Some("flex".into());
+    let mut empty = profile("empty");
+    empty.model.clear();
+    empty.key = None;
+    let mut whitespace = profile("whitespace");
+    whitespace.model = " \t ".into();
+    Box::pin(seed_profiles(
+        &state,
+        vec![decision("decision"), chat, empty, whitespace],
+        "chat",
+    ))
+    .await;
+    let (sid, cc, _csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let req = Request::builder()
+        .uri("/ai-profiles")
+        .header(header::COOKIE, cookie_header(&sid, &cc))
+        .body(Body::empty())
+        .unwrap();
+    let html = body_string(build_router(state).oneshot(req).await.unwrap()).await;
+
+    let chat = profile_card(&html, "chat");
+    assert!(chat.contains(">Chat</span>"), "missing Chat kind: {chat}");
+    for label in [
+        "Kind",
+        "Provider",
+        "Model",
+        "Base URL",
+        "Key name",
+        "Timeout",
+        "Reasoning effort",
+        "Service tier",
+    ] {
+        assert!(chat.contains(label), "missing {label} label: {chat}");
+    }
+    for value in [
+        "OpenRouter",
+        "some-model",
+        "https://example.com/v1",
+        "30 seconds",
+        "high",
+        "flex",
+    ] {
+        assert!(chat.contains(value), "missing {value} value: {chat}");
+    }
+
+    let decision = profile_card(&html, "decision");
+    assert!(
+        decision.contains(">Decision</span>"),
+        "missing Decision kind: {decision}"
+    );
+    for absent in ["Base URL", "Reasoning effort", "Service tier"] {
+        assert!(
+            !decision.contains(absent),
+            "absent {absent} option must not render: {decision}"
+        );
+    }
+
+    for name in ["empty", "whitespace"] {
+        let missing = profile_card(&html, name);
+        assert!(
+            missing.contains("No model configured"),
+            "{name} model needs a visible warning: {missing}"
+        );
+        assert!(
+            !missing.contains("<code"),
+            "{name} model must not render a value element: {missing}"
+        );
+    }
+    let empty = profile_card(&html, "empty");
+    assert!(
+        !empty.contains("Key name"),
+        "absent key name must not render: {empty}"
+    );
+}
+
 #[tokio::test]
 async fn cards_show_assignment_links_and_name_delete_blockers() {
     install_crypto();
@@ -909,11 +1002,16 @@ async fn cards_show_assignment_links_and_name_delete_blockers() {
             "missing {label} assignment link: {html}"
         );
     }
-    let unused = html
-        .split("<article")
-        .find(|part| part.contains("card-title\">unused</span>"))
-        .unwrap_or_else(|| panic!("unused profile card missing: {html}"));
+    let unused = profile_card(&html, "unused");
     assert!(unused.contains("Not assigned"), "{unused}");
+    assert!(
+        unused.contains("data-confirm=\"Delete profile “unused”?\""),
+        "unassigned delete confirmation changed: {unused}"
+    );
+    assert!(
+        unused.contains("name=\"_csrf\""),
+        "delete form must retain its CSRF token: {unused}"
+    );
     assert!(
         html.contains("Reassign Aurora, Grok, Dreamer, Media, Recap before deleting"),
         "delete confirmation must name blockers: {html}"

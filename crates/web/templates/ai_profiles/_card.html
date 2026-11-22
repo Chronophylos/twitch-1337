@@ -1,13 +1,60 @@
 {# Single AI profile card. `card: &CardView` and `csrf: &str` must be in scope. #}
-<article class="schedule-card">
+<article class="schedule-card ai-profile-card">
   <header class="card-head">
     <span class="card-title">{{ card.name }}</span>
   </header>
-  <div class="card-badges">
-    <span class="chip trigger">{{ card.provider_label }}</span>
-    {% if card.kind == "decision" %}<span class="chip today">decision</span>{% endif %}
-    <span class="chip window">{{ card.model }}</span>
+  <div class="profile-badges" aria-label="Profile classification">
+    <div class="profile-badge">
+      <span class="field-label">Kind</span>
+      {% if card.kind == "decision" %}
+        <span class="chip trigger">Decision</span>
+      {% else %}
+        <span class="chip window">Chat</span>
+      {% endif %}
+    </div>
+    <div class="profile-badge">
+      <span class="field-label">Provider</span>
+      <span class="chip trigger">{{ card.provider_label }}</span>
+    </div>
   </div>
+  <div class="profile-model">
+    <span class="field-label">Model</span>
+    {% if card.model.trim().is_empty() %}
+      <span class="chip warning">No model configured</span>
+    {% else %}
+      <code class="profile-model-value">{{ card.model }}</code>
+    {% endif %}
+  </div>
+  <dl class="profile-details">
+    {% if let Some(base_url) = card.base_url.as_ref() %}
+      <div class="profile-detail profile-detail-wide">
+        <dt class="field-label">Base URL</dt>
+        <dd>{{ base_url }}</dd>
+      </div>
+    {% endif %}
+    {% if let Some(key) = card.key.as_ref() %}
+      <div class="profile-detail">
+        <dt class="field-label">Key name</dt>
+        <dd>{{ key }}</dd>
+      </div>
+    {% endif %}
+    <div class="profile-detail">
+      <dt class="field-label">Timeout</dt>
+      <dd>{{ card.timeout }} seconds</dd>
+    </div>
+    {% if let Some(effort) = card.reasoning_effort.as_ref() %}
+      <div class="profile-detail">
+        <dt class="field-label">Reasoning effort</dt>
+        <dd>{{ effort }}</dd>
+      </div>
+    {% endif %}
+    {% if let Some(tier) = card.service_tier.as_ref() %}
+      <div class="profile-detail">
+        <dt class="field-label">Service tier</dt>
+        <dd>{{ tier }}</dd>
+      </div>
+    {% endif %}
+  </dl>
   <div class="card-badges" aria-label="Profile assignments">
     {% if card.assignments.is_empty() %}
       <span class="chip last">Not assigned</span>
@@ -18,21 +65,8 @@
       {% endfor %}
     {% endif %}
   </div>
-  <footer class="card-footer">
-    {% if let Some(base_url) = card.base_url.as_ref() %}
-      <span class="chip last">{{ base_url }}</span>
-    {% endif %}
-    {% if let Some(key) = card.key.as_ref() %}
-      <span class="chip last">key: {{ key }}</span>
-    {% endif %}
-    {% if let Some(effort) = card.reasoning_effort.as_ref() %}
-      <span class="chip today">effort: {{ effort }}</span>
-    {% endif %}
-    {% if let Some(tier) = card.service_tier.as_ref() %}
-      <span class="chip today">tier: {{ tier }}</span>
-    {% endif %}
-    <span class="chip today">{{ card.timeout }}s</span>
-    <a class="chip edit-link" href="/ai-profiles?edit={{ card.name|urlencode_strict }}">edit</a>
+  <footer class="card-footer profile-actions">
+    <a class="btn" href="/ai-profiles?edit={{ card.name|urlencode_strict }}">Edit</a>
     <form method="post" action="/ai-profiles/{{ card.name|urlencode_strict }}/delete"
           {% if card.assignments.is_empty() %}
             data-confirm="Delete profile “{{ card.name }}”?"
@@ -40,7 +74,7 @@
             data-confirm="Profile “{{ card.name }}” is assigned. Reassign {{ card.assignment_names }} before deleting. Submit delete anyway?"
           {% endif %}>
       <input type="hidden" name="_csrf" value="{{ csrf }}">
-      <button class="chip danger" type="submit">delete</button>
+      <button class="btn danger" type="submit">Delete</button>
     </form>
   </footer>
 </article>
