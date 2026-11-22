@@ -991,7 +991,7 @@ fn assert_summary_has_no_storage_paths(summary: &str) {
 async fn add_duplicate_name_is_flagged_beside_the_name_input() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -1034,7 +1034,12 @@ async fn add_duplicate_name_is_flagged_beside_the_name_input() {
 async fn edit_invalid_service_tier_is_flagged_beside_the_tier_select() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("other"), profile("a")], "other").await;
+    Box::pin(seed_profiles(
+        &state,
+        vec![profile("other"), profile("a")],
+        "other",
+    ))
+    .await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -1077,7 +1082,7 @@ async fn edit_invalid_service_tier_is_flagged_beside_the_tier_select() {
 async fn edit_rename_onto_an_existing_name_is_flagged_beside_the_name_input() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a"), profile("b")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a"), profile("b")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -1108,7 +1113,7 @@ async fn edit_rename_onto_an_existing_name_is_flagged_beside_the_name_input() {
 async fn add_non_numeric_timeout_is_flagged_beside_the_timeout_input() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -1144,7 +1149,7 @@ async fn add_non_numeric_timeout_is_flagged_beside_the_timeout_input() {
 async fn test_connection_form_error_is_flagged_inline() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
@@ -1173,11 +1178,11 @@ async fn test_connection_form_error_is_flagged_inline() {
 async fn delete_in_use_profile_names_it_in_the_summary() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(
+    Box::pin(seed_profiles(
         &state,
         vec![profile("spare"), profile("busy-profile")],
         "busy-profile",
-    )
+    ))
     .await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
@@ -1208,7 +1213,7 @@ async fn delete_in_use_profile_names_it_in_the_summary() {
 async fn error_for_a_hidden_control_falls_back_to_the_summary() {
     install_crypto();
     let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
-    seed_profiles(&state, vec![profile("a")], "a").await;
+    Box::pin(seed_profiles(&state, vec![profile("a")], "a")).await;
     let (sid, cc, csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let body = format!(
