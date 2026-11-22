@@ -12,22 +12,11 @@ use tracing::{Instrument as _, Span, debug, info, warn};
 use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Transport};
 
 use super::{Command, CommandId, CommandRegistry, ExecutionClass, normalize_username};
+use crate::settings::{CommandExecutionSettings, SettingsHandle};
 use crate::twitch::ChatSender;
 
 /// Capacity of the task-to-task admission handoff.
 pub const COMMAND_ADMISSION_CAPACITY: usize = 256;
-/// Maximum number of accepted background commands executing at once.
-pub const MAX_ACTIVE_BACKGROUND_COMMANDS: usize = 32;
-/// Maximum number of accepted background commands waiting for capacity.
-pub const MAX_PENDING_BACKGROUND_COMMANDS: usize = 128;
-/// Maximum active command count for one stable user key.
-pub const MAX_ACTIVE_COMMANDS_PER_USER: usize = 3;
-/// Maximum queued command count for one stable user key.
-pub const MAX_PENDING_COMMANDS_PER_USER: usize = 8;
-/// Maximum active command count for one canonical command ID.
-pub const MAX_ACTIVE_COMMANDS_PER_COMMAND: usize = 8;
-/// Maximum queued command count for one canonical command ID.
-pub const MAX_PENDING_COMMANDS_PER_COMMAND: usize = 8;
 
 /// Generic capacity response emitted by the execution layer.
 pub const CAPACITY_REJECTION_MESSAGE: &str = "zu viel zu tun";
@@ -374,29 +363,6 @@ where
     )
 }
 
-#[derive(Clone, Copy)]
-struct ExecutionLimits {
-    max_active: usize,
-    max_pending: usize,
-    max_active_per_user: usize,
-    max_pending_per_user: usize,
-    max_active_per_command: usize,
-    max_pending_per_command: usize,
-}
-
-impl Default for ExecutionLimits {
-    fn default() -> Self {
-        Self {
-            max_active: MAX_ACTIVE_BACKGROUND_COMMANDS,
-            max_pending: MAX_PENDING_BACKGROUND_COMMANDS,
-            max_active_per_user: MAX_ACTIVE_COMMANDS_PER_USER,
-            max_pending_per_user: MAX_PENDING_COMMANDS_PER_USER,
-            max_active_per_command: MAX_ACTIVE_COMMANDS_PER_COMMAND,
-            max_pending_per_command: MAX_PENDING_COMMANDS_PER_COMMAND,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Default)]
 struct UserCounters {
     active: usize,
@@ -404,6 +370,11 @@ struct UserCounters {
 }
 
 /// Concrete bounded manager for accepted background command invocations.
+///
+/// Its admission limits are the live `commands.execution` settings: every
+/// admission and start decision reads the current snapshot, and a settings
+/// change triggers a refill so a raised limit starts queued work at once.
+/// Lowering a limit never cancels running work or drops queued work.
 pub struct CommandExecutionManager<T, L>
 where
     T: Transport,
@@ -411,7 +382,7 @@ where
 {
     admission: CommandAdmissionReceiver<T, L>,
     registry: Arc<CommandRegistry<T, L>>,
-    limits: ExecutionLimits,
+    settings: SettingsHandle,
     pending: VecDeque<CommandInvocation<T, L>>,
     users: HashMap<UserKey, UserCounters>,
     active_per_command: HashMap<CommandId, usize>,
@@ -428,26 +399,24 @@ where
     pub fn new(
         admission: CommandAdmissionReceiver<T, L>,
         registry: Arc<CommandRegistry<T, L>>,
-    ) -> Self {
-        Self::with_limits(admission, registry, ExecutionLimits::default())
-    }
-
-    fn with_limits(
-        admission: CommandAdmissionReceiver<T, L>,
-        registry: Arc<CommandRegistry<T, L>>,
-        limits: ExecutionLimits,
+        settings: SettingsHandle,
     ) -> Self {
         Self {
             admission,
             registry,
-            limits,
-            pending: VecDeque::with_capacity(limits.max_pending),
+            settings,
+            pending: VecDeque::new(),
             users: HashMap::new(),
             active_per_command: HashMap::new(),
             recent_login_ids: VecDeque::new(),
             active: 0,
             task_group: CommandTaskGroup::new(),
         }
+    }
+
+    /// Admission limits from the current settings snapshot.
+    fn limits(&self) -> CommandExecutionSettings {
+        self.settings.load().commands.execution.clone()
     }
 
     /// A clonable adapter Candidate 08 can join or abort while this manager is
@@ -462,6 +431,9 @@ where
             return self.fail(ExecutionError::TaskGroupClosed).await;
         }
 
+        // Armed before the first refill, so a dashboard edit committed while
+        // the loop is busy is still seen at the next `select!`.
+        let mut settings_changes = self.settings.subscribe();
         loop {
             if let Err(error) = self.refill_pending() {
                 return self.fail(error).await;
@@ -482,6 +454,16 @@ where
                     if let Err(error) = self.handle_task_group_event(event) {
                         return self.fail(error).await;
                     }
+                }
+                () = settings_changes.next() => {
+                    // The loop top refills against the new snapshot, so a
+                    // raised limit starts queued work without waiting for a
+                    // completion. A lowered one only gates future starts.
+                    debug!(
+                        active = self.active,
+                        pending = self.pending.len(),
+                        "settings changed, re-checking queued command invocations"
+                    );
                 }
                 incoming = self.admission.recv() => {
                     let Some(invocation) = incoming else {
@@ -620,21 +602,23 @@ where
         }
         let command = entry.command().clone();
 
-        if self.can_start(&invocation) {
+        let limits = self.limits();
+        if self.can_start(&invocation, &limits) {
             self.record_identity(&invocation.context);
             self.trace_accepted(&invocation);
             self.start(command, invocation, false)?;
             return Ok(());
         }
 
-        let rejection = if self.pending.len() >= self.limits.max_pending {
+        // Judged against the current limits only: a queue already longer
+        // than a lowered limit keeps its entries, and new admissions are
+        // rejected until it drains below the limit.
+        let rejection = if self.pending.len() >= limits.max_pending {
             Some(CapacityRejection::PendingQueue)
-        } else if self.per_user_pending(&invocation.context.user_key)
-            >= self.limits.max_pending_per_user
+        } else if self.per_user_pending(&invocation.context.user_key) >= limits.max_pending_per_user
         {
             Some(CapacityRejection::UserPending)
-        } else if self.per_command_pending(&invocation.command_id)
-            >= self.limits.max_pending_per_command
+        } else if self.per_command_pending(&invocation.command_id) >= limits.max_pending_per_command
         {
             Some(CapacityRejection::CommandPending)
         } else {
@@ -680,11 +664,12 @@ where
     }
 
     fn refill_pending(&mut self) -> Result<(), ExecutionError> {
-        while self.active < self.limits.max_active {
+        let limits = self.limits();
+        while self.active < limits.max_active {
             let Some(invocation) = self.pending.front() else {
                 break;
             };
-            if !self.can_start(invocation) {
+            if !self.can_start(invocation, &limits) {
                 break;
             }
 
@@ -789,10 +774,14 @@ where
         }
     }
 
-    fn can_start(&self, invocation: &CommandInvocation<T, L>) -> bool {
-        self.active < self.limits.max_active
-            && self.per_user_active(&invocation.context.user_key) < self.limits.max_active_per_user
-            && self.per_command_active(&invocation.command_id) < self.limits.max_active_per_command
+    fn can_start(
+        &self,
+        invocation: &CommandInvocation<T, L>,
+        limits: &CommandExecutionSettings,
+    ) -> bool {
+        self.active < limits.max_active
+            && self.per_user_active(&invocation.context.user_key) < limits.max_active_per_user
+            && self.per_command_active(&invocation.command_id) < limits.max_active_per_command
     }
 
     fn per_user_active(&self, key: &UserKey) -> usize {
@@ -1492,6 +1481,18 @@ mod tests {
                 .expect("timed out waiting for captured IRC output")
                 .expect("captured IRC output sender closed")
         }
+
+        /// Body of the next captured PRIVMSG, without the duplicate-bypass
+        /// prefix.
+        async fn next_reply(&mut self) -> String {
+            loop {
+                let line = self.next_output().await;
+                if line.contains(" PRIVMSG #test :") {
+                    let body = line.rsplit_once(" :").expect("PRIVMSG body").1;
+                    return body.strip_prefix(". ").unwrap_or(body).to_owned();
+                }
+            }
+        }
     }
 
     fn privmsg(login: &str, id: &str) -> PrivmsgMessage {
@@ -1709,7 +1710,17 @@ mod tests {
 
     fn make_manager(
         registry: Arc<CommandRegistry<TestTransport, TestLogin>>,
-        limits: ExecutionLimits,
+        limits: CommandExecutionSettings,
+    ) -> (
+        CommandAdmissionSender<TestTransport, TestLogin>,
+        CommandExecutionManager<TestTransport, TestLogin>,
+    ) {
+        make_manager_with_settings(registry, limits_handle(limits))
+    }
+
+    fn make_manager_with_settings(
+        registry: Arc<CommandRegistry<TestTransport, TestLogin>>,
+        settings: SettingsHandle,
     ) -> (
         CommandAdmissionSender<TestTransport, TestLogin>,
         CommandExecutionManager<TestTransport, TestLogin>,
@@ -1717,8 +1728,27 @@ mod tests {
         let (sender, receiver) = command_admission_channel_with_capacity(8);
         (
             sender,
-            CommandExecutionManager::with_limits(receiver, registry, limits),
+            CommandExecutionManager::new(receiver, registry, settings),
         )
+    }
+
+    fn settings_with(limits: CommandExecutionSettings) -> crate::settings::Settings {
+        let mut settings = crate::settings::Settings::compiled_defaults();
+        settings.commands.execution = limits;
+        settings
+    }
+
+    /// Ad-hoc handle whose snapshot carries `limits`; nothing notifies it.
+    fn limits_handle(limits: CommandExecutionSettings) -> SettingsHandle {
+        SettingsHandle::from_settings(settings_with(limits))
+    }
+
+    /// Swap the live limits the way a dashboard commit does, without
+    /// notifying subscribers.
+    fn set_limits(handle: &SettingsHandle, limits: CommandExecutionSettings) {
+        let mut settings = (*handle.load()).clone();
+        settings.commands.execution = limits;
+        handle.store(Arc::new(settings));
     }
 
     async fn wait_started(notify: &Notify) {
@@ -1804,7 +1834,7 @@ mod tests {
             Arc::new(Notify::new()),
             Some(command_gate),
         );
-        let limits = ExecutionLimits {
+        let limits = CommandExecutionSettings {
             max_active: 1,
             max_pending: 0,
             max_active_per_user: 1,
@@ -1851,7 +1881,7 @@ mod tests {
             Arc::new(Notify::new()),
             Some(command_gate),
         );
-        let limits = ExecutionLimits {
+        let limits = CommandExecutionSettings {
             max_active: 1,
             max_pending: 4,
             max_active_per_user: 3,
@@ -1900,7 +1930,7 @@ mod tests {
             notify.clone(),
             Some(gate.clone()),
         );
-        let limits = ExecutionLimits {
+        let limits = CommandExecutionSettings {
             max_active: 1,
             max_pending: 2,
             max_active_per_user: 10,
@@ -1951,7 +1981,7 @@ mod tests {
             notify.clone(),
             Some(gate.clone()),
         );
-        let limits = ExecutionLimits {
+        let limits = CommandExecutionSettings {
             max_active: 1,
             max_pending: 1,
             max_active_per_user: 10,
@@ -1997,7 +2027,7 @@ mod tests {
             notify.clone(),
             Some(gate.clone()),
         );
-        let limits = ExecutionLimits {
+        let limits = CommandExecutionSettings {
             max_active: 4,
             max_pending: 4,
             max_active_per_user: 1,
@@ -2048,6 +2078,365 @@ mod tests {
         assert_eq!(manager.active, 0);
     }
 
+    /// `max_pending = 0` disables the queue: an invocation that cannot start
+    /// is answered with the capacity reply at once and leaves no trace.
+    #[tokio::test]
+    async fn zero_pending_rejects_immediately_and_queues_nothing() {
+        let mut test_sender = test_sender();
+        let started = Arc::new(AsyncMutex::new(Vec::new()));
+        let notify = Arc::new(Notify::new());
+        let gate = Arc::new(Semaphore::new(0));
+        let command = TestCommand::background(
+            "ai",
+            "!ai",
+            started.clone(),
+            notify.clone(),
+            Some(gate.clone()),
+        );
+        let limits = CommandExecutionSettings {
+            max_active: 1,
+            max_pending: 0,
+            max_active_per_user: 1,
+            max_pending_per_user: 0,
+            max_active_per_command: 1,
+            max_pending_per_command: 0,
+        };
+        let (_sender, mut manager) = make_manager(registry(vec![command]), limits);
+        manager
+            .admit(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "one",
+                "active",
+            ))
+            .await
+            .unwrap();
+        wait_started(&notify).await;
+        manager
+            .admit(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "two",
+                "rejected",
+            ))
+            .await
+            .unwrap();
+        assert!(manager.pending.is_empty());
+        let rejected_user = UserKey::TwitchId("id-two".to_owned());
+        assert!(!manager.users.contains_key(&rejected_user));
+        assert_eq!(test_sender.next_reply().await, CAPACITY_REJECTION_MESSAGE);
+
+        gate.add_permits(1);
+        let completion = next_command_completion(&manager.task_group).await;
+        manager.finish(completion).unwrap();
+        manager.refill_pending().unwrap();
+        assert_eq!(manager.active, 0);
+        assert_eq!(*started.lock().await, ["active"]);
+    }
+
+    /// A settings change wakes the running manager, which refills against
+    /// the raised limit while the active invocation is still running.
+    #[tokio::test]
+    async fn raising_active_limit_starts_queued_work_without_a_completion() {
+        let mut test_sender = test_sender();
+        let started = Arc::new(AsyncMutex::new(Vec::new()));
+        let notify = Arc::new(Notify::new());
+        let gate = Arc::new(Semaphore::new(0));
+        let command = TestCommand::background(
+            "ai",
+            "!ai",
+            started.clone(),
+            notify.clone(),
+            Some(gate.clone()),
+        );
+        let limits = CommandExecutionSettings {
+            max_active: 1,
+            max_pending: 1,
+            max_active_per_user: 1,
+            max_pending_per_user: 1,
+            max_active_per_command: 1,
+            max_pending_per_command: 1,
+        };
+        let changes = Arc::new(Notify::new());
+        let handle = SettingsHandle::with_changes(settings_with(limits.clone()), changes.clone());
+        let (sender, manager) = make_manager_with_settings(registry(vec![command]), handle.clone());
+        let cancellation = CommandCancellation::new();
+        let run = tokio::spawn(manager.run(cancellation.clone()));
+
+        sender
+            .try_admit(invocation(test_sender.sender.clone(), "ai", "one", "first"))
+            .await
+            .unwrap();
+        wait_started(&notify).await;
+        sender
+            .try_admit(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "two",
+                "second",
+            ))
+            .await
+            .unwrap();
+        // The full queue bounces a third invocation; its reply proves the
+        // second one is queued behind the still-running first.
+        sender
+            .try_admit(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "three",
+                "third",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(test_sender.next_reply().await, CAPACITY_REJECTION_MESSAGE);
+        assert_eq!(*started.lock().await, ["first"]);
+
+        set_limits(
+            &handle,
+            CommandExecutionSettings {
+                max_active: 2,
+                max_active_per_command: 2,
+                ..limits
+            },
+        );
+        changes.notify_waiters();
+        wait_started(&notify).await;
+        assert_eq!(*started.lock().await, ["first", "second"]);
+
+        gate.add_permits(2);
+        cancellation.cancel();
+        drop(sender);
+        timeout(Duration::from_secs(1), run)
+            .await
+            .expect("manager did not drain")
+            .unwrap()
+            .unwrap();
+    }
+
+    /// Refill reads the current snapshot, so a raised per-user limit lets
+    /// that user's queued invocation start on the next refill.
+    #[tokio::test]
+    async fn raising_per_user_limit_starts_queued_work_on_refill() {
+        let test_sender = test_sender();
+        let started = Arc::new(AsyncMutex::new(Vec::new()));
+        let notify = Arc::new(Notify::new());
+        let gate = Arc::new(Semaphore::new(0));
+        let command = TestCommand::background(
+            "ai",
+            "!ai",
+            started.clone(),
+            notify.clone(),
+            Some(gate.clone()),
+        );
+        let limits = CommandExecutionSettings {
+            max_active: 4,
+            max_pending: 4,
+            max_active_per_user: 1,
+            max_pending_per_user: 4,
+            max_active_per_command: 4,
+            max_pending_per_command: 4,
+        };
+        let (_sender, mut manager) = make_manager(registry(vec![command]), limits.clone());
+        for trigger in ["first", "second"] {
+            manager
+                .admit(invocation(
+                    test_sender.sender.clone(),
+                    "ai",
+                    "same",
+                    trigger,
+                ))
+                .await
+                .unwrap();
+        }
+        wait_started(&notify).await;
+        assert_eq!(manager.pending.len(), 1);
+
+        set_limits(
+            &manager.settings,
+            CommandExecutionSettings {
+                max_active_per_user: 2,
+                ..limits
+            },
+        );
+        manager.refill_pending().unwrap();
+        wait_started(&notify).await;
+        assert!(manager.pending.is_empty());
+        assert_eq!(manager.active, 2);
+        assert_eq!(*started.lock().await, ["first", "second"]);
+        gate.add_permits(2);
+        manager.task_group.abort_and_join().await.unwrap();
+    }
+
+    /// Lowering `max_active` below the running count cancels nothing; new
+    /// work waits until the count falls below the new limit.
+    #[tokio::test]
+    async fn lowering_active_limit_cancels_nothing_and_gates_new_starts() {
+        let test_sender = test_sender();
+        let started = Arc::new(AsyncMutex::new(Vec::new()));
+        let notify = Arc::new(Notify::new());
+        let gate = Arc::new(Semaphore::new(0));
+        let command = TestCommand::background(
+            "ai",
+            "!ai",
+            started.clone(),
+            notify.clone(),
+            Some(gate.clone()),
+        );
+        let limits = CommandExecutionSettings {
+            max_active: 2,
+            max_pending: 4,
+            max_active_per_user: 2,
+            max_pending_per_user: 4,
+            max_active_per_command: 2,
+            max_pending_per_command: 4,
+        };
+        let (_sender, mut manager) = make_manager(registry(vec![command]), limits.clone());
+        for (user, trigger) in [("one", "first"), ("two", "second")] {
+            manager
+                .admit(invocation(test_sender.sender.clone(), "ai", user, trigger))
+                .await
+                .unwrap();
+            wait_started(&notify).await;
+        }
+        assert_eq!(manager.active, 2);
+
+        set_limits(
+            &manager.settings,
+            CommandExecutionSettings {
+                max_active: 1,
+                max_active_per_user: 1,
+                max_active_per_command: 1,
+                ..limits
+            },
+        );
+        manager.refill_pending().unwrap();
+        assert_eq!(manager.active, 2, "running invocations keep running");
+        assert_eq!(manager.task_group.active_len(), 2);
+
+        manager
+            .admit(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "three",
+                "third",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(manager.pending.len(), 1);
+
+        // One completion brings the count to the new limit, not below it.
+        gate.add_permits(1);
+        let completion = next_command_completion(&manager.task_group).await;
+        manager.finish(completion).unwrap();
+        manager.refill_pending().unwrap();
+        assert_eq!(manager.active, 1);
+        assert_eq!(manager.pending.len(), 1);
+        assert_eq!(*started.lock().await, ["first", "second"]);
+
+        gate.add_permits(1);
+        let completion = next_command_completion(&manager.task_group).await;
+        manager.finish(completion).unwrap();
+        manager.refill_pending().unwrap();
+        wait_started(&notify).await;
+        assert!(manager.pending.is_empty());
+        assert_eq!(*started.lock().await, ["first", "second", "third"]);
+
+        gate.add_permits(1);
+        let completion = next_command_completion(&manager.task_group).await;
+        manager.finish(completion).unwrap();
+        assert_eq!(manager.active, 0);
+        assert!(manager.users.is_empty());
+    }
+
+    /// Lowering `max_pending` below the queue length drops nothing; new
+    /// admissions are rejected until the queue drains below the new limit.
+    #[tokio::test]
+    async fn lowering_pending_limit_keeps_queue_and_rejects_new_admissions() {
+        let mut test_sender = test_sender();
+        let started = Arc::new(AsyncMutex::new(Vec::new()));
+        let notify = Arc::new(Notify::new());
+        let gate = Arc::new(Semaphore::new(0));
+        let command = TestCommand::background(
+            "ai",
+            "!ai",
+            started.clone(),
+            notify.clone(),
+            Some(gate.clone()),
+        );
+        let limits = CommandExecutionSettings {
+            max_active: 1,
+            max_pending: 3,
+            max_active_per_user: 1,
+            max_pending_per_user: 3,
+            max_active_per_command: 1,
+            max_pending_per_command: 3,
+        };
+        let (_sender, mut manager) = make_manager(registry(vec![command]), limits.clone());
+        manager
+            .admit(invocation(test_sender.sender.clone(), "ai", "one", "first"))
+            .await
+            .unwrap();
+        wait_started(&notify).await;
+        for (user, trigger) in [("two", "second"), ("three", "third"), ("four", "fourth")] {
+            manager
+                .admit(invocation(test_sender.sender.clone(), "ai", user, trigger))
+                .await
+                .unwrap();
+        }
+        assert_eq!(manager.pending.len(), 3);
+
+        set_limits(
+            &manager.settings,
+            CommandExecutionSettings {
+                max_pending: 1,
+                max_pending_per_user: 1,
+                max_pending_per_command: 1,
+                ..limits
+            },
+        );
+        manager.refill_pending().unwrap();
+        assert_eq!(
+            manager.pending.len(),
+            3,
+            "queued invocations keep their place"
+        );
+
+        manager
+            .admit(invocation(
+                test_sender.sender.clone(),
+                "ai",
+                "five",
+                "rejected",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(manager.pending.len(), 3);
+        assert_eq!(test_sender.next_reply().await, CAPACITY_REJECTION_MESSAGE);
+
+        // Drain the old queue in FIFO order.
+        for _ in 0..3 {
+            gate.add_permits(1);
+            let completion = next_command_completion(&manager.task_group).await;
+            manager.finish(completion).unwrap();
+            manager.refill_pending().unwrap();
+            wait_started(&notify).await;
+        }
+        assert!(manager.pending.is_empty());
+        assert_eq!(
+            *started.lock().await,
+            ["first", "second", "third", "fourth"]
+        );
+
+        // Below the lowered limit again: the next admission queues.
+        manager
+            .admit(invocation(test_sender.sender.clone(), "ai", "six", "late"))
+            .await
+            .unwrap();
+        assert_eq!(manager.pending.len(), 1);
+        gate.add_permits(2);
+        manager.task_group.abort_and_join().await.unwrap();
+    }
+
     #[tokio::test]
     async fn identity_discrepancy_tracking_is_bounded() {
         let test_sender = test_sender();
@@ -2059,7 +2448,7 @@ mod tests {
                 Arc::new(Notify::new()),
                 None,
             )]),
-            ExecutionLimits::default(),
+            CommandExecutionSettings::default(),
         );
         for index in 0..(MAX_TRACKED_LOGIN_IDS * 2) {
             let invocation = invocation(
@@ -2084,7 +2473,7 @@ mod tests {
                 Arc::new(Notify::new()),
                 None,
             )]),
-            ExecutionLimits::default(),
+            CommandExecutionSettings::default(),
         );
         let invocation = invocation(test_sender.sender.clone(), "ai", "user", "done");
         let command_id = invocation.command_id;
@@ -2120,7 +2509,7 @@ mod tests {
                 Arc::new(Notify::new()),
                 None,
             )]),
-            ExecutionLimits::default(),
+            CommandExecutionSettings::default(),
         );
         let id = CommandId::new("ai").unwrap();
         manager.increment_active(&id, &UserKey::TwitchId("id-actual".to_owned()));
@@ -2150,7 +2539,7 @@ mod tests {
                 TestCommand::background("ai", "!ai", started.clone(), notify.clone(), None)
             };
             let (_sender, mut manager) =
-                make_manager(registry(vec![command]), ExecutionLimits::default());
+                make_manager(registry(vec![command]), CommandExecutionSettings::default());
             manager
                 .admit(invocation(test_sender.sender.clone(), "ai", "user", "done"))
                 .await
@@ -2170,7 +2559,7 @@ mod tests {
         let notify = Arc::new(Notify::new());
         let command = TestCommand::cancelling("ai", "!ai", started, notify);
         let (_sender, mut manager) =
-            make_manager(registry(vec![command]), ExecutionLimits::default());
+            make_manager(registry(vec![command]), CommandExecutionSettings::default());
         let invocation = invocation(test_sender.sender.clone(), "ai", "user", "cancelled");
         invocation.context.cancellation.cancel();
         manager.admit(invocation).await.unwrap();
@@ -2192,7 +2581,7 @@ mod tests {
         let gate = Arc::new(Semaphore::new(0));
         let command =
             TestCommand::background("ai", "!ai", started, notify.clone(), Some(gate.clone()));
-        let limits = ExecutionLimits {
+        let limits = CommandExecutionSettings {
             max_active: 1,
             max_pending: 1,
             max_active_per_user: 10,
@@ -2241,7 +2630,8 @@ mod tests {
             Arc::new(Notify::new()),
             None,
         );
-        let (sender, manager) = make_manager(registry(vec![command]), ExecutionLimits::default());
+        let (sender, manager) =
+            make_manager(registry(vec![command]), CommandExecutionSettings::default());
         let cancellation = CommandCancellation::new();
         let task = tokio::spawn(manager.run(cancellation.clone()));
         drop(sender);
@@ -2257,7 +2647,8 @@ mod tests {
             Arc::new(Notify::new()),
             None,
         );
-        let (sender, manager) = make_manager(registry(vec![command]), ExecutionLimits::default());
+        let (sender, manager) =
+            make_manager(registry(vec![command]), CommandExecutionSettings::default());
         let cancellation = CommandCancellation::new();
         cancellation.cancel();
         drop(_sender_bundle);
@@ -2277,7 +2668,8 @@ mod tests {
             Arc::new(Notify::new()),
             Some(command_gate),
         );
-        let (sender, manager) = make_manager(registry(vec![command]), ExecutionLimits::default());
+        let (sender, manager) =
+            make_manager(registry(vec![command]), CommandExecutionSettings::default());
         let group = manager.task_group();
         sender
             .sender
@@ -2310,7 +2702,7 @@ mod tests {
         let test_sender = test_sender();
         let (sender, manager) = make_manager(
             registry(vec![Arc::new(BlockingPanicCommand)]),
-            ExecutionLimits::default(),
+            CommandExecutionSettings::default(),
         );
         sender
             .sender
@@ -2341,7 +2733,8 @@ mod tests {
             Arc::new(Notify::new()),
             None,
         );
-        let (sender, manager) = make_manager(registry(vec![command]), ExecutionLimits::default());
+        let (sender, manager) =
+            make_manager(registry(vec![command]), CommandExecutionSettings::default());
         sender
             .sender
             .try_send(invocation(
@@ -2363,7 +2756,8 @@ mod tests {
             Arc::new(AsyncMutex::new(Vec::new())),
             Arc::new(Notify::new()),
         );
-        let (sender, manager) = make_manager(registry(vec![command]), ExecutionLimits::default());
+        let (sender, manager) =
+            make_manager(registry(vec![command]), CommandExecutionSettings::default());
         sender
             .sender
             .try_send(invocation(

@@ -19,6 +19,7 @@ pub mod alerts;
 pub mod audit;
 pub mod aviationstack;
 pub mod bash;
+pub mod commands;
 pub mod emote_tracker;
 pub mod knob;
 pub mod link_correction;
@@ -49,6 +50,9 @@ pub use audit::MemoryAuditLog;
 pub use audit::{AuditChange, AuditEntry, AuditError, AuditLog, FileAuditLog};
 pub use aviationstack::{AviationstackOverrides, AviationstackSettings};
 pub use bash::{BashOverrides, BashSettings};
+pub use commands::{
+    CommandExecutionOverrides, CommandExecutionSettings, CommandsOverrides, CommandsSettings,
+};
 pub use emote_tracker::{
     EmoteTrackerOverrides, EmoteTrackerSettings, PotatAttributionOverrides,
     PotatAttributionSettings,
@@ -162,7 +166,7 @@ impl Subscription {
     }
 }
 
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 pub(crate) fn default_schema_version() -> u32 {
     SCHEMA_VERSION
@@ -186,6 +190,8 @@ pub struct Settings {
     pub aviationstack: AviationstackSettings,
     #[knob(nested)]
     pub bash: BashSettings,
+    #[knob(nested)]
+    pub commands: CommandsSettings,
     #[knob(nested)]
     pub suspend: SuspendSettings,
     #[knob(nested)]
@@ -306,6 +312,7 @@ impl Settings {
             twitch: TwitchRuntime::default(),
             aviationstack: AviationstackSettings::default(),
             bash: BashSettings::default(),
+            commands: CommandsSettings::default(),
             suspend: SuspendSettings::default(),
             spoiler: SpoilerSettings::default(),
             emote_tracker: EmoteTrackerSettings::default(),
