@@ -31,6 +31,7 @@ use crate::ai::memory::types::Role;
 use crate::ai::model_catalog::ModelCatalog;
 use crate::ai::recap::RecapHandle;
 use crate::ai::reply::{ReplyLimits, RewordOpts, prepare_agent_reply};
+use crate::ai::viewer_tools::{AuroraToolAvailability, AuroraToolCatalog, ViewerTool};
 use crate::commands::CommandCancellation;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
@@ -169,6 +170,8 @@ pub struct TurnRunner {
     recap: Option<Arc<RecapHandle>>,
     /// Interpreter permits shared with `!bash`.
     bash_permits: Arc<tokio::sync::Semaphore>,
+    /// Availability shared with the public Viewer-Facing Tool catalog.
+    tool_catalog: AuroraToolCatalog,
     /// Per-process nonce stamped into memory fences. Stable across
     /// turns so the memory block is a byte-stable cache prefix; the real
     /// fence-injection guard is `scrub_for_inject`, not nonce freshness.
@@ -177,7 +180,15 @@ pub struct TurnRunner {
 
 impl TurnRunner {
     pub fn new(deps: AiCommandDeps) -> Self {
+        let tool_catalog = deps.aurora_tools.clone();
+        tool_catalog.initialize(AuroraToolAvailability {
+            dhl: deps.dhl.is_some(),
+            web: deps.web.is_some(),
+            emotes: deps.emotes.is_some(),
+            emote_stats: deps.emote_tracker.is_some(),
+        });
         Self {
+            tool_catalog,
             registry: deps.registry,
             settings: deps.settings,
             chat_ctx: deps.chat_ctx,
@@ -486,29 +497,25 @@ impl TurnRunner {
         } else {
             chat_turn_tools()
         };
-        tools.push(crate::ai::doener_tool::doener_tool());
+        tools.push(ViewerTool::DoenerIndex.definition());
         tools.push(crate::ai::commands_tool::list_commands_tool());
         if !grok_alias {
-            tools.push(crate::ai::tarot_tool::tarot_tool());
-            tools.push(crate::ai::flight_tool::plan_flight_tool());
-            tools.push(crate::ai::packages_tool::search_packages_tool());
-            tools.push(crate::ai::network_tool::lookup_network_tool());
-            tools.push(crate::ai::bash_tool::run_bash_tool());
-            if self.dhl.is_some() {
-                tools.push(crate::ai::dhl_tool::track_shipment_tool());
-            }
+            tools.extend(
+                self.tool_catalog
+                    .enabled_tools()
+                    .filter(|tool| tool.is_aurora_only())
+                    .map(ViewerTool::definition),
+            );
         }
-        if self.web.is_some() {
-            tools.extend(content::ai_tools());
-        }
-        if self.emotes.is_some() {
-            tools.push(crate::ai::emote_tool::search_emotes_tool());
-        }
-        // Never registered without the tracker; available to Aurora and Grok
-        // alike, matching search_emotes.
-        if self.emote_tracker.is_some() {
-            tools.push(crate::ai::emote_stats_tool::emote_stats_tool());
-        }
+        // Web and emote tools retain their original position after the
+        // Aurora-only tools. Grok receives the shared ones from the same
+        // availability snapshot, without affecting Aurora's public section.
+        tools.extend(
+            self.tool_catalog
+                .enabled_tools()
+                .filter(|tool| *tool != ViewerTool::DoenerIndex && !tool.is_aurora_only())
+                .map(ViewerTool::definition),
+        );
         let registered_tools: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
         let session_id = crate::ai::session::new_session_id();
         let llm_agent = if grok_alias { "grok" } else { "aurora" };
@@ -1100,6 +1107,7 @@ mod turn_tests {
             )),
             ipinfo: None,
             command_catalog: Default::default(),
+            aurora_tools: Default::default(),
             emote_tracker: None,
             recap: None,
             bash_permits: crate::commands::bash::shared_permits(&settings),

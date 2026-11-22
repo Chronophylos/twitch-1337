@@ -20,3 +20,4 @@ pub mod reply;
 pub mod session;
 pub mod tarot_tool;
 pub mod turn;
+pub mod viewer_tools;

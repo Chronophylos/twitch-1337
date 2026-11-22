@@ -1,5 +1,6 @@
 {#- Public help page. Standalone on purpose: no sidebar, no auth-only links,
-    no scripts. Rendered from the same catalog snapshot as /commands.json. -#}
+    no scripts. Commands and Pings share the /commands.json catalog; Aurora's
+    Viewer-Facing Tools use their separate executable-availability catalog. -#}
 {%- macro list(entries) -%}
 <div class="table commands">
   <div class="thead">
@@ -52,6 +53,33 @@
       <h2 class="sub-title">Pings <span class="count">({{ pings.len() }})</span></h2>
     </div>
     {% call list(pings) %}{% endcall %}
+    {%- endif %}
+
+    {%- if !aurora_tools.is_empty() %}
+    <section id="aurora-tools" aria-labelledby="aurora-tools-title">
+      <div class="page-head sub-head">
+        <div>
+          <h2 class="sub-title" id="aurora-tools-title">Aurora-Werkzeuge <span class="count">({{ aurora_tools.len() }})</span></h2>
+          <p class="page-sub">Diese Fähigkeiten nutzt Aurora auf Anfrage über <code>!ai</code>. Sie sind keine eigenen Chat-Befehle.</p>
+        </div>
+      </div>
+      <div class="table commands">
+        <div class="thead">
+          <div class="th">Werkzeug</div>
+          <div class="th">Beispiel</div>
+          <div class="th">Beschreibung</div>
+        </div>
+        <div class="tbody">
+        {%- for tool in aurora_tools %}
+          <div class="tr aurora-tool">
+            <div class="td" data-label="Werkzeug">{{ tool.display_name }}</div>
+            <div class="td mono" data-label="Beispiel"><code>{{ tool.example }}</code></div>
+            <div class="td" data-label="Beschreibung">{{ tool.description }}</div>
+          </div>
+        {%- endfor %}
+        </div>
+      </div>
+    </section>
     {%- endif %}
   </main>
 </body>

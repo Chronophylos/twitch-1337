@@ -62,12 +62,21 @@ so it always matches what the bot answers to.
 
 ## `/commands` and `!help`
 
-`<public_url>/commands` is the same list as a public HTML page for viewers,
-German like the descriptions: built-in commands first, then pings, each with
-its trigger, aliases, usage, description and a Mod marker for
+`<public_url>/commands` is the same chat-trigger list as a public HTML page
+for viewers, German like the descriptions: built-in commands first, then pings,
+each with its trigger, aliases, usage, description and a Mod marker for
 `permission = moderator`. It reads the same catalog as `/commands.json`, so
-it hides exactly what the JSON hides, and it answers with the same `503`
-while the bot starts and the same `Cache-Control`. No session needed.
+those sections hide exactly what the JSON hides, and it answers with the same
+`503` while the bot starts and the same `Cache-Control`. No session needed.
+
+A separate **Aurora-Werkzeuge** section follows the chat Commands and Pings.
+It documents each enabled Viewer-Facing Tool once with a friendly name, a
+short description and a concrete `!ai …` example, including the Bash sandbox
+and the two web tools as separate rows. Its availability comes from Aurora's
+actual Turn registration dependencies; tools without their backing integration
+and the whole section for an empty set are omitted. Memory/Scratch maintenance
+and `list_commands` are internal and never listed. These rows are HTML-only:
+`/commands.json`, autocomplete and `!help` remain chat-trigger-only.
 
 In chat, `!help <befehl>` (also `!commands`, `!hilfe`) answers with one
 entry from that catalog. The `!` is optional, case is ignored, and aliases

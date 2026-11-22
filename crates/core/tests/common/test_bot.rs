@@ -650,6 +650,7 @@ impl TestBotBuilder {
                 ping: ping_handle,
                 ping_names_rx,
                 command_catalog: Default::default(),
+                aurora_tools: Default::default(),
                 memory_store,
                 ai_memory,
                 chat_ctx,

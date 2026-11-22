@@ -5,6 +5,7 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt as _;
+use twitch_1337_core::ai::viewer_tools::{AuroraToolAvailability, ViewerTool};
 use twitch_1337_core::commands::{CommandCatalog, CommandInfo, CommandKind, Permission};
 use twitch_1337_web::build_router;
 
@@ -156,4 +157,100 @@ async fn commands_page_groups_commands_before_pings_and_marks_mods() {
     assert!(!html.contains("sidebar"));
     assert!(!html.contains("/logout"));
     assert!(!html.contains("href=\"/settings"));
+}
+
+#[tokio::test]
+async fn commands_page_lists_every_enabled_aurora_tool_once_with_public_copy() {
+    let (app, state) = app().await;
+    assert!(state.command_catalog.set(Arc::new(Catalog)).is_ok());
+    state.aurora_tools.initialize(AuroraToolAvailability::all());
+    let expected: Vec<_> = state.aurora_tools.enabled_metadata().collect();
+
+    // No session cookie: Aurora's public documentation needs no dashboard tier.
+    let res = app.oneshot(get("/commands")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body(res).await;
+
+    assert_eq!(html.matches("Aurora-Werkzeuge").count(), 1);
+    assert_eq!(html.matches("class=\"tr aurora-tool\"").count(), 11);
+    assert!(html.contains("Sie sind keine eigenen Chat-Befehle"));
+    for info in expected {
+        assert!(html.contains(info.display_name), "missing {info:?}");
+        assert!(html.contains(info.description), "missing {info:?}");
+        assert!(html.contains(info.example), "missing {info:?}");
+    }
+    for tool in ViewerTool::ALL {
+        assert!(
+            !html.contains(tool.id()),
+            "raw model identifier {} leaked into public copy",
+            tool.id()
+        );
+    }
+    for internal in [
+        "list_commands",
+        "read_memory",
+        "write_file",
+        "write_scratch",
+        "delete_scratch",
+    ] {
+        assert!(!html.contains(internal), "internal tool {internal} on page");
+    }
+    assert!(
+        !html.contains("Nutz das"),
+        "model prompt instructions on page"
+    );
+    for secret_or_config in ["api_key", "base_url", "session_secret"] {
+        assert!(!html.contains(secret_or_config));
+    }
+}
+
+#[tokio::test]
+async fn commands_page_omits_tools_whose_integrations_are_unavailable() {
+    let (app, state) = app().await;
+    assert!(state.command_catalog.set(Arc::new(Catalog)).is_ok());
+    state
+        .aurora_tools
+        .initialize(AuroraToolAvailability::default());
+
+    let html = body(app.oneshot(get("/commands")).await.unwrap()).await;
+
+    assert_eq!(html.matches("class=\"tr aurora-tool\"").count(), 6);
+    for tool in [
+        ViewerTool::TrackShipment,
+        ViewerTool::WebSearch,
+        ViewerTool::ReadUrl,
+        ViewerTool::SearchEmotes,
+        ViewerTool::EmoteStats,
+    ] {
+        assert!(
+            !html.contains(tool.metadata().display_name),
+            "{} rendered without its backing integration",
+            tool.id()
+        );
+    }
+    for tool in [
+        ViewerTool::DoenerIndex,
+        ViewerTool::DrawTarot,
+        ViewerTool::PlanFlight,
+        ViewerTool::SearchPackages,
+        ViewerTool::LookupNetwork,
+        ViewerTool::RunBash,
+    ] {
+        assert!(html.contains(tool.metadata().display_name));
+    }
+}
+
+#[tokio::test]
+async fn commands_page_omits_aurora_section_when_tool_set_is_empty() {
+    let (app, state) = app().await;
+    assert!(state.command_catalog.set(Arc::new(Catalog)).is_ok());
+    // Leaving the shared catalog uninitialized models AI disabled or the Turn
+    // runner not having been composed: no Viewer-Facing Tool is enabled.
+
+    let res = app.oneshot(get("/commands")).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body(res).await;
+    assert!(!html.contains("Aurora-Werkzeuge"));
+    assert!(!html.contains("id=\"aurora-tools\""));
+    assert!(!html.contains("class=\"tr aurora-tool\""));
 }

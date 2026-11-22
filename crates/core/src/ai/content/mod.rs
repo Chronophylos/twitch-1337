@@ -8,4 +8,4 @@ pub mod tools;
 pub use client::{SearchClient, SearchResult};
 pub use executor::ContentToolExecutor;
 pub use media::MediaClient;
-pub use tools::{ai_tools, is_web_tool};
+pub use tools::is_web_tool;

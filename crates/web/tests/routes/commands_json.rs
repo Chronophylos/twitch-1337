@@ -4,6 +4,7 @@ use std::sync::Arc;
 use axum::body::{Body, to_bytes};
 use axum::http::{Request, StatusCode, header};
 use tower::ServiceExt as _;
+use twitch_1337_core::ai::viewer_tools::{AuroraToolAvailability, ViewerTool};
 use twitch_1337_core::commands::{CommandCatalog, CommandInfo, CommandKind, Permission};
 use twitch_1337_web::build_router;
 
@@ -39,6 +40,7 @@ async fn commands_json_is_public_and_503_until_catalog_is_set() {
     }))
     .await;
     let cell = state.command_catalog.clone();
+    state.aurora_tools.initialize(AuroraToolAvailability::all());
     let app = build_router(state);
 
     let res = app.clone().oneshot(get()).await.unwrap();
@@ -54,4 +56,16 @@ async fn commands_json_is_public_and_503_until_catalog_is_set() {
     assert_eq!(body["lang"], "de");
     assert_eq!(body["commands"][0]["name"], "!lb");
     assert_eq!(body["commands"][0]["permission"], "everyone");
+    assert_eq!(body["commands"].as_array().unwrap().len(), 1);
+    let root = body.as_object().unwrap();
+    assert_eq!(root.len(), 5);
+    assert!(!root.contains_key("aurora_tools"));
+    let serialized = body.to_string();
+    for tool in ViewerTool::ALL {
+        assert!(
+            !serialized.contains(tool.id()),
+            "Viewer-Facing Tool {} changed /commands.json",
+            tool.id()
+        );
+    }
 }

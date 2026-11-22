@@ -1,7 +1,8 @@
-//! Public command catalog: the trigger list served at `/commands.json` for
-//! chat-client autocomplete, rendered at `/commands` and looked up by `!help`.
-//! Built live from the [`CommandRegistry`], so it cannot drift from what the
-//! dispatcher actually matches.
+//! Public command catalog: the chat-trigger list served at `/commands.json`
+//! for autocomplete, rendered in the Commands/Pings sections at `/commands`
+//! and looked up by `!help`. Aurora's separate Viewer-Facing Tool metadata is
+//! deliberately not part of this contract. Built live from the
+//! [`CommandRegistry`], so it cannot drift from what the dispatcher matches.
 
 use serde::Serialize;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
