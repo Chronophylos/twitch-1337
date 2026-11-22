@@ -1,11 +1,12 @@
 //! Passive event monitors: German earthquakes (EMSC), GOES solar flares
-//! (NOAA SWPC), and Earth-directed CMEs (CCMC DONKI). All are
-//! poll-a-JSON-feed, filter, announce-once, so they share one handler
-//! task and one seen-id store.
+//! (NOAA SWPC), Earth-directed CMEs (CCMC DONKI), and F1 Race-Week
+//! Reminders (Jolpica). All are poll-a-JSON-feed, filter, announce-once,
+//! so they share one handler task and one seen-id store.
 //!
-//! ponytail: three feeds share `poll_feed`, not a trait.
+//! ponytail: four feeds share `poll_feed`, not a trait.
 
 pub mod cme;
+pub mod f1;
 pub mod quake;
 pub mod solar;
 pub mod state;
@@ -100,10 +101,10 @@ enum PollStep {
     Cancelled,
 }
 
-/// Poll the earthquake, solar flare, and Earth-directed CME feeds and announce
-/// new events.
+/// Poll the earthquake, solar flare, Earth-directed CME, and F1 calendar
+/// feeds and announce new events.
 ///
-/// One task, three independent cadences. Every failure mode degrades to
+/// One task, four independent cadences. Every failure mode degrades to
 /// "skip this tick" — the next poll is the retry. Feed failures are not task
 /// faults; an optional-client build failure returns visibly to the supervisor,
 /// and lifecycle cancellation returns only after the current atomic step.
@@ -118,11 +119,7 @@ pub async fn run_alerts_handler<T, L>(
     T: twitch_irc::transport::Transport,
     L: twitch_irc::login::LoginCredentials,
 {
-    let http = match reqwest::Client::builder()
-        .user_agent(crate::APP_USER_AGENT)
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-    {
+    let http = match http_client() {
         Ok(c) => c,
         Err(error) => {
             tracing::error!(
@@ -137,6 +134,7 @@ pub async fn run_alerts_handler<T, L>(
     let mut quake_due = Due::default();
     let mut solar_due = Due::default();
     let mut cme_due = Due::default();
+    let mut f1_due = Due::default();
     let mut changes = settings.subscribe();
     tracing::info!("Alerts handler started");
 
@@ -236,7 +234,42 @@ pub async fn run_alerts_handler<T, L>(
                 return;
             }
         }
+
+        if lifecycle.is_cancelled() {
+            return;
+        }
+        if cfg.f1.enabled && f1_due.ready(now, cfg.f1.poll_secs) {
+            let completed = async {
+                let step = poll_feed(
+                    &http,
+                    "f1",
+                    f1::DEFAULT_URL,
+                    f1::MAX_BODY_BYTES,
+                    |body| f1::parse(body, now),
+                    &mut seen.f1,
+                    now,
+                    max_age,
+                    &lifecycle,
+                )
+                .await;
+                settle_feed(step, &seen, &data_dir, &lifecycle, &sender, &channel).await
+            }
+            .instrument(info_span!(parent: None, "alerts.poll", alerts.feed = "f1"))
+            .await;
+            if !completed {
+                return;
+            }
+        }
     }
+}
+
+/// Shared client for every alert feed: the bot's identifying User-Agent
+/// (Jolpica asks for one) and no credentials — all feeds are keyless.
+fn http_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .user_agent(crate::APP_USER_AGENT)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
 }
 
 /// Finish one feed's poll inside its `alerts.poll` trace: persist the
@@ -602,5 +635,104 @@ mod tests {
         assert!(due.ready(t0, 300), "first call is always due");
         assert!(!due.ready(t0 + SignedDuration::from_secs(100), 300));
         assert!(due.ready(t0 + SignedDuration::from_secs(300), 300));
+    }
+
+    #[test]
+    fn f1_due_gate_polls_at_most_hourly_by_default() {
+        let poll = crate::settings::F1Alerts::default().poll_secs;
+        let mut due = Due::default();
+        let t0 = now();
+        assert!(due.ready(t0, poll));
+        assert!(!due.ready(t0 + SignedDuration::from_mins(59), poll));
+        assert!(due.ready(t0 + SignedDuration::from_hours(1), poll));
+    }
+
+    const F1_PATH: &str = "/ergast/f1/current.json";
+    const F1_FIXTURE: &str = include_str!("fixtures/jolpica-current.json");
+
+    async fn poll_f1(server: &wiremock::MockServer, seen: &mut VecDeque<String>) -> PollStep {
+        crate::install_crypto_provider();
+        let at = "2026-11-16T17:30:00Z".parse::<Timestamp>().unwrap();
+        poll_feed(
+            &http_client().expect("client builds"),
+            "f1",
+            &format!("{}{F1_PATH}?limit=100", server.uri()),
+            f1::MAX_BODY_BYTES,
+            |body| f1::parse(body, at),
+            seen,
+            at,
+            SignedDuration::from_hours(2),
+            &Lifecycle::new(),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn f1_poll_is_keyless_with_bot_user_agent() {
+        use wiremock::matchers::{header, method, path, query_param};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(F1_PATH))
+            .and(query_param("limit", "100"))
+            .and(header("user-agent", crate::APP_USER_AGENT))
+            .respond_with(ResponseTemplate::new(200).set_body_string(F1_FIXTURE))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let mut seen = VecDeque::new();
+        let PollStep::Complete { lines, dirty } = poll_f1(&server, &mut seen).await else {
+            panic!("poll was not cancelled");
+        };
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("Las Vegas Grand Prix"));
+        assert!(dirty);
+        assert!(
+            !seen.contains(&"2026-22-2026-11-29".to_owned()),
+            "future Race Weeks stay unseen"
+        );
+
+        let requests = server.received_requests().await.expect("recording on");
+        let req = &requests[0];
+        assert_eq!(
+            req.url.query(),
+            Some("limit=100"),
+            "no API key in the query"
+        );
+        assert!(
+            !req.headers.contains_key("authorization"),
+            "no credentials sent"
+        );
+    }
+
+    #[tokio::test]
+    async fn f1_http_and_parse_failures_skip_only_the_tick() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        for response in [
+            ResponseTemplate::new(500),
+            ResponseTemplate::new(200).set_body_string("<html>maintenance</html>"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path(F1_PATH))
+                .respond_with(response)
+                .mount(&server)
+                .await;
+            let mut seen = VecDeque::from(["kept".to_owned()]);
+            let step = poll_f1(&server, &mut seen).await;
+            assert_eq!(
+                step,
+                PollStep::Complete {
+                    lines: Vec::new(),
+                    dirty: false
+                },
+                "a failed feed completes the tick so the next feed still runs"
+            );
+            assert_eq!(seen, VecDeque::from(["kept".to_owned()]));
+        }
     }
 }

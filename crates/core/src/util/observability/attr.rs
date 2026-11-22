@@ -70,5 +70,5 @@ pub const AVIATION_FLIGHT_PHASE: &str = "aviation.flight.phase";
 /// ADS-B or Aviationstack source. Label.
 pub const AVIATION_PROVIDER: &str = "aviation.provider";
 
-/// Alert feed: `quake`, `solar`, `cme`. Label.
+/// Alert feed: `quake`, `solar`, `cme`, `f1`. Label.
 pub const ALERTS_FEED: &str = "alerts.feed";

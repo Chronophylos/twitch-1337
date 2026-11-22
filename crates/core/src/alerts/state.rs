@@ -24,6 +24,9 @@ pub struct SeenState {
     pub solar: VecDeque<String>,
     #[serde(default)]
     pub cme: VecDeque<String>,
+    /// Race-Week Reminder ids: `season-round-race_date`.
+    #[serde(default)]
+    pub f1: VecDeque<String>,
 }
 
 impl SeenState {
@@ -42,6 +45,7 @@ impl SeenState {
                     quake = state.quake.len(),
                     solar = state.solar.len(),
                     cme = state.cme.len(),
+                    f1 = state.f1.len(),
                     "Loaded alert state"
                 );
                 state
@@ -94,6 +98,7 @@ mod tests {
         mark(&mut s.quake, "a".into());
         mark(&mut s.solar, "b".into());
         mark(&mut s.cme, "c".into());
+        mark(&mut s.f1, "2026-21-2026-11-22".into());
         s.save(dir.path()).await;
 
         let loaded = SeenState::load(dir.path());
@@ -123,6 +128,10 @@ mod tests {
         assert!(
             s.cme.is_empty(),
             "missing cme must default, not fail the file"
+        );
+        assert!(
+            s.f1.is_empty(),
+            "missing f1 must default, not fail the file"
         );
     }
 

@@ -123,6 +123,7 @@ const NAV: &[NavGroup] = &[
             item("alerts_quake", "alerts_quake", "Earthquakes"),
             item("alerts_solar", "alerts_solar", "Solar flares"),
             item("alerts_cme", "alerts_cme", "CMEs"),
+            item("alerts_f1", "alerts_f1", "F1"),
         ],
     },
     NavGroup {

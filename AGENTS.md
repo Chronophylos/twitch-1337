@@ -4,7 +4,7 @@ Guide for coding agents working in this repo. Claude Code loads it through `CLAU
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), network lookups (AI tool, RDAP + optional ipinfo), game servers (`!servers [name]`, AMP), a public script sandbox (`!bash <script>`, Bashkit, limits at `/settings → Bash`), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb`), spoiler check (`!spoiler`, decision model), alerts (earthquake + solar flare + Earth-directed CME monitors, passive, configured at `/settings → Alerts`), version (`!v`), help (`!help [befehl]`, aliases `!commands`/`!hilfe`; one catalog entry, or a link to the public `/commands` page when the dashboard is on; cooldown `cooldowns.help`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`; the catalog's `lookup` is the one trigger/alias resolver).
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), network lookups (AI tool, RDAP + optional ipinfo), game servers (`!servers [name]`, AMP), a public script sandbox (`!bash <script>`, Bashkit, limits at `/settings → Bash`), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb`), spoiler check (`!spoiler`, decision model), alerts (earthquake + solar flare + Earth-directed CME monitors and F1 Race-Week Reminders, passive, configured at `/settings → Alerts`), version (`!v`), help (`!help [befehl]`, aliases `!commands`/`!hilfe`; one catalog entry, or a link to the public `/commands` page when the dashboard is on; cooldown `cooldowns.help`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`; the catalog's `lookup` is the one trigger/alias resolver).
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
@@ -266,15 +266,25 @@ per call, outside `LlmRegistry`; only the key comes from
 makes the command answer "nicht konfiguriert".
 
 Alert monitors live entirely in `settings.ron` — there is no config.toml
-section and no API key, because all three feeds (EMSC seismicportal.eu, NOAA
-SWPC, and CCMC DONKI WSA-ENLIL) are free and keyless. `alerts.quake` and
+section and no API key, because all four feeds (EMSC seismicportal.eu, NOAA
+SWPC, CCMC DONKI WSA-ENLIL, and the Jolpica F1 season calendar) are free and
+keyless; every request carries the bot's `APP_USER_AGENT`. `alerts.quake` and
 `alerts.solar` each carry `enabled` + `poll_secs`; quake adds
 `min_mag_tenths` (integer tenths, so `Settings` keeps its `Eq` derive) and
 solar adds `min_class`. `alerts.cme` has `enabled` + `poll_secs` only —
 Earth-directed means a parseable shock-arrival time from the ENLIL forecast,
-not flare class. The shared `alerts.max_age_secs` is the catch-up cutoff.
-All apply live — no restart. The Germany bounding box is a const in
-`crates/core/src/alerts/quake.rs`, deliberately not a setting.
+not flare class. `alerts.f1` has `enabled` (default **on**) + `poll_secs`
+(default 3600) and posts one German Race-Week Reminder per race, due at
+18:00 Europe/Berlin on the Monday of the Race Week (see CONTEXT.md): race
+name, circuit/location, and race date + start time in Berlin time (the time
+is left out when Jolpica has none). Reminders not yet due are filtered before
+dedupe, so a whole-season poll never marks future races seen; the identity is
+`season-round-race_date`, so a race moved to another date gets a new
+reminder. It is an Alert, not a Schedule or a command. The shared
+`alerts.max_age_secs` is the catch-up cutoff; keep `alerts.f1.poll_secs`
+below it or a reminder is absorbed as stale. All apply live — no restart.
+The Germany bounding box is a const in `crates/core/src/alerts/quake.rs`,
+deliberately not a setting.
 
 `[dhl]` holds only `api_key` and is optional. Its presence enables Aurora's
 `track_shipment` tool; absent, the tool is never registered with the model.
@@ -417,9 +427,9 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - AI clients are resolved per call through `LlmRegistry` (`crates/core/src/llm_factory.rs`), keyed by (provider, base_url, key name). Editing a profile's model or changing an agent's profile selection takes effect on the next turn; changing a provider or base URL builds a new cached client, still no restart. Secrets never leave config.toml — a profile stores a key name, not the key.
 - AI mouths speak over Helix `POST /helix/chat/messages` and never join IRC, so their messages come back in over the normal broadcast channel. `EchoGuard` (`crates/core/src/twitch/echo.rs`) keeps them out of the bot's own input. Two mechanisms, both needed: the Helix `message_id` of every sent reply is registered and peeked on the way back (30s TTL, 512 cap, peeked not removed — the transcript tap and the command dispatcher each check the same id), plus a mouth login/user-id identity backstop for when the id doesn't match. History and transcript writes use `is_echo` (both mechanisms); command dispatch, the 1337 tracker, and emote counting use `is_mouth` (identity only) so a viewer can never be filtered by a stale pending id. Neither is dead code. Chat-turn prompts name the mapping via a runtime Konten/Accounts system appendix; a reply parent from a Mouth is labeled `(self)` / the other agent, not an untrusted viewer.
 - Scheduled messages: list loaded from `settings.ron` into `ScheduleCache`; the `run_schedule_settings_sync` task subscribes to `SettingsStore`'s change-`Notify` and updates the cache when the dashboard saves. The message handler polls the cache every 30s. On Ctrl+C, main notifies `Arc<Notify>`; children finish in-flight `say()` then exit; main awaits handler with 5s timeout.
-- Alerts: one handler task, three feeds, wall-clock due-gates per feed so
+- Alerts: one handler task, four feeds, wall-clock due-gates per feed so
   `poll_secs` edits apply within a tick. Seen ids persist to
-  `$DATA_DIR/alerts.ron` (FIFO, 500/feed, including `cme`). An unseen event older than
+  `$DATA_DIR/alerts.ron` (FIFO, 500/feed, including `cme` and `f1`). An unseen event older than
   `max_age_secs` is marked seen **without** being announced — that is what
   keeps a post-outage backlog out of chat. Feed failures skip the tick;
   there is no retry, because the next poll is the retry.
