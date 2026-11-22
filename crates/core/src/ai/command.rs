@@ -155,6 +155,9 @@ pub struct AiCommandDeps {
     pub command_catalog: crate::ai::commands_tool::CatalogCell,
     pub emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
     pub recap: Option<Arc<RecapHandle>>,
+    /// Interpreter permits shared with `!bash` (`Services::bash_permits`),
+    /// taken by Aurora's `run_bash` tool.
+    pub bash_permits: Arc<tokio::sync::Semaphore>,
 }
 
 fn ai_cooldown_duration(s: &Settings) -> Duration {

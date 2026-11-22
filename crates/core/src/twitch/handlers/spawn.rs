@@ -109,7 +109,10 @@ where
             services.llm.clone(),
             services.settings.clone(),
         )?),
-        Arc::new(commands::bash::BashCommand::new(services.settings.clone())),
+        Arc::new(commands::bash::BashCommand::new(
+            services.settings.clone(),
+            services.bash_permits.clone(),
+        )),
     ];
 
     if let Some(tx) = services
@@ -236,6 +239,7 @@ where
                 mouths: services.mouths.clone(),
                 echo: services.echo.clone(),
                 recap: services.recap.clone(),
+                bash_permits: services.bash_permits.clone(),
             },
         )));
         command_list.push(Arc::new(commands::news::NewsCommand::new(

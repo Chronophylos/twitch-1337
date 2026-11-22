@@ -35,7 +35,7 @@ Bodies are [minijinja](https://docs.rs/minijinja) templates, so `{{ value }}` in
 | `persona.utility_login` | The utility bot's login, used for the fallback wording |
 | `limits.{reply_target,reply_soft,reply_hard}` | Aurora's length knobs from `ai.aurora` |
 | `model.{display,id}` | Resolved model; `display` is the normalized catalog name on OpenRouter |
-| `tools.{emotes,emote_stats,web,dhl}` | Whether that tool is registered this turn |
+| `tools.{emotes,emote_stats,web,dhl,bash}` | Whether that tool is registered this turn (`bash` = `run_bash`, Aurora only) |
 | `inject.{memory,recap}` | Stable injected context |
 | `inject.{scratch,recent_chat,emote_block}` | Per-turn injected context |
 
@@ -60,6 +60,8 @@ The environment runs with strict undefined, so a typo (`{{ speaker.usernam }}`) 
 **Konten / Accounts block.** The `accounts` block maps Aurora and Grok to settings persona + `MouthRouter` login, or to utility-fallback wording when that adapter is absent. German (`## Konten`) on Aurora, English (`## Accounts`) on Grok. Editing Aurora's dashboard persona busts the Gemini prefix the same way a model-id change does.
 
 **Relevant-emotes block.** Built per turn by `SevenTvEmoteProvider::prompt_block_for_turn` from `$DATA_DIR/emotes.db` (`emote_meanings` ⋈ active channel catalog; optional globals via REST ∩ meanings). Not a prompt template — runtime text only. Lands first in the user message so it never disturbs the cached system prefix. Each line is `- {name}` plus only non-empty fields: `appearance=`, `meaning=`, `use=`, `avoid=` (semicolon-separated). Selection is pinned core → scored (recent chat + instruction terms) → baseline fill, capped by `ai.emotes.max_prompt_emotes`. When the block is present, `search_emotes` is registered so the model can look up codes beyond the window. If the emote tracker is unavailable, the block is omitted entirely. Curated semantics live only in `emote_meanings` (see ADR-0008).
+
+**Bash-Sandbox block.** `bash_tools` renders for Aurora when `tools.bash` is set and tells her `run_bash` exists: same sandbox as `!bash`, no network, no files beyond an empty in-memory scratch, fresh on every call. She should use it when computing or running something actually helps, not on every message, and must read stdout/stderr/error before replying instead of pasting stdout into chat.
 
 **Refusal**. The bot refuses by returning empty final text — nothing is sent to chat. Encourage the model to stay silent on harassment, off-topic, or low-signal prompts rather than producing a defensive reply.
 

@@ -7,11 +7,12 @@
 //! command must not leak parser/builtin diagnostics into the channel.
 //!
 //! The command owns its admission path instead of relying on the generic
-//! execution manager: one interpreter runs at a time by default, a second
-//! concurrent run for the same user is rejected outright, and only an attempt
-//! that actually reaches the interpreter is charged the per-user cooldown. No
-//! wait of any kind happens before rejection, so a hostile viewer can never
-//! build a queue of pending scripts.
+//! execution manager: the interpreter permits are shared with Aurora's
+//! `run_bash` tool (`Services::bash_permits`), a second concurrent run for the
+//! same user is rejected outright, and only an attempt that actually reaches
+//! the interpreter is charged the per-user cooldown. No wait of any kind
+//! happens before rejection, so a hostile viewer can never build a queue of
+//! pending scripts.
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
@@ -34,9 +35,11 @@ use crate::{
 };
 
 /// Ingress buffer for one script. Anything longer is rejected by Bashkit's
-/// own input check, which maps onto the resource-limit reply.
-const MAX_INPUT_BYTES: usize = 4096;
-/// Stderr is never shown; the cap only bounds what the sandbox buffers.
+/// own input check, which maps onto the resource-limit reply. `run_bash`
+/// refuses a longer script before it builds an interpreter.
+pub(crate) const MAX_INPUT_BYTES: usize = 4096;
+/// Stderr the sandbox buffers. `!bash` drops it; `run_bash` hands the model
+/// a shorter prefix.
 const MAX_STDERR_BYTES: usize = 4096;
 /// Background jobs per interpreter. Chat scripts have no use for more.
 const MAX_BACKGROUND_JOBS: usize = 4;
@@ -56,24 +59,34 @@ const TIMEOUT_EMOTES: [&str; 3] = ["Waiting", "FeelsLateMan", "modCheck"];
 const RESOURCE_EMOTES: [&str; 3] = ["Bonk", "NOPE", "WICKED"];
 const NONZERO_EXIT_EMOTES: [&str; 3] = ["FDM", "NotLikeThis", "monkaS"];
 
+/// The one interpreter semaphore every Bashkit run takes a permit from:
+/// `!bash` and Aurora's `run_bash` tool alike. Sized once from
+/// `bash.max_concurrent` (a restart knob); built at composition and carried
+/// on `Services::bash_permits`.
+pub fn shared_permits(settings: &SettingsHandle) -> Arc<tokio::sync::Semaphore> {
+    Arc::new(tokio::sync::Semaphore::new(
+        settings.load().bash.max_concurrent,
+    ))
+}
+
 /// Public `!bash`. Holds only admission state and a settings handle; the
 /// interpreter itself is rebuilt per invocation so no script can observe
 /// another script's leftovers.
 pub struct BashCommand {
     settings: SettingsHandle,
     cooldown: PerUserCooldown,
-    semaphore: Arc<tokio::sync::Semaphore>,
+    /// [`shared_permits`]: an in-flight `run_bash` occupies the same slot.
+    permits: Arc<tokio::sync::Semaphore>,
     /// Users currently holding an interpreter. Rejects a second concurrent
     /// run before it can touch the global permit queue.
     active_users: Arc<Mutex<HashSet<Arc<UserKey>>>>,
 }
 
 impl BashCommand {
-    pub fn new(settings: SettingsHandle) -> Self {
-        let max_concurrent = settings.load().bash.max_concurrent;
+    pub fn new(settings: SettingsHandle, permits: Arc<tokio::sync::Semaphore>) -> Self {
         Self {
             cooldown: PerUserCooldown::live(settings.clone(), bash_cooldown_duration),
-            semaphore: Arc::new(tokio::sync::Semaphore::new(max_concurrent)),
+            permits,
             active_users: Arc::new(Mutex::new(HashSet::new())),
             settings,
         }
@@ -107,7 +120,9 @@ impl Drop for ActiveUser {
 }
 
 /// Build one hardened, single-use interpreter from the current settings.
-fn build_interpreter(settings: &crate::settings::BashSettings) -> Bash {
+/// Shared by `!bash` and `run_bash`, so the sandbox cannot drift between
+/// the two.
+pub(crate) fn build_interpreter(settings: &crate::settings::BashSettings) -> Bash {
     let profile = ExecutionProfile::named(ExecutionProfileName::Hardened);
     let mut limits = profile.execution_limits().clone();
     let timeout = Duration::from_millis(settings.timeout_ms);
@@ -191,6 +206,31 @@ fn reply_for(output: &ExecResult) -> String {
     format!("exit {} {}", output.exit_code, one_of(&NONZERO_EXIT_EMOTES))
 }
 
+/// Sandbox-level class of an interpreter error. `!bash` turns it into chat
+/// copy, `run_bash` into a machine-readable kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FailureKind {
+    Syntax,
+    Timeout,
+    ResourceLimit,
+    /// The run's cancellation token fired.
+    Cancelled,
+    /// Anything else: a Bashkit-internal failure, not the script's fault.
+    Unexpected,
+}
+
+pub(crate) fn failure_kind(error: &BashkitError) -> FailureKind {
+    match error {
+        BashkitError::Parse { .. } => FailureKind::Syntax,
+        BashkitError::ResourceLimit(
+            LimitExceeded::Timeout(_) | LimitExceeded::ParserTimeout(_),
+        ) => FailureKind::Timeout,
+        BashkitError::ResourceLimit(_) => FailureKind::ResourceLimit,
+        BashkitError::Cancelled => FailureKind::Cancelled,
+        _ => FailureKind::Unexpected,
+    }
+}
+
 /// What to do with an interpreter error.
 enum Failure {
     /// A viewer-legible one-liner; the diagnostic stays out of chat.
@@ -203,19 +243,17 @@ enum Failure {
 }
 
 fn classify(error: &BashkitError) -> Failure {
-    match error {
-        BashkitError::Parse { .. } => {
-            Failure::Reply(format!("Syntaxfehler {}", one_of(&SYNTAX_EMOTES)))
+    match failure_kind(error) {
+        FailureKind::Syntax => Failure::Reply(format!("Syntaxfehler {}", one_of(&SYNTAX_EMOTES))),
+        FailureKind::Timeout => {
+            Failure::Reply(format!("Zeitlimit erreicht {}", one_of(&TIMEOUT_EMOTES)))
         }
-        BashkitError::ResourceLimit(
-            LimitExceeded::Timeout(_) | LimitExceeded::ParserTimeout(_),
-        ) => Failure::Reply(format!("Zeitlimit erreicht {}", one_of(&TIMEOUT_EMOTES))),
-        BashkitError::ResourceLimit(_) => Failure::Reply(format!(
+        FailureKind::ResourceLimit => Failure::Reply(format!(
             "Ressourcenlimit erreicht {}",
             one_of(&RESOURCE_EMOTES)
         )),
-        BashkitError::Cancelled => Failure::Cancelled,
-        _ => Failure::Unexpected,
+        FailureKind::Cancelled => Failure::Cancelled,
+        FailureKind::Unexpected => Failure::Unexpected,
     }
 }
 
@@ -253,10 +291,11 @@ where
             return Ok(());
         }
 
-        // Admission is non-blocking at every step: a full global slot, a
-        // second run from the same user, and an active cooldown all answer
-        // immediately. Only a run that reaches the interpreter is charged.
-        let Ok(permit) = self.semaphore.clone().try_acquire_owned() else {
+        // Admission is non-blocking at every step: a full global slot (held
+        // by another `!bash` or by an Aurora `run_bash`), a second run from
+        // the same user, and an active cooldown all answer immediately. Only
+        // a run that reaches the interpreter is charged.
+        let Ok(permit) = self.permits.clone().try_acquire_owned() else {
             ctx.sender.reply(&ctx.privmsg, BUSY).await;
             return Ok(());
         };

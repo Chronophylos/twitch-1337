@@ -215,6 +215,12 @@ pub struct Services {
     /// Shared chat-recap handle. `None` when AI / LLM is disabled.
     pub recap: Option<Arc<crate::ai::recap::RecapHandle>>,
 
+    /// Bashkit interpreter permits, sized once from `bash.max_concurrent`
+    /// (`commands::bash::shared_permits`). Shared by `!bash`, which rejects
+    /// at once when none is free, and Aurora's `run_bash` tool, which waits
+    /// up to `bash.timeout_ms`.
+    pub bash_permits: Arc<tokio::sync::Semaphore>,
+
     /// Recent INFO+ tracing events, filled by the layer `install_tracing`
     /// installs. Read by the dashboard `/logs` page. Tests pass an empty ring.
     pub log_ring: Arc<crate::util::log_ring::LogRing>,

@@ -432,6 +432,8 @@ async fn prepare(
         settings_handle.load().twitch.expected_latency,
     ));
     metrics::observe_irc_latency(Arc::clone(&latency_value));
+    // One interpreter semaphore for `!bash` and Aurora's `run_bash`.
+    let bash_permits = twitch_1337_core::commands::bash::shared_permits(&settings_handle);
     let services = Services {
         clock: Arc::new(SystemClock),
         llm,
@@ -470,6 +472,7 @@ async fn prepare(
         echo,
         suspension,
         recap: recap_handle,
+        bash_permits,
         log_ring,
     };
     // `web_listener` is `Some` exactly when the web server is enabled.
