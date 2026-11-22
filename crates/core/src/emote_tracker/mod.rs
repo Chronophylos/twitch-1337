@@ -11,20 +11,23 @@ mod schema;
 mod types;
 mod usage;
 
+pub use db::MeaningEditError;
 pub use format::{
     format_actor_display, format_berlin_millis, format_set_event_attribution, format_set_event_by,
     lifecycle_verb,
 };
-pub use handle::EmoteTrackerHandle;
+pub use handle::{EmoteAdded, EmoteTrackerHandle};
 pub use ingest::{INGEST_HTTP_TIMEOUT, IngestConfig, run_set_ingest};
 pub use lookup::{
     EMOTE_CMD_USAGE, EMOTE_NOT_FOUND, EmoteQueryParse, format_emote_chat_reply, parse_emote_query,
 };
+pub use rest::{GlobalCatalogEmote, fetch_global_set};
 pub use schema::migrate;
 pub use types::{
-    CatalogMutation, EmoteMeaningRow, EmoteRow, EmoteUsageCount, NewSetEvent, NewUsageEvent,
-    SetChangeBatch, SetEventKind, SetEventListFilter, SetEventRow, SetTenure, UsageEventListFilter,
-    UsageEventRow,
+    CatalogMutation, CuratedFields, EmoteMeaningRow, EmoteRow, EmoteUsageCount, GeneratedMeaning,
+    MEANING_FIELD_MAX_CHARS, MeaningField, MeaningTextError, NewSetEvent, NewUsageEvent,
+    PostWindowFilter, SetChangeBatch, SetEventKind, SetEventListFilter, SetEventRow, SetTenure,
+    UsageEventListFilter, UsageEventRow, UsageSample, validate_meaning_text,
 };
 pub use usage::match_usage_tokens;
 

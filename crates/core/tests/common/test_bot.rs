@@ -665,6 +665,7 @@ impl TestBotBuilder {
                 primary_history_tap: Some(primary_history_tap.clone()),
                 schedule_runtime: schedule_runtime.clone(),
                 emote_tracker,
+                emotes_agent: Default::default(),
                 twitch_channel_id: None,
                 mouths,
                 echo,

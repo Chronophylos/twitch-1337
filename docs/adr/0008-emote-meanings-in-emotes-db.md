@@ -55,5 +55,6 @@ rename-on-open bridge and its dual gitignore were removed 2026-08-31, after prod
 - **+** Globals can have meaning rows without polluting the channel catalog.
 - **−** AI emotes are unavailable when the tracker is down or `emote_meanings` is
   empty.
-- **−** New meaning rows need curation (or a future importer); the bake-file seed
-  path is gone.
+- **−** The bake-file seed path is gone. ADR-0014 later adds automatic rows and
+  supersedes the original “new rows need curation” consequence with per-field
+  curated overrides.

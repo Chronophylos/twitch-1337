@@ -6,27 +6,47 @@ use std::time::Duration;
 use eyre::{Result, WrapErr};
 use rusqlite::Connection;
 use thiserror::Error;
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, broadcast, mpsc, oneshot};
 
 use super::db::{
-    apply_set_changes, catalog_is_empty, count_usage_events, deactivate_emote, get_emote,
+    MeaningEditError, apply_generated_meaning, apply_meaning_edit, apply_set_changes,
+    catalog_is_empty, count_usage_events, deactivate_emote, ensure_global_emotes, get_emote,
     get_emote_meaning, insert_set_event, insert_usage_events, least_used_emotes,
-    list_active_emotes, list_emote_meanings_for_ids, list_set_events, list_usage_events,
-    resolve_active_name, resolve_viewer_twitch_id, top_usage_counts, top_users_by_usage,
-    upsert_emote, upsert_emote_meaning, usage_counts_for_user, usage_counts_of_emote,
+    list_active_emotes, list_all_emote_meanings, list_emote_meanings_for_ids, list_set_events,
+    list_usage_events, post_window_usage_count, post_window_usage_counts, resolve_active_name,
+    resolve_viewer_twitch_id, sample_post_window_usage, top_usage_counts, top_users_by_usage,
+    unlock_meaning_field, upsert_emote, upsert_emote_meaning, usage_counts_for_user,
+    usage_counts_of_emote,
 };
 use super::migrate;
+use super::rest::GlobalCatalogEmote;
 use super::types::{
-    EmoteMeaningRow, EmoteRow, EmoteUsageCount, LeastUsedEmote, NewSetEvent, NewUsageEvent,
-    SetChangeBatch, SetEventListFilter, SetEventRow, UsageEventListFilter, UsageEventRow,
-    UserUsageCount,
+    EmoteMeaningRow, EmoteRow, EmoteUsageCount, GeneratedMeaning, LeastUsedEmote, MeaningField,
+    NewSetEvent, NewUsageEvent, PostWindowFilter, SetChangeBatch, SetEventKind, SetEventListFilter,
+    SetEventRow, UsageEventListFilter, UsageEventRow, UsageSample, UserUsageCount,
 };
+
+/// Buffered add notices; a lagging subscriber loses the oldest, which the
+/// Emotes agent's nightly "no row" tier picks up anyway.
+const ADDED_CAPACITY: usize = 256;
+
+/// An emote entered the channel set (an `add` set event was committed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EmoteAdded {
+    pub emote_id: String,
+    pub name: String,
+}
 
 enum StoreCmd {
     UpsertEmote {
         emote_id: String,
         name: String,
         active: bool,
+        updated_at: i64,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    EnsureGlobalEmotes {
+        emotes: Vec<GlobalCatalogEmote>,
         updated_at: i64,
         reply: oneshot::Sender<Result<()>>,
     },
@@ -129,6 +149,40 @@ enum StoreCmd {
         ids: Vec<String>,
         reply: oneshot::Sender<Result<Vec<EmoteMeaningRow>>>,
     },
+    ListAllEmoteMeanings {
+        reply: oneshot::Sender<Result<Vec<EmoteMeaningRow>>>,
+    },
+    ApplyGeneratedMeaning {
+        meaning: GeneratedMeaning,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    ApplyMeaningEdit {
+        emote_id: String,
+        name: Option<String>,
+        edits: Vec<(MeaningField, Option<String>)>,
+        at: i64,
+        reply: oneshot::Sender<Result<std::result::Result<(), MeaningEditError>>>,
+    },
+    UnlockMeaningField {
+        emote_id: String,
+        field: MeaningField,
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    PostWindowUsageCounts {
+        filter: PostWindowFilter,
+        reply: oneshot::Sender<Result<std::collections::HashMap<String, i64>>>,
+    },
+    PostWindowUsageCount {
+        emote_id: String,
+        filter: PostWindowFilter,
+        reply: oneshot::Sender<Result<i64>>,
+    },
+    SamplePostWindowUsage {
+        emote_id: String,
+        filter: PostWindowFilter,
+        limit: u32,
+        reply: oneshot::Sender<Result<Vec<UsageSample>>>,
+    },
     Close(oneshot::Sender<()>),
 }
 
@@ -181,6 +235,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 pub struct EmoteTrackerHandle {
     tx: Arc<mpsc::UnboundedSender<StoreCmd>>,
     writer: Arc<WriterOwner>,
+    added: broadcast::Sender<EmoteAdded>,
 }
 
 impl EmoteTrackerHandle {
@@ -212,7 +267,14 @@ impl EmoteTrackerHandle {
             writer: Arc::new(WriterOwner {
                 handle: Mutex::new(Some(writer)),
             }),
+            added: broadcast::channel(ADDED_CAPACITY).0,
         })
+    }
+
+    /// Subscribe to committed `add` set events. Publishing never blocks the
+    /// ingest path.
+    pub fn subscribe_added(&self) -> broadcast::Receiver<EmoteAdded> {
+        self.added.subscribe()
     }
 
     #[expect(
@@ -245,6 +307,20 @@ impl EmoteTrackerHandle {
             emote_id,
             name,
             active,
+            updated_at,
+            reply,
+        })
+        .await
+    }
+
+    /// Ensure global usage FK targets without making them active channel emotes.
+    pub async fn ensure_global_emotes(
+        &self,
+        emotes: Vec<GlobalCatalogEmote>,
+        updated_at: i64,
+    ) -> Result<()> {
+        self.send(|reply| StoreCmd::EnsureGlobalEmotes {
+            emotes,
             updated_at,
             reply,
         })
@@ -289,8 +365,24 @@ impl EmoteTrackerHandle {
     }
 
     pub async fn apply_set_changes(&self, batch: SetChangeBatch) -> Result<()> {
+        let added: Vec<EmoteAdded> = batch
+            .events
+            .iter()
+            .filter(|e| e.kind == SetEventKind::Add)
+            .filter_map(|e| {
+                Some(EmoteAdded {
+                    emote_id: e.emote_id.clone()?,
+                    name: e.new_name.clone().unwrap_or_default(),
+                })
+            })
+            .collect();
         self.send(|reply| StoreCmd::ApplySetChanges { batch, reply })
-            .await
+            .await?;
+        for notice in added {
+            // No subscriber (Emotes agent off) is fine.
+            self.added.send(notice).ok();
+        }
+        Ok(())
     }
 
     pub async fn catalog_is_empty(&self) -> Result<bool> {
@@ -452,6 +544,91 @@ impl EmoteTrackerHandle {
             .await
     }
 
+    pub async fn list_all_emote_meanings(&self) -> Result<Vec<EmoteMeaningRow>> {
+        self.send(|reply| StoreCmd::ListAllEmoteMeanings { reply })
+            .await
+    }
+
+    /// Write generator output; curated fields are left untouched.
+    pub async fn apply_generated_meaning(&self, meaning: GeneratedMeaning) -> Result<()> {
+        self.send(|reply| StoreCmd::ApplyGeneratedMeaning { meaning, reply })
+            .await
+    }
+
+    /// Apply a mod's edits; every listed field becomes curated. The outer
+    /// error is the writer being gone, the inner one a refused or failed
+    /// write.
+    pub async fn apply_meaning_edit(
+        &self,
+        emote_id: &str,
+        name: Option<&str>,
+        edits: Vec<(MeaningField, Option<String>)>,
+        at: i64,
+    ) -> Result<std::result::Result<(), MeaningEditError>> {
+        let emote_id = emote_id.to_owned();
+        let name = name.map(str::to_owned);
+        self.send(|reply| StoreCmd::ApplyMeaningEdit {
+            emote_id,
+            name,
+            edits,
+            at,
+            reply,
+        })
+        .await
+    }
+
+    /// Return one field to automation; `false` when no row exists.
+    pub async fn unlock_meaning_field(&self, emote_id: &str, field: MeaningField) -> Result<bool> {
+        let emote_id = emote_id.to_owned();
+        self.send(|reply| StoreCmd::UnlockMeaningField {
+            emote_id,
+            field,
+            reply,
+        })
+        .await
+    }
+
+    /// Post-window messages per emote id (see [`PostWindowFilter`]).
+    pub async fn post_window_usage_counts(
+        &self,
+        filter: PostWindowFilter,
+    ) -> Result<std::collections::HashMap<String, i64>> {
+        self.send(|reply| StoreCmd::PostWindowUsageCounts { filter, reply })
+            .await
+    }
+
+    /// Post-window message count for one emote.
+    pub async fn post_window_usage_count(
+        &self,
+        emote_id: &str,
+        filter: PostWindowFilter,
+    ) -> Result<i64> {
+        let emote_id = emote_id.to_owned();
+        self.send(|reply| StoreCmd::PostWindowUsageCount {
+            emote_id,
+            filter,
+            reply,
+        })
+        .await
+    }
+
+    /// Newest post-window messages using `emote_id`, newest first.
+    pub async fn sample_post_window_usage(
+        &self,
+        emote_id: &str,
+        filter: PostWindowFilter,
+        limit: u32,
+    ) -> Result<Vec<UsageSample>> {
+        let emote_id = emote_id.to_owned();
+        self.send(|reply| StoreCmd::SamplePostWindowUsage {
+            emote_id,
+            filter,
+            limit,
+            reply,
+        })
+        .await
+    }
+
     /// Drain queued commands, stop the named SQLite writer, and synchronously
     /// join its thread. This operation is idempotent across cloned handles.
     pub async fn close_and_join(&self) -> Result<(), EmoteTrackerFinalizeError> {
@@ -507,6 +684,15 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
             } => {
                 reply
                     .send(upsert_emote(&conn, &emote_id, &name, active, updated_at))
+                    .ok();
+            }
+            StoreCmd::EnsureGlobalEmotes {
+                emotes,
+                updated_at,
+                reply,
+            } => {
+                reply
+                    .send(ensure_global_emotes(&conn, &emotes, updated_at))
                     .ok();
             }
             StoreCmd::DeactivateEmote {
@@ -634,6 +820,60 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
             StoreCmd::ListEmoteMeaningsForIds { ids, reply } => {
                 reply.send(list_emote_meanings_for_ids(&conn, &ids)).ok();
             }
+            StoreCmd::ListAllEmoteMeanings { reply } => {
+                reply.send(list_all_emote_meanings(&conn)).ok();
+            }
+            StoreCmd::ApplyGeneratedMeaning { meaning, reply } => {
+                reply.send(apply_generated_meaning(&conn, &meaning)).ok();
+            }
+            StoreCmd::ApplyMeaningEdit {
+                emote_id,
+                name,
+                edits,
+                at,
+                reply,
+            } => {
+                reply
+                    .send(Ok(apply_meaning_edit(
+                        &conn,
+                        &emote_id,
+                        name.as_deref(),
+                        &edits,
+                        at,
+                    )))
+                    .ok();
+            }
+            StoreCmd::UnlockMeaningField {
+                emote_id,
+                field,
+                reply,
+            } => {
+                reply
+                    .send(unlock_meaning_field(&conn, &emote_id, field))
+                    .ok();
+            }
+            StoreCmd::PostWindowUsageCounts { filter, reply } => {
+                reply.send(post_window_usage_counts(&conn, &filter)).ok();
+            }
+            StoreCmd::PostWindowUsageCount {
+                emote_id,
+                filter,
+                reply,
+            } => {
+                reply
+                    .send(post_window_usage_count(&conn, &emote_id, &filter))
+                    .ok();
+            }
+            StoreCmd::SamplePostWindowUsage {
+                emote_id,
+                filter,
+                limit,
+                reply,
+            } => {
+                reply
+                    .send(sample_post_window_usage(&conn, &emote_id, &filter, limit))
+                    .ok();
+            }
             StoreCmd::Close(reply) => {
                 reply.send(()).ok();
                 return;
@@ -645,7 +885,7 @@ fn run_writer(conn: Connection, rx: &mut mpsc::UnboundedReceiver<StoreCmd>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::emote_tracker::{DB_FILENAME, SetEventKind, SetTenure, try_open};
+    use crate::emote_tracker::{CatalogMutation, DB_FILENAME, SetEventKind, SetTenure, try_open};
 
     #[tokio::test]
     async fn close_and_join_retains_named_writer_ownership() {
@@ -676,6 +916,79 @@ mod tests {
                 .contains("writer thread exited")
         );
         handle.close_and_join().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn committed_add_publishes_background_generation_notice() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = EmoteTrackerHandle::open(&dir.path().join(DB_FILENAME)).unwrap();
+        let mut added = handle.subscribe_added();
+        handle
+            .apply_set_changes(SetChangeBatch {
+                updated_at: 10,
+                mutations: vec![CatalogMutation::Upsert {
+                    emote_id: "e1".into(),
+                    name: "Kappa".into(),
+                    active: true,
+                }],
+                events: vec![NewSetEvent {
+                    at: 10,
+                    kind: SetEventKind::Add,
+                    emote_id: Some("e1".into()),
+                    old_name: None,
+                    new_name: Some("Kappa".into()),
+                    actor_7tv_id: None,
+                    actor_username: None,
+                    actor_display_name: None,
+                    gap_from: None,
+                    gap_to: None,
+                    requester_login: None,
+                    requester_twitch_id: None,
+                    via: None,
+                    attribution_method: None,
+                }],
+            })
+            .await
+            .unwrap();
+        let notice = tokio::time::timeout(Duration::from_secs(1), added.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(notice.emote_id, "e1");
+        assert_eq!(notice.name, "Kappa");
+    }
+
+    #[tokio::test]
+    async fn global_usage_gets_inactive_fk_target_without_add_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let handle = EmoteTrackerHandle::open(&dir.path().join(DB_FILENAME)).unwrap();
+        handle
+            .ensure_global_emotes(
+                vec![GlobalCatalogEmote {
+                    id: "g1".into(),
+                    name: "Global".into(),
+                }],
+                10,
+            )
+            .await
+            .unwrap();
+        let row = handle.get_emote("g1").await.unwrap().unwrap();
+        assert!(!row.active, "globals must not enter Active Catalog");
+        handle
+            .insert_usage_events(vec![NewUsageEvent {
+                at: 20,
+                emote_id: "g1".into(),
+                twitch_user_id: "u1".into(),
+                login: Some("alice".into()),
+                flagged: false,
+            }])
+            .await
+            .unwrap();
+        let events = handle
+            .list_set_events(SetEventListFilter::default())
+            .await
+            .unwrap();
+        assert!(events.is_empty(), "globals have no add Set Event");
     }
 
     #[test]

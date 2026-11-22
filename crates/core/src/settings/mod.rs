@@ -37,10 +37,11 @@ mod validation;
 pub mod web;
 
 pub use ai::{
-    AiAurora, AiAuroraOverrides, AiDreamer, AiDreamerOverrides, AiEmotes, AiEmotesOverrides,
-    AiGrok, AiGrokOverrides, AiHistory, AiHistoryOverrides, AiMedia, AiMediaOverrides, AiMemory,
-    AiMemoryOverrides, AiOverrides, AiPrefill, AiPrefillOverrides, AiProfile, AiRecap,
-    AiRecapOverrides, AiSettings, AiWeb, AiWebOverrides, ProfileKind,
+    AiAurora, AiAuroraOverrides, AiDreamer, AiDreamerOverrides, AiEmotes, AiEmotesAgent,
+    AiEmotesAgentOverrides, AiEmotesOverrides, AiGrok, AiGrokOverrides, AiHistory,
+    AiHistoryOverrides, AiMedia, AiMediaOverrides, AiMemory, AiMemoryOverrides, AiOverrides,
+    AiPrefill, AiPrefillOverrides, AiProfile, AiRecap, AiRecapOverrides, AiSettings, AiWeb,
+    AiWebOverrides, ProfileKind,
 };
 pub use alerts::{
     AlertsOverrides, AlertsSettings, CmeAlerts, CmeAlertsOverrides, F1Alerts, F1AlertsOverrides,

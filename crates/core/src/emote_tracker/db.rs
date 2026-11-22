@@ -2,15 +2,20 @@ use eyre::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::types::{
-    EmoteMeaningRow, EmoteRow, EmoteUsageCount, LeastUsedEmote, NewSetEvent, NewUsageEvent,
-    SetEventKind, SetEventListFilter, SetEventRow, SetTenure, UsageEventListFilter, UsageEventRow,
-    UserUsageCount,
+    CuratedFields, EmoteMeaningRow, EmoteRow, EmoteUsageCount, GeneratedMeaning, LeastUsedEmote,
+    MeaningField, NewSetEvent, NewUsageEvent, PostWindowFilter, SetEventKind, SetEventListFilter,
+    SetEventRow, SetTenure, UsageEventListFilter, UsageEventRow, UsageSample, UserUsageCount,
 };
 
-/// Insert or update a curated emote meaning row.
+/// Column list read by [`map_emote_meaning_row`].
+const MEANING_COLUMNS: &str = "emote_id, appearance, meaning, usage, avoid, updated_at, \
+     name, curated, generated_at, context_lines, usage_count";
+
+/// Insert or update an emote meaning row from a seed or test fixture.
 ///
-/// On conflict, `meaning` is preserved when the upsert passes `NULL` so seed
-/// re-runs do not wipe dashboard-curated meanings.
+/// Automation never writes a Curated Field (ADR-0014): curated fields keep
+/// their value. On conflict, `meaning` is also preserved when the upsert
+/// passes `NULL`, so seed re-runs do not wipe an existing meaning.
 pub fn upsert_emote_meaning(
     conn: &Connection,
     emote_id: &str,
@@ -24,26 +29,143 @@ pub fn upsert_emote_meaning(
         "INSERT INTO emote_meanings (emote_id, appearance, meaning, usage, avoid, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(emote_id) DO UPDATE SET
-           appearance = excluded.appearance,
-           meaning = COALESCE(excluded.meaning, emote_meanings.meaning),
-           usage = excluded.usage,
-           avoid = excluded.avoid,
+           appearance = CASE WHEN emote_meanings.curated & 1 != 0
+             THEN emote_meanings.appearance ELSE excluded.appearance END,
+           meaning = CASE WHEN emote_meanings.curated & 2 != 0
+             THEN emote_meanings.meaning
+             ELSE COALESCE(excluded.meaning, emote_meanings.meaning) END,
+           usage = CASE WHEN emote_meanings.curated & 4 != 0
+             THEN emote_meanings.usage ELSE excluded.usage END,
+           avoid = CASE WHEN emote_meanings.curated & 8 != 0
+             THEN emote_meanings.avoid ELSE excluded.avoid END,
            updated_at = excluded.updated_at",
         params![emote_id, appearance, meaning, usage, avoid, updated_at],
     )?;
     Ok(())
 }
 
+/// Write generator output. Curated fields keep their value; every other
+/// field and the generation metadata are replaced. One statement, so a
+/// concurrent editor save (same writer thread) can never interleave.
+pub fn apply_generated_meaning(conn: &Connection, g: &GeneratedMeaning) -> Result<()> {
+    conn.execute(
+        "INSERT INTO emote_meanings (
+           emote_id, appearance, meaning, usage, avoid, updated_at,
+           name, curated, generated_at, context_lines, usage_count
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?6, ?8, ?9)
+         ON CONFLICT(emote_id) DO UPDATE SET
+           appearance = CASE WHEN emote_meanings.curated & 1 != 0
+             THEN emote_meanings.appearance ELSE excluded.appearance END,
+           meaning = CASE WHEN emote_meanings.curated & 2 != 0
+             THEN emote_meanings.meaning ELSE excluded.meaning END,
+           usage = CASE WHEN emote_meanings.curated & 4 != 0
+             THEN emote_meanings.usage ELSE excluded.usage END,
+           avoid = CASE WHEN emote_meanings.curated & 8 != 0
+             THEN emote_meanings.avoid ELSE excluded.avoid END,
+           updated_at = excluded.updated_at,
+           name = excluded.name,
+           generated_at = excluded.generated_at,
+           context_lines = excluded.context_lines,
+           usage_count = excluded.usage_count",
+        params![
+            g.emote_id,
+            g.appearance,
+            g.meaning,
+            g.usage,
+            g.avoid,
+            g.generated_at,
+            g.name,
+            g.context_lines,
+            g.usage_count,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Why an editor save was refused before touching the row.
+#[derive(Debug, thiserror::Error)]
+pub enum MeaningEditError {
+    #[error("a new meaning row needs a non-empty appearance")]
+    MissingAppearance,
+    #[error(transparent)]
+    Db(#[from] rusqlite::Error),
+}
+
+/// Apply a mod's edits: each listed field takes the given value and becomes
+/// curated. Creates the row when absent (then `appearance` must be listed).
+pub fn apply_meaning_edit(
+    conn: &Connection,
+    emote_id: &str,
+    name: Option<&str>,
+    edits: &[(MeaningField, Option<String>)],
+    at: i64,
+) -> std::result::Result<(), MeaningEditError> {
+    let tx = conn.unchecked_transaction()?;
+    let exists: bool = tx
+        .query_row(
+            "SELECT 1 FROM emote_meanings WHERE emote_id = ?1",
+            params![emote_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        let appearance = edits
+            .iter()
+            .find(|(f, _)| *f == MeaningField::Appearance)
+            .and_then(|(_, v)| v.as_deref())
+            .filter(|v| !v.trim().is_empty())
+            .ok_or(MeaningEditError::MissingAppearance)?;
+        tx.execute(
+            "INSERT INTO emote_meanings (emote_id, appearance, updated_at, name)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![emote_id, appearance, at, name],
+        )?;
+    }
+    for (field, value) in edits {
+        let sql = format!(
+            "UPDATE emote_meanings SET {col} = ?1, curated = curated | ?2, updated_at = ?3
+             WHERE emote_id = ?4",
+            col = field.as_str()
+        );
+        tx.execute(&sql, params![value, field.bit(), at, emote_id])?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Return one field to automation. `false` when the row does not exist.
+pub fn unlock_meaning_field(
+    conn: &Connection,
+    emote_id: &str,
+    field: MeaningField,
+) -> Result<bool> {
+    let n = conn.execute(
+        "UPDATE emote_meanings SET curated = curated & ~?1 WHERE emote_id = ?2",
+        params![field.bit(), emote_id],
+    )?;
+    Ok(n > 0)
+}
+
 /// Fetch one emote meaning row by 7TV id.
 pub fn get_emote_meaning(conn: &Connection, emote_id: &str) -> Result<Option<EmoteMeaningRow>> {
     conn.query_row(
-        "SELECT emote_id, appearance, meaning, usage, avoid, updated_at
-         FROM emote_meanings WHERE emote_id = ?1",
+        &format!("SELECT {MEANING_COLUMNS} FROM emote_meanings WHERE emote_id = ?1"),
         params![emote_id],
         map_emote_meaning_row,
     )
     .optional()
     .map_err(Into::into)
+}
+
+/// Every meaning row, ordered by id.
+pub fn list_all_emote_meanings(conn: &Connection) -> Result<Vec<EmoteMeaningRow>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {MEANING_COLUMNS} FROM emote_meanings ORDER BY emote_id"
+    ))?;
+    let rows = stmt.query_map([], map_emote_meaning_row)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
 }
 
 /// Fetch meaning rows for the given ids (empty input → empty vec).
@@ -58,7 +180,7 @@ pub fn list_emote_meanings_for_ids(
         .collect::<Vec<_>>()
         .join(", ");
     let sql = format!(
-        "SELECT emote_id, appearance, meaning, usage, avoid, updated_at
+        "SELECT {MEANING_COLUMNS}
          FROM emote_meanings WHERE emote_id IN ({placeholders})
          ORDER BY emote_id"
     );
@@ -68,6 +190,107 @@ pub fn list_emote_meanings_for_ids(
         .map(|id| id as &dyn rusqlite::types::ToSql)
         .collect();
     let rows = stmt.query_map(params.as_slice(), map_emote_meaning_row)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(Into::into)
+}
+
+/// `WHERE` conditions over `usage_events u` shared by the post-window
+/// queries: unflagged, at or after `since_ms`, no deny-listed login, and
+/// outside the try-out window that follows every `add` of the emote (so a
+/// re-add restarts the window; a rename is not an add).
+fn push_post_window_conditions(
+    filter: &PostWindowFilter,
+    sql: &mut String,
+    params: &mut SqlParams,
+) {
+    sql.push_str(
+        " AND u.flagged = 0 AND u.at >= ?
+          AND NOT EXISTS (
+            SELECT 1 FROM set_events s
+            WHERE s.emote_id = u.emote_id AND s.kind = 'add'
+              AND u.at >= s.at AND u.at < s.at + ?)",
+    );
+    params.push(Box::new(filter.since_ms));
+    params.push(Box::new(filter.tryout_ms));
+    if !filter.deny_logins.is_empty() {
+        let placeholders = std::iter::repeat_n("?", filter.deny_logins.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        sql.push_str(&format!(
+            " AND (u.login IS NULL OR lower(u.login) NOT IN ({placeholders}))"
+        ));
+        for login in &filter.deny_logins {
+            params.push(Box::new(login.to_lowercase()));
+        }
+    }
+}
+
+/// Post-window chat messages per emote (one message using an emote twice
+/// counts once), keyed by emote id. Emotes without any are absent.
+pub fn post_window_usage_counts(
+    conn: &Connection,
+    filter: &PostWindowFilter,
+) -> Result<std::collections::HashMap<String, i64>> {
+    let mut sql = String::from(
+        "SELECT emote_id, COUNT(*) FROM (
+           SELECT DISTINCT u.emote_id, u.at, u.twitch_user_id FROM usage_events u WHERE 1=1",
+    );
+    let mut params: SqlParams = Vec::new();
+    push_post_window_conditions(filter, &mut sql, &mut params);
+    sql.push_str(") GROUP BY emote_id");
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(std::convert::AsRef::as_ref).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    rows.collect::<rusqlite::Result<_>>().map_err(Into::into)
+}
+
+/// Post-window message count for one emote (one message using it twice counts once).
+pub fn post_window_usage_count(
+    conn: &Connection,
+    emote_id: &str,
+    filter: &PostWindowFilter,
+) -> Result<i64> {
+    let mut sql = String::from(
+        "SELECT COUNT(*) FROM (
+           SELECT DISTINCT u.at, u.twitch_user_id FROM usage_events u
+           WHERE u.emote_id = ?",
+    );
+    let mut params: SqlParams = vec![Box::new(emote_id.to_owned())];
+    push_post_window_conditions(filter, &mut sql, &mut params);
+    sql.push(')');
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(std::convert::AsRef::as_ref).collect();
+    conn.query_row(&sql, param_refs.as_slice(), |row| row.get(0))
+        .map_err(Into::into)
+}
+
+/// Newest post-window messages that used `emote_id`, newest first.
+pub fn sample_post_window_usage(
+    conn: &Connection,
+    emote_id: &str,
+    filter: &PostWindowFilter,
+    limit: u32,
+) -> Result<Vec<UsageSample>> {
+    let mut sql = String::from(
+        "SELECT u.at, u.twitch_user_id, MAX(u.login) FROM usage_events u WHERE u.emote_id = ?",
+    );
+    let mut params: SqlParams = vec![Box::new(emote_id.to_owned())];
+    push_post_window_conditions(filter, &mut sql, &mut params);
+    sql.push_str(" GROUP BY u.at, u.twitch_user_id ORDER BY u.at DESC LIMIT ?");
+    params.push(Box::new(i64::from(clamp_limit(limit))));
+    let mut stmt = conn.prepare(&sql)?;
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        params.iter().map(std::convert::AsRef::as_ref).collect();
+    let rows = stmt.query_map(param_refs.as_slice(), |row| {
+        Ok(UsageSample {
+            at: row.get(0)?,
+            twitch_user_id: row.get(1)?,
+            login: row.get(2)?,
+        })
+    })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(Into::into)
 }
@@ -89,6 +312,36 @@ pub fn upsert_emote(
            updated_at = excluded.updated_at",
         params![emote_id, name, i32::from(active), updated_at],
     )?;
+    Ok(())
+}
+
+/// Ensure FK targets for global usage without creating Active Catalog
+/// membership or an add Set Event. Existing channel rows are left untouched.
+pub fn ensure_global_emotes(
+    conn: &Connection,
+    emotes: &[super::rest::GlobalCatalogEmote],
+    updated_at: i64,
+) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT INTO emotes (emote_id, name, active, updated_at)
+             VALUES (?1, ?2, 0, ?3)
+             ON CONFLICT(emote_id) DO UPDATE SET
+               name = excluded.name,
+               updated_at = excluded.updated_at
+             WHERE emotes.active = 0
+               AND NOT EXISTS (
+                 SELECT 1 FROM set_events s
+                 WHERE s.emote_id = emotes.emote_id
+                   AND s.kind IN ('bootstrap', 'add', 'remove', 'rename')
+               )",
+        )?;
+        for emote in emotes {
+            stmt.execute(params![emote.id, emote.name, updated_at])?;
+        }
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -190,12 +443,38 @@ pub fn resolve_active_name(conn: &Connection, name: &str) -> Result<Option<Emote
     .map_err(Into::into)
 }
 
-/// Inactive catalog tombstone with an exact `name` match (`active = 0`).
-/// On collision, lowest `emote_id` wins. Does not return active rows.
-pub fn get_emote_by_name_any(conn: &Connection, name: &str) -> Result<Option<EmoteRow>> {
+/// Inactive channel tombstone with an exact `name` match. Global-only FK rows
+/// have no lifecycle history and are resolved separately.
+pub fn get_inactive_channel_emote_by_name(
+    conn: &Connection,
+    name: &str,
+) -> Result<Option<EmoteRow>> {
     conn.query_row(
         "SELECT emote_id, name, active, updated_at FROM emotes
          WHERE name = ?1 AND active = 0
+           AND EXISTS (
+             SELECT 1 FROM set_events s
+             WHERE s.emote_id = emotes.emote_id
+               AND s.kind IN ('bootstrap', 'add', 'remove', 'rename')
+           )
+         ORDER BY emote_id ASC LIMIT 1",
+        params![name],
+        map_emote_row,
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+/// Global-only FK catalog row with an exact `name` match.
+pub fn get_global_emote_by_name(conn: &Connection, name: &str) -> Result<Option<EmoteRow>> {
+    conn.query_row(
+        "SELECT emote_id, name, active, updated_at FROM emotes
+         WHERE name = ?1 AND active = 0
+           AND NOT EXISTS (
+             SELECT 1 FROM set_events s
+             WHERE s.emote_id = emotes.emote_id
+               AND s.kind IN ('bootstrap', 'add', 'remove', 'rename')
+           )
          ORDER BY emote_id ASC LIMIT 1",
         params![name],
         map_emote_row,
@@ -259,8 +538,13 @@ pub fn apply_set_changes(conn: &Connection, batch: &super::types::SetChangeBatch
 }
 
 pub fn catalog_is_empty(conn: &Connection) -> Result<bool> {
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM emotes", [], |r| r.get(0))?;
-    Ok(n == 0)
+    let nonempty: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM emotes WHERE active = 1)
+            OR EXISTS(SELECT 1 FROM set_events WHERE emote_id IS NOT NULL)",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(nonempty == 0)
 }
 
 fn clamp_limit(limit: u32) -> u32 {
@@ -279,7 +563,12 @@ pub fn top_usage_counts(
     let limit = clamp_limit(limit);
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     let mut sql = String::from(
-        "SELECT e.emote_id, e.name, COUNT(*) AS cnt, MAX(u.at) AS last_at, e.active
+        "SELECT e.emote_id, e.name, COUNT(*) AS cnt, MAX(u.at) AS last_at, e.active,
+         EXISTS (
+           SELECT 1 FROM set_events s
+           WHERE s.emote_id = e.emote_id
+             AND s.kind IN ('bootstrap', 'add', 'remove', 'rename')
+         ) AS has_channel_lifecycle
          FROM usage_events u JOIN emotes e ON e.emote_id = u.emote_id
          WHERE u.flagged = 0",
     );
@@ -300,6 +589,7 @@ pub fn top_usage_counts(
             count: row.get(2)?,
             last_used_at: row.get(3)?,
             active: row.get::<_, i32>(4)? != 0,
+            has_channel_lifecycle: row.get::<_, i32>(5)? != 0,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -349,7 +639,12 @@ pub fn usage_counts_for_user(
 
     params.push(Box::new(i64::from(limit)));
     let top_sql = format!(
-        "SELECT e.emote_id, e.name, COUNT(*) AS cnt, MAX(u.at) AS last_at, e.active
+        "SELECT e.emote_id, e.name, COUNT(*) AS cnt, MAX(u.at) AS last_at, e.active,
+         EXISTS (
+           SELECT 1 FROM set_events s
+           WHERE s.emote_id = e.emote_id
+             AND s.kind IN ('bootstrap', 'add', 'remove', 'rename')
+         ) AS has_channel_lifecycle
          FROM usage_events u JOIN emotes e ON e.emote_id = u.emote_id
          WHERE u.flagged = 0 AND u.twitch_user_id = ?{where_extra}
          GROUP BY e.emote_id ORDER BY cnt DESC, last_at DESC LIMIT ?"
@@ -364,6 +659,7 @@ pub fn usage_counts_for_user(
             count: row.get(2)?,
             last_used_at: row.get(3)?,
             active: row.get::<_, i32>(4)? != 0,
+            has_channel_lifecycle: row.get::<_, i32>(5)? != 0,
         })
     })?;
     let top = rows.collect::<rusqlite::Result<Vec<_>>>()?;
@@ -671,6 +967,7 @@ pub fn count_usage_events(conn: &Connection, filter: &UsageEventListFilter) -> R
 }
 
 fn map_emote_meaning_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmoteMeaningRow> {
+    let curated: i64 = row.get(7)?;
     Ok(EmoteMeaningRow {
         emote_id: row.get(0)?,
         appearance: row.get(1)?,
@@ -678,6 +975,11 @@ fn map_emote_meaning_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EmoteMeani
         usage: row.get(3)?,
         avoid: row.get(4)?,
         updated_at: row.get(5)?,
+        name: row.get(6)?,
+        curated: CuratedFields::from_bits(u8::try_from(curated & 0xF).unwrap_or_default()),
+        generated_at: row.get(8)?,
+        context_lines: row.get(9)?,
+        usage_count: row.get(10)?,
     })
 }
 
@@ -787,6 +1089,161 @@ mod tests {
         assert_eq!(row.usage.as_deref(), Some("new usage"));
         assert_eq!(row.avoid.as_deref(), Some("doomer hours"));
         assert_eq!(row.updated_at, 2);
+    }
+
+    fn generated(emote_id: &str, text: &str, at: i64) -> GeneratedMeaning {
+        GeneratedMeaning {
+            emote_id: emote_id.into(),
+            name: "KEKW".into(),
+            appearance: format!("{text} look"),
+            meaning: Some(format!("{text} meaning")),
+            usage: Some(format!("{text} usage")),
+            avoid: None,
+            generated_at: at,
+            context_lines: 7,
+            usage_count: 12,
+        }
+    }
+
+    #[test]
+    fn generated_meaning_never_overwrites_curated_fields_until_unlocked() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        apply_generated_meaning(&conn, &generated("e1", "auto1", 10)).unwrap();
+        apply_meaning_edit(
+            &conn,
+            "e1",
+            None,
+            &[(MeaningField::Meaning, Some("mod meaning".into()))],
+            20,
+        )
+        .unwrap();
+        let row = get_emote_meaning(&conn, "e1").unwrap().unwrap();
+        assert!(row.curated.contains(MeaningField::Meaning));
+        assert!(!row.curated.contains(MeaningField::Appearance));
+
+        apply_generated_meaning(&conn, &generated("e1", "auto2", 30)).unwrap();
+        // Seed/test upserts are automation too.
+        upsert_emote_meaning(&conn, "e1", "seed look", Some("seed"), None, None, 31).unwrap();
+        let row = get_emote_meaning(&conn, "e1").unwrap().unwrap();
+        assert_eq!(row.meaning.as_deref(), Some("mod meaning"));
+        assert_eq!(row.appearance, "seed look");
+        assert_eq!(row.generated_at, Some(30));
+        assert_eq!(row.context_lines, 7);
+        assert_eq!(row.name.as_deref(), Some("KEKW"));
+
+        assert!(unlock_meaning_field(&conn, "e1", MeaningField::Meaning).unwrap());
+        apply_generated_meaning(&conn, &generated("e1", "auto3", 40)).unwrap();
+        let row = get_emote_meaning(&conn, "e1").unwrap().unwrap();
+        assert_eq!(row.meaning.as_deref(), Some("auto3 meaning"));
+        assert_eq!(row.curated, CuratedFields::default());
+        assert!(!unlock_meaning_field(&conn, "missing", MeaningField::Avoid).unwrap());
+    }
+
+    #[test]
+    fn meaning_edit_creates_row_only_with_appearance() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let err = apply_meaning_edit(
+            &conn,
+            "e1",
+            Some("Pog"),
+            &[(MeaningField::Usage, Some("x".into()))],
+            1,
+        )
+        .unwrap_err();
+        assert!(matches!(err, MeaningEditError::MissingAppearance));
+        assert!(get_emote_meaning(&conn, "e1").unwrap().is_none());
+
+        apply_meaning_edit(
+            &conn,
+            "e1",
+            Some("Pog"),
+            &[
+                (MeaningField::Appearance, Some("staunendes Gesicht".into())),
+                (MeaningField::Avoid, None),
+            ],
+            2,
+        )
+        .unwrap();
+        let row = get_emote_meaning(&conn, "e1").unwrap().unwrap();
+        assert_eq!(row.appearance, "staunendes Gesicht");
+        assert_eq!(row.name.as_deref(), Some("Pog"));
+        assert!(row.curated.contains(MeaningField::Appearance));
+        assert!(row.curated.contains(MeaningField::Avoid));
+        assert_eq!(row.generated_at, None);
+    }
+
+    #[test]
+    fn post_window_counts_skip_tryout_flagged_and_denied_and_readd_restarts_window() {
+        const H: i64 = 3_600_000;
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote(&conn, "e1", "KEKW", true, 1).unwrap();
+        let add = |at: i64| NewSetEvent {
+            at,
+            kind: SetEventKind::Add,
+            emote_id: Some("e1".into()),
+            old_name: None,
+            new_name: Some("KEKW".into()),
+            actor_7tv_id: None,
+            actor_username: None,
+            actor_display_name: None,
+            gap_from: None,
+            gap_to: None,
+            requester_login: None,
+            requester_twitch_id: None,
+            via: None,
+            attribution_method: None,
+        };
+        insert_set_event(&conn, &add(0)).unwrap();
+        let use_at = |at: i64, uid: &str, login: &str, flagged: bool| NewUsageEvent {
+            at,
+            emote_id: "e1".into(),
+            twitch_user_id: uid.into(),
+            login: Some(login.into()),
+            flagged,
+        };
+        insert_usage_events(
+            &conn,
+            &[
+                use_at(H, "1", "alice", false),        // inside first window
+                use_at(100 * H, "1", "alice", false),  // post-window
+                use_at(100 * H, "1", "alice", false),  // same message, 2nd token
+                use_at(101 * H, "2", "bot", true),     // flagged
+                use_at(102 * H, "3", "Denied", false), // deny-listed login
+            ],
+        )
+        .unwrap();
+        let filter = PostWindowFilter {
+            since_ms: 0,
+            tryout_ms: 72 * H,
+            deny_logins: vec!["denied".into()],
+        };
+        assert_eq!(post_window_usage_counts(&conn, &filter).unwrap()["e1"], 1);
+
+        // Re-add restarts the window: a use 1h after it is try-out again.
+        insert_set_event(&conn, &add(200 * H)).unwrap();
+        insert_usage_events(
+            &conn,
+            &[
+                use_at(201 * H, "1", "alice", false),
+                use_at(280 * H, "4", "carol", false),
+            ],
+        )
+        .unwrap();
+        assert_eq!(post_window_usage_counts(&conn, &filter).unwrap()["e1"], 2);
+        let samples = sample_post_window_usage(&conn, "e1", &filter, 20).unwrap();
+        assert_eq!(
+            samples.iter().map(|s| s.at).collect::<Vec<_>>(),
+            vec![280 * H, 100 * H]
+        );
+        // `since_ms` bounds the window.
+        let recent = PostWindowFilter {
+            since_ms: 150 * H,
+            ..filter
+        };
+        assert_eq!(post_window_usage_counts(&conn, &recent).unwrap()["e1"], 1);
     }
 
     #[test]
@@ -905,16 +1362,110 @@ mod tests {
     const TEST_EMOTE_B: &str = "abcdef0123456789abcdef01";
 
     #[test]
-    fn get_emote_by_name_any_returns_inactive_tombstone_only() {
+    fn inactive_name_lookup_distinguishes_globals_and_channel_tombstones() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         upsert_emote(&conn, TEST_EMOTE_A, "OldName", false, 1).unwrap();
         upsert_emote(&conn, TEST_EMOTE_B, "OldName", true, 2).unwrap();
-        // Active name resolves via resolve_active_name — tombstone helper skips active rows.
-        let row = get_emote_by_name_any(&conn, "OldName").unwrap().unwrap();
-        assert_eq!(row.emote_id, TEST_EMOTE_A);
-        assert!(!row.active);
-        assert!(get_emote_by_name_any(&conn, "Missing").unwrap().is_none());
+        assert!(
+            get_inactive_channel_emote_by_name(&conn, "OldName")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            get_global_emote_by_name(&conn, "OldName")
+                .unwrap()
+                .unwrap()
+                .emote_id,
+            TEST_EMOTE_A
+        );
+
+        insert_set_event(
+            &conn,
+            &NewSetEvent {
+                at: 3,
+                kind: SetEventKind::Remove,
+                emote_id: Some(TEST_EMOTE_A.into()),
+                old_name: Some("OldName".into()),
+                new_name: None,
+                actor_7tv_id: None,
+                actor_username: None,
+                actor_display_name: None,
+                gap_from: None,
+                gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            get_inactive_channel_emote_by_name(&conn, "OldName")
+                .unwrap()
+                .unwrap()
+                .emote_id,
+            TEST_EMOTE_A
+        );
+        assert!(
+            get_global_emote_by_name(&conn, "OldName")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn global_refresh_updates_only_global_only_names() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        for (name, at) in [("OldGlobal", 10), ("NewGlobal", 20)] {
+            ensure_global_emotes(
+                &conn,
+                &[crate::emote_tracker::GlobalCatalogEmote {
+                    id: TEST_EMOTE_A.into(),
+                    name: name.into(),
+                }],
+                at,
+            )
+            .unwrap();
+        }
+        let global = get_emote(&conn, TEST_EMOTE_A).unwrap().unwrap();
+        assert_eq!(global.name, "NewGlobal");
+        assert_eq!(global.updated_at, 20);
+
+        upsert_emote(&conn, TEST_EMOTE_B, "Channel", false, 1).unwrap();
+        insert_set_event(
+            &conn,
+            &NewSetEvent {
+                at: 2,
+                kind: SetEventKind::Remove,
+                emote_id: Some(TEST_EMOTE_B.into()),
+                old_name: Some("Channel".into()),
+                new_name: None,
+                actor_7tv_id: None,
+                actor_username: None,
+                actor_display_name: None,
+                gap_from: None,
+                gap_to: None,
+                requester_login: None,
+                requester_twitch_id: None,
+                via: None,
+                attribution_method: None,
+            },
+        )
+        .unwrap();
+        ensure_global_emotes(
+            &conn,
+            &[crate::emote_tracker::GlobalCatalogEmote {
+                id: TEST_EMOTE_B.into(),
+                name: "WrongGlobalName".into(),
+            }],
+            30,
+        )
+        .unwrap();
+        let channel = get_emote(&conn, TEST_EMOTE_B).unwrap().unwrap();
+        assert_eq!(channel.name, "Channel");
+        assert_eq!(channel.updated_at, 1);
     }
 
     #[test]

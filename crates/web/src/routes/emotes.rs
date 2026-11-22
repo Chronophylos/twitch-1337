@@ -4,19 +4,22 @@
 //! (`before` + `before_id`); htmx "Load more" requests get only the next
 //! rows to append.
 
+use std::collections::{BTreeMap, HashMap};
+
 use askama::Template;
 use axum::Router;
-use axum::extract::{Extension, Query, State};
+use axum::extract::{Extension, Path, Query, State};
 use axum::http::HeaderMap;
-use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::response::{IntoResponse, Redirect, Response};
+use axum::routing::{get, post};
 use jiff::civil::DateTime;
 use jiff::tz::AmbiguousOffset;
 use serde::Deserialize;
 use tower_cookies::Cookies;
 use twitch_1337_core::emote_tracker::{
-    SetEventKind, SetEventListFilter, SetEventRow, UsageEventListFilter, format_actor_display,
-    format_berlin_millis, format_set_event_attribution,
+    EmoteMeaningRow, MeaningEditError, MeaningField, PostWindowFilter, SetEventKind,
+    SetEventListFilter, SetEventRow, UsageEventListFilter, format_actor_display,
+    format_berlin_millis, format_set_event_attribution, validate_meaning_text,
 };
 use twitch_1337_core::util::BERLIN;
 
@@ -197,6 +200,11 @@ pub fn router() -> Router<WebState> {
         .route("/emotes", get(catalog))
         .route("/emotes/audit", get(audit))
         .route("/emotes/usage", get(usage))
+        .route("/emotes/meanings", get(meanings))
+        .route("/emotes/meanings/run", post(run_meanings_now))
+        .route("/emotes/meanings/{id}/edit", post(edit_meaning))
+        .route("/emotes/meanings/{id}/unlock", post(unlock_meaning))
+        .route("/emotes/meanings/{id}/regenerate", post(regenerate_meaning))
 }
 
 async fn catalog(
@@ -526,6 +534,378 @@ async fn usage(
         is_owner,
     })
     .map(vary_hx)
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct MeaningsQuery {
+    pub q: Option<String>,
+    pub filter: Option<String>,
+}
+
+#[derive(Clone)]
+struct MeaningFieldView {
+    key: &'static str,
+    value: String,
+    curated: bool,
+}
+
+#[derive(Clone)]
+struct MeaningRowView {
+    emote_id: String,
+    name: String,
+    image_url: String,
+    fields: Vec<MeaningFieldView>,
+    generated_at: String,
+    usage_count: i64,
+    has_row: bool,
+    can_regenerate: bool,
+}
+
+#[derive(Template)]
+#[template(path = "emotes/meanings.html")]
+struct MeaningsTpl {
+    rows: Vec<MeaningRowView>,
+    query: String,
+    filter: String,
+    tracker_disabled: bool,
+    load_failed: bool,
+    user_login: String,
+    user_avatar_url: Option<String>,
+    csrf: String,
+    flash: Option<String>,
+    current_page: &'static str,
+    is_mod: bool,
+    is_broadcaster: bool,
+    is_owner: bool,
+}
+
+async fn meanings(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    Query(query): Query<MeaningsQuery>,
+) -> Result<Response, WebError> {
+    let tracker_disabled = state.emote_tracker.is_none();
+    let mut load_failed = false;
+    let rows = match load_meaning_rows(&state, &query).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            if !tracker_disabled {
+                tracing::warn!(?error, "failed to load Emote Meanings");
+                load_failed = true;
+            }
+            Vec::new()
+        }
+    };
+    render(&MeaningsTpl {
+        rows,
+        query: query.q.unwrap_or_default(),
+        filter: query.filter.unwrap_or_default(),
+        tracker_disabled,
+        load_failed,
+        user_avatar_url: session.avatar_url.clone(),
+        user_login: session.user_login.clone(),
+        csrf: csrf::encode(&session.csrf_value),
+        flash: flash::take(&cookies),
+        current_page: nav::EMOTES_MEANINGS,
+        is_mod: session.is_mod(),
+        is_broadcaster: session.is_broadcaster,
+        is_owner: matches!(session.role, crate::auth::Role::Owner),
+    })
+    .map(vary_hx)
+}
+
+async fn load_meaning_rows(
+    state: &WebState,
+    query: &MeaningsQuery,
+) -> eyre::Result<Vec<MeaningRowView>> {
+    let Some(tracker) = &state.emote_tracker else {
+        return Ok(Vec::new());
+    };
+    let snapshot = state.settings.load();
+    let filter = PostWindowFilter {
+        since_ms: state
+            .clock
+            .now()
+            .as_millisecond()
+            .saturating_sub(30 * 86_400_000),
+        tryout_ms: i64::from(snapshot.ai.emotes_agent.tryout_hours) * 3_600_000,
+        deny_logins: snapshot.twitch.emote_usage_deny_list.clone(),
+    };
+    drop(snapshot);
+    let active = tracker.list_active_emotes().await?;
+    let meanings = tracker.list_all_emote_meanings().await?;
+    let counts = tracker.post_window_usage_counts(filter).await?;
+    Ok(meaning_row_views(active, meanings, counts, query))
+}
+
+fn meaning_row_views(
+    active: Vec<twitch_1337_core::emote_tracker::EmoteRow>,
+    meanings: Vec<EmoteMeaningRow>,
+    counts: HashMap<String, i64>,
+    query: &MeaningsQuery,
+) -> Vec<MeaningRowView> {
+    let mut combined: BTreeMap<String, (String, Option<EmoteMeaningRow>)> = active
+        .into_iter()
+        .map(|emote| (emote.emote_id, (emote.name, None)))
+        .collect();
+    for meaning in meanings {
+        let id = meaning.emote_id.clone();
+        let name = meaning.name.clone().unwrap_or_else(|| id.clone());
+        match combined.entry(id) {
+            std::collections::btree_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().1 = Some(meaning);
+            }
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert((name, Some(meaning)));
+            }
+        }
+    }
+    let search = query.q.as_deref().unwrap_or("").trim().to_lowercase();
+    let filter = query.filter.as_deref().unwrap_or("");
+    combined
+        .into_iter()
+        .filter(|(id, (name, row))| {
+            (search.is_empty()
+                || name.to_lowercase().contains(&search)
+                || id.to_lowercase().contains(&search))
+                && match filter {
+                    "no_row" => row.is_none(),
+                    "no_context" => row.as_ref().is_some_and(|row| row.context_lines == 0),
+                    "curated" => row.as_ref().is_some_and(|row| row.curated.bits() != 0),
+                    _ => true,
+                }
+        })
+        .map(|(emote_id, (name, row))| {
+            let fields = MeaningField::ALL
+                .into_iter()
+                .map(|field| MeaningFieldView {
+                    key: field.as_str(),
+                    value: row
+                        .as_ref()
+                        .and_then(|row| row.field(field))
+                        .unwrap_or("")
+                        .to_owned(),
+                    curated: row.as_ref().is_some_and(|row| row.curated.contains(field)),
+                })
+                .collect();
+            let generated_at = row
+                .as_ref()
+                .and_then(|row| row.generated_at)
+                .map(format_berlin_millis)
+                .unwrap_or_else(|| "never".into());
+            let has_row = row.is_some();
+            let can_regenerate = row.as_ref().is_none_or(|row| row.name.is_some());
+            MeaningRowView {
+                image_url: format!("https://cdn.7tv.app/emote/{emote_id}/2x.webp"),
+                usage_count: counts.get(&emote_id).copied().unwrap_or(0),
+                emote_id,
+                name,
+                fields,
+                generated_at,
+                has_row,
+                can_regenerate,
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug, Deserialize)]
+struct CsrfForm {
+    #[serde(default, rename = "_csrf")]
+    csrf: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct EditMeaningForm {
+    #[serde(default, rename = "_csrf")]
+    csrf: String,
+    appearance: String,
+    #[serde(default)]
+    original_appearance: String,
+    #[serde(default)]
+    meaning: String,
+    #[serde(default)]
+    original_meaning: String,
+    #[serde(default)]
+    usage: String,
+    #[serde(default)]
+    original_usage: String,
+    #[serde(default)]
+    avoid: String,
+    #[serde(default)]
+    original_avoid: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UnlockMeaningForm {
+    #[serde(default, rename = "_csrf")]
+    csrf: String,
+    field: String,
+}
+
+fn dashboard_text(field: MeaningField, value: &str) -> Result<Option<String>, WebError> {
+    validate_meaning_text(field, value).map_err(|error| WebError::Validation {
+        field: field.as_str().into(),
+        msg: match error {
+            twitch_1337_core::emote_tracker::MeaningTextError::EmptyAppearance => {
+                "must not be empty".into()
+            }
+            twitch_1337_core::emote_tracker::MeaningTextError::TooLong { .. } => {
+                "must be at most 300 characters".into()
+            }
+            twitch_1337_core::emote_tracker::MeaningTextError::ControlChar { .. } => {
+                "must not contain control characters".into()
+            }
+        },
+    })
+}
+
+async fn edit_meaning(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    Path(emote_id): Path<String>,
+    axum::Form(form): axum::Form<EditMeaningForm>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form.csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    let tracker = state
+        .emote_tracker
+        .as_ref()
+        .ok_or_else(|| WebError::Validation {
+            field: "emote_tracker".into(),
+            msg: "is disabled".into(),
+        })?;
+    let existing = tracker.get_emote_meaning(&emote_id).await?;
+    let values = [
+        (
+            MeaningField::Appearance,
+            form.appearance,
+            form.original_appearance,
+        ),
+        (MeaningField::Meaning, form.meaning, form.original_meaning),
+        (MeaningField::Usage, form.usage, form.original_usage),
+        (MeaningField::Avoid, form.avoid, form.original_avoid),
+    ];
+    let mut edits = Vec::new();
+    for (field, value, original) in values {
+        if value == original {
+            continue;
+        }
+        edits.push((field, dashboard_text(field, &value)?));
+    }
+    let catalog_name = tracker.get_emote(&emote_id).await?.map(|emote| emote.name);
+    let name = catalog_name.or_else(|| existing.and_then(|row| row.name));
+    match tracker
+        .apply_meaning_edit(
+            &emote_id,
+            name.as_deref(),
+            edits,
+            state.clock.now().as_millisecond(),
+        )
+        .await?
+    {
+        Ok(()) => flash::set(&cookies, "Emote Meaning saved; changed fields are curated."),
+        Err(MeaningEditError::MissingAppearance) => {
+            return Err(WebError::Validation {
+                field: "appearance".into(),
+                msg: "is required for a new row".into(),
+            });
+        }
+        Err(MeaningEditError::Db(error)) => return Err(WebError::Internal(error.into())),
+    }
+    Ok(Redirect::to("/emotes/meanings").into_response())
+}
+
+async fn unlock_meaning(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    Path(emote_id): Path<String>,
+    axum::Form(form): axum::Form<UnlockMeaningForm>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form.csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    let field = MeaningField::parse(&form.field).ok_or_else(|| WebError::Validation {
+        field: "field".into(),
+        msg: "is not an Emote Meaning field".into(),
+    })?;
+    let tracker = state
+        .emote_tracker
+        .as_ref()
+        .ok_or_else(|| WebError::Validation {
+            field: "emote_tracker".into(),
+            msg: "is disabled".into(),
+        })?;
+    if tracker.unlock_meaning_field(&emote_id, field).await? {
+        flash::set(&cookies, "Field unlocked for automation.");
+    }
+    Ok(Redirect::to("/emotes/meanings").into_response())
+}
+
+async fn regenerate_meaning(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    Path(emote_id): Path<String>,
+    axum::Form(form): axum::Form<CsrfForm>,
+) -> Result<Response, WebError> {
+    if !csrf::verify(&form.csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    let tracker = state
+        .emote_tracker
+        .as_ref()
+        .ok_or_else(|| WebError::Validation {
+            field: "emote_tracker".into(),
+            msg: "is disabled".into(),
+        })?;
+    let catalog_name = tracker.get_emote(&emote_id).await?.map(|emote| emote.name);
+    let name = match catalog_name {
+        Some(name) => Some(name),
+        None => tracker
+            .get_emote_meaning(&emote_id)
+            .await?
+            .and_then(|row| row.name),
+    };
+    let Some(name) = name else {
+        flash::set(
+            &cookies,
+            "Cannot regenerate: the emote name is not known yet.",
+        );
+        return Ok(Redirect::to("/emotes/meanings").into_response());
+    };
+    let message = if state.emotes_agent.regenerate(&emote_id, &name) {
+        "Regeneration queued."
+    } else {
+        "Generation queue is unavailable or full; try again later."
+    };
+    flash::set(&cookies, message);
+    Ok(Redirect::to("/emotes/meanings").into_response())
+}
+
+async fn run_meanings_now(
+    State(state): State<WebState>,
+    Extension(session): Extension<Session>,
+    cookies: Cookies,
+    axum::Form(form): axum::Form<CsrfForm>,
+) -> Result<Response, WebError> {
+    if !matches!(session.role, crate::auth::Role::Owner) {
+        return Err(WebError::TierTooLow);
+    }
+    if !csrf::verify(&form.csrf, &session.csrf_value) {
+        return Err(WebError::CsrfMismatch);
+    }
+    let message = if state.emotes_agent.run_now() {
+        "Nightly-priority batch queued."
+    } else {
+        "Generation queue is unavailable or full; try again later."
+    };
+    flash::set(&cookies, message);
+    Ok(Redirect::to("/emotes/meanings").into_response())
 }
 
 #[cfg(test)]

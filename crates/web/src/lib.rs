@@ -47,11 +47,11 @@ const SESSION_PERSIST_INTERVAL: std::time::Duration = std::time::Duration::from_
 
 /// Sent on every response. Scripts and styles come only from `/assets/*`:
 /// templates carry no inline `<script>`, `<style>`, `style=""` or `on*=`.
-/// `img-src` admits Twitch avatars (Helix `profile_image_url`); no other
-/// remote image is rendered. The Twitch login is a link to `/auth/start`,
+/// `img-src` admits Twitch avatars (Helix `profile_image_url`) and 7TV emote
+/// images on the meanings editor. The Twitch login is a link to `/auth/start`,
 /// which redirects; no form posts off-origin, so `form-action` stays `'self'`.
 pub const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
-     img-src 'self' https://static-cdn.jtvnw.net; \
+     img-src 'self' https://static-cdn.jtvnw.net https://cdn.7tv.app; \
      style-src 'self'; script-src 'self'; connect-src 'self'; \
      frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 

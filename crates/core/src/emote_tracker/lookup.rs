@@ -61,14 +61,19 @@ pub fn resolve_emote_query(conn: &Connection, query: &str) -> Result<Option<Emot
         return Ok(Some(row));
     }
 
-    // 4. Inactive tombstone name
-    if let Some(row) = super::db::get_emote_by_name_any(conn, q)? {
+    // 4. Inactive channel tombstone name
+    if let Some(row) = super::db::get_inactive_channel_emote_by_name(conn, q)? {
         return Ok(Some(row));
     }
 
     // 5. Latest set_events spelling
     if let Some(id) = super::db::latest_emote_id_for_name_in_events(conn, q)? {
         return get_emote(conn, &id);
+    }
+
+    // 6. Global-only FK rows come last so channel renames and tombstones win.
+    if let Some(row) = super::db::get_global_emote_by_name(conn, q)? {
+        return Ok(Some(row));
     }
 
     Ok(None)
@@ -101,7 +106,7 @@ mod tests {
     use super::*;
     use rusqlite::Connection;
 
-    use super::super::db::{insert_set_event, upsert_emote};
+    use super::super::db::{ensure_global_emotes, insert_set_event, upsert_emote};
     use super::super::schema::migrate;
     use super::super::types::NewSetEvent;
 
@@ -129,6 +134,30 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    fn lifecycle(
+        emote_id: &str,
+        kind: SetEventKind,
+        old_name: Option<&str>,
+        new_name: Option<&str>,
+    ) -> NewSetEvent {
+        NewSetEvent {
+            at: 2,
+            kind,
+            emote_id: Some(emote_id.into()),
+            old_name: old_name.map(Into::into),
+            new_name: new_name.map(Into::into),
+            actor_7tv_id: None,
+            actor_username: None,
+            actor_display_name: None,
+            gap_from: None,
+            gap_to: None,
+            requester_login: None,
+            requester_twitch_id: None,
+            via: None,
+            attribution_method: None,
+        }
     }
 
     #[test]
@@ -202,8 +231,84 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         upsert_emote(&conn, ID, "Retired", false, 1).unwrap();
+        insert_set_event(
+            &conn,
+            &lifecycle(ID, SetEventKind::Remove, Some("Retired"), None),
+        )
+        .unwrap();
         let row = resolve_emote_query(&conn, "Retired").unwrap().unwrap();
         assert_eq!(row.emote_id, ID);
+    }
+
+    #[test]
+    fn renamed_channel_spelling_wins_over_global_name_collision() {
+        const ID: &str = "0123456789abcdef01234567";
+        const GLOBAL_ID: &str = "fedcba9876543210fedcba98";
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote(&conn, ID, "Current", true, 1).unwrap();
+        insert_set_event(
+            &conn,
+            &lifecycle(ID, SetEventKind::Rename, Some("Shared"), Some("Current")),
+        )
+        .unwrap();
+        ensure_global_emotes(
+            &conn,
+            &[crate::emote_tracker::GlobalCatalogEmote {
+                id: GLOBAL_ID.into(),
+                name: "Shared".into(),
+            }],
+            3,
+        )
+        .unwrap();
+
+        let row = resolve_emote_query(&conn, "Shared").unwrap().unwrap();
+        assert_eq!(row.emote_id, ID);
+    }
+
+    #[test]
+    fn channel_tombstone_wins_over_global_name_collision() {
+        const ID: &str = "0123456789abcdef01234567";
+        const GLOBAL_ID: &str = "fedcba9876543210fedcba98";
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        upsert_emote(&conn, ID, "Shared", false, 1).unwrap();
+        insert_set_event(
+            &conn,
+            &lifecycle(ID, SetEventKind::Remove, Some("Shared"), None),
+        )
+        .unwrap();
+        ensure_global_emotes(
+            &conn,
+            &[crate::emote_tracker::GlobalCatalogEmote {
+                id: GLOBAL_ID.into(),
+                name: "Shared".into(),
+            }],
+            3,
+        )
+        .unwrap();
+
+        let row = resolve_emote_query(&conn, "Shared").unwrap().unwrap();
+        assert_eq!(row.emote_id, ID);
+    }
+
+    #[test]
+    fn global_only_name_resolves_after_channel_history_tiers() {
+        const GLOBAL_ID: &str = "fedcba9876543210fedcba98";
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        ensure_global_emotes(
+            &conn,
+            &[crate::emote_tracker::GlobalCatalogEmote {
+                id: GLOBAL_ID.into(),
+                name: "Global".into(),
+            }],
+            1,
+        )
+        .unwrap();
+
+        let row = resolve_emote_query(&conn, "Global").unwrap().unwrap();
+        assert_eq!(row.emote_id, GLOBAL_ID);
     }
 
     #[test]

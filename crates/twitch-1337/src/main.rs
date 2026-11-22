@@ -468,6 +468,7 @@ async fn prepare(
         primary_history_tap: None,
         schedule_runtime,
         emote_tracker,
+        emotes_agent: Default::default(),
         twitch_channel_id,
         mouths,
         echo,

@@ -123,6 +123,7 @@ fn reference_label(field: &str) -> Option<&'static str> {
         "ai.aurora.profile" => "Aurora",
         "ai.grok.profile" => "Grok",
         "ai.dreamer.profile" => "Dreamer",
+        "ai.emotes_agent.profile" => "Emotes agent",
         "ai.media.profile" => "Media",
         "ai.recap.profile" => "Recap",
         "spoiler.profile" => "Spoiler check",
@@ -541,6 +542,11 @@ fn assignments(name: &str, settings: &Settings) -> Vec<AssignmentView> {
             "sec-ai-dreamer",
             settings.ai.dreamer.profile.as_str(),
         ),
+        (
+            "Emotes",
+            "sec-ai-emotes-agent",
+            settings.ai.emotes_agent.profile.as_str(),
+        ),
         ("Media", "sec-ai-media", settings.ai.media.profile.as_str()),
         (
             "Recap",
@@ -895,6 +901,7 @@ async fn update(
             let rewrite_aurora = current.ai.aurora.profile == target;
             let rewrite_grok = current.ai.grok.profile == target;
             let rewrite_dreamer = current.ai.dreamer.profile == target;
+            let rewrite_emotes = current.ai.emotes_agent.profile == target;
             let rewrite_media = current.ai.media.profile == target;
             let rewrite_recap = current.ai.recap.profile.as_deref() == Some(target.as_str());
             let rewrite_spoiler = current.spoiler.profile == target;
@@ -911,6 +918,9 @@ async fn update(
             }
             if rewrite_dreamer {
                 o.ai.dreamer.profile = Some(Some(renamed.clone()));
+            }
+            if rewrite_emotes {
+                o.ai.emotes_agent.profile = Some(Some(renamed.clone()));
             }
             if rewrite_media {
                 o.ai.media.profile = Some(Some(renamed.clone()));

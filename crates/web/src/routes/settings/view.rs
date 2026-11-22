@@ -76,6 +76,7 @@ const NAV: &[NavGroup] = &[
             item("ai-grok", "ai_grok", "Grok"),
             item("ai-recap", "ai_recap", "Recap"),
             item("ai-dreamer", "ai_dreamer", "Dreamer"),
+            item("ai-emotes-agent", "ai_emotes_agent", "Emotes"),
             item("ai-media", "ai_media", "Media"),
         ],
     },

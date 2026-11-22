@@ -239,12 +239,13 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
             "must be >= soul_bytes + lore_bytes".into(),
         );
     }
-    if jiff::civil::Time::strptime("%H:%M", &ai.dreamer.run_at).is_err() {
-        err(
-            errs,
-            "ai.dreamer.run_at",
-            format!("must be HH:MM (got {:?})", ai.dreamer.run_at),
-        );
+    for (field, value) in [
+        ("ai.dreamer.run_at", ai.dreamer.run_at.as_str()),
+        ("ai.emotes_agent.run_at", ai.emotes_agent.run_at.as_str()),
+    ] {
+        if jiff::civil::Time::strptime("%H:%M", value).is_err() {
+            err(errs, field, format!("must be HH:MM (got {value:?})"));
+        }
     }
     if ai.profiles.is_empty() {
         err(
@@ -270,6 +271,7 @@ fn validate_ai(ai: &AiSettings, validate_agent_profile_targets: bool, errs: &mut
         ("ai.aurora.profile", ai.aurora.profile.as_str()),
         ("ai.grok.profile", ai.grok.profile.as_str()),
         ("ai.dreamer.profile", ai.dreamer.profile.as_str()),
+        ("ai.emotes_agent.profile", ai.emotes_agent.profile.as_str()),
         ("ai.media.profile", ai.media.profile.as_str()),
     ] {
         if name.trim().is_empty() {
@@ -651,7 +653,7 @@ mod tests {
         }
     }
 
-    /// Settings whose five agent pointers all name the profile "p", except the
+    /// Settings whose six agent pointers all name the profile "p", except the
     /// one picked by `idx`, which names the Decision profile "d". Returns the
     /// settings and the offending field path.
     fn agent_on_decision(idx: usize) -> (Settings, &'static str) {
@@ -674,6 +676,10 @@ mod tests {
                 "ai.dreamer.profile"
             }
             3 => {
+                s.ai.emotes_agent.profile = "d".into();
+                "ai.emotes_agent.profile"
+            }
+            4 => {
                 s.ai.media.profile = "d".into();
                 "ai.media.profile"
             }
@@ -687,7 +693,7 @@ mod tests {
 
     #[test]
     fn agent_on_decision_profile_is_rejected() {
-        for idx in 0..5 {
+        for idx in 0..6 {
             let (s, field) = agent_on_decision(idx);
             let errs = s.validate(&ctx()).expect_err("must fail");
             assert!(
@@ -700,7 +706,7 @@ mod tests {
 
     #[test]
     fn load_tolerates_agent_on_decision_profile() {
-        for idx in 0..5 {
+        for idx in 0..6 {
             let (s, field) = agent_on_decision(idx);
             s.validate_for_load(&ctx())
                 .unwrap_or_else(|e| panic!("{field}: {e:?}"));
@@ -741,6 +747,7 @@ mod tests {
         s.ai.aurora.profile = active.to_string();
         s.ai.grok.profile = active.to_string();
         s.ai.dreamer.profile = active.to_string();
+        s.ai.emotes_agent.profile = active.to_string();
         s.ai.media.profile = active.to_string();
         s
     }
@@ -1000,6 +1007,14 @@ mod tests {
         s.ai.dreamer.run_at = "not-a-time".into();
         let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "ai.dreamer.run_at"));
+    }
+
+    #[test]
+    fn validate_rejects_malformed_emotes_agent_run_at() {
+        let mut s = Settings::compiled_defaults();
+        s.ai.emotes_agent.run_at = "25:99".into();
+        let errs = s.validate(&ctx()).expect_err("must fail");
+        assert!(errs.iter().any(|e| e.field == "ai.emotes_agent.run_at"));
     }
 
     #[test]

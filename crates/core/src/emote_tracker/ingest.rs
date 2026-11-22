@@ -858,6 +858,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn global_fk_rows_do_not_turn_cold_start_into_reconcile() {
+        crate::install_crypto_provider();
+        let mock = MockServer::start().await;
+        let channel_id = "12345";
+        let body = user_set_body("01USER", "set123", r#"[{"id": "e1", "name": "Kappa"}]"#);
+        rest_mock(channel_id)
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&mock)
+            .await;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join(DB_FILENAME);
+        let handle = EmoteTrackerHandle::open(&db_path).unwrap();
+        handle
+            .ensure_global_emotes(
+                vec![crate::emote_tracker::GlobalCatalogEmote {
+                    id: "global".into(),
+                    name: "Global".into(),
+                }],
+                1,
+            )
+            .await
+            .unwrap();
+        let cfg = rest_cfg(&mock, channel_id);
+
+        startup_reconcile_once(&handle, &reqwest::Client::new(), &cfg, None)
+            .await
+            .unwrap();
+
+        assert_eq!(count_events(&db_path, SetEventKind::Bootstrap), 1);
+        assert_eq!(count_events(&db_path, SetEventKind::Add), 0);
+    }
+
+    #[tokio::test]
     async fn cancellation_before_startup_reconcile_prevents_rest_and_sqlite_effects() {
         crate::install_crypto_provider();
         let mock = MockServer::start().await;

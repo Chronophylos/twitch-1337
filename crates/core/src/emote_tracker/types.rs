@@ -169,8 +169,11 @@ pub struct EmoteUsageCount {
     pub count: i64,
     /// Most recent use in the window (UTC unix ms).
     pub last_used_at: i64,
-    /// `false` when the emote has since left the channel set.
+    /// `false` when the emote is not active, including global-only FK rows.
     pub active: bool,
+    /// Whether lifecycle history distinguishes a channel tombstone from a
+    /// global-only FK row.
+    pub has_channel_lifecycle: bool,
 }
 
 /// Usage of one active emote, including emotes with zero uses in the window.
@@ -244,7 +247,113 @@ pub struct UsageEventListFilter {
     pub before: Option<(i64, i64)>,
 }
 
-/// One row from `emote_meanings` (curated semantics; no FK to `emotes`).
+/// One of the four text fields of an Emote Meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MeaningField {
+    Appearance,
+    Meaning,
+    Usage,
+    Avoid,
+}
+
+impl MeaningField {
+    pub const ALL: [Self; 4] = [Self::Appearance, Self::Meaning, Self::Usage, Self::Avoid];
+
+    /// Column name in `emote_meanings`, also the form / JSON key.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Appearance => "appearance",
+            Self::Meaning => "meaning",
+            Self::Usage => "usage",
+            Self::Avoid => "avoid",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.as_str() == s)
+    }
+
+    /// Bit of this field in `emote_meanings.curated`.
+    pub const fn bit(self) -> u8 {
+        match self {
+            Self::Appearance => 1,
+            Self::Meaning => 2,
+            Self::Usage => 4,
+            Self::Avoid => 8,
+        }
+    }
+}
+
+/// Set of Curated Fields: fields a mod edited, which automation never
+/// overwrites (ADR-0014). Stored as the `emote_meanings.curated` bitmask.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CuratedFields(u8);
+
+impl CuratedFields {
+    const ALL_BITS: u8 = 0b1111;
+
+    /// Unknown bits (a newer build) are dropped.
+    pub const fn from_bits(bits: u8) -> Self {
+        Self(bits & Self::ALL_BITS)
+    }
+
+    pub const fn bits(self) -> u8 {
+        self.0
+    }
+
+    pub const fn contains(self, field: MeaningField) -> bool {
+        self.0 & field.bit() != 0
+    }
+
+    /// `true` when every field is curated, so automation has nothing to do.
+    pub const fn is_all(self) -> bool {
+        self.0 == Self::ALL_BITS
+    }
+}
+
+/// Longest accepted Emote Meaning field, in characters.
+pub const MEANING_FIELD_MAX_CHARS: usize = 300;
+
+/// Why an Emote Meaning field value was rejected. `Display` is for logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum MeaningTextError {
+    #[error("appearance must not be empty")]
+    EmptyAppearance,
+    #[error("{field} exceeds {MEANING_FIELD_MAX_CHARS} characters")]
+    TooLong { field: &'static str },
+    #[error("{field} contains control characters")]
+    ControlChar { field: &'static str },
+}
+
+/// Validate and normalize one field value, shared by the generator and the
+/// editor: trimmed, at most [`MEANING_FIELD_MAX_CHARS`] characters, no
+/// control characters, `appearance` non-empty. A blank optional field
+/// becomes `None`.
+pub fn validate_meaning_text(
+    field: MeaningField,
+    value: &str,
+) -> Result<Option<String>, MeaningTextError> {
+    let value = value.trim();
+    if value.chars().any(char::is_control) {
+        return Err(MeaningTextError::ControlChar {
+            field: field.as_str(),
+        });
+    }
+    if value.chars().count() > MEANING_FIELD_MAX_CHARS {
+        return Err(MeaningTextError::TooLong {
+            field: field.as_str(),
+        });
+    }
+    if value.is_empty() {
+        return match field {
+            MeaningField::Appearance => Err(MeaningTextError::EmptyAppearance),
+            _ => Ok(None),
+        };
+    }
+    Ok(Some(value.to_owned()))
+}
+
+/// One row from `emote_meanings` (semantics; no FK to `emotes`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmoteMeaningRow {
     pub emote_id: String,
@@ -253,6 +362,65 @@ pub struct EmoteMeaningRow {
     pub usage: Option<String>,
     pub avoid: Option<String>,
     pub updated_at: i64,
+    /// Emote name at the last generation (catalog name for migrated seed
+    /// rows; `None` for seeded globals).
+    pub name: Option<String>,
+    pub curated: CuratedFields,
+    /// When the Emotes agent last wrote the row (UTC ms); `None` = never.
+    pub generated_at: Option<i64>,
+    /// Chat lines the last generation saw; 0 = generated without context.
+    pub context_lines: i64,
+    /// Post-window usage count the last generation saw.
+    pub usage_count: i64,
+}
+
+impl EmoteMeaningRow {
+    /// Value of one text field (`None` when the optional field is empty).
+    pub fn field(&self, field: MeaningField) -> Option<&str> {
+        match field {
+            MeaningField::Appearance => Some(self.appearance.as_str()),
+            MeaningField::Meaning => self.meaning.as_deref(),
+            MeaningField::Usage => self.usage.as_deref(),
+            MeaningField::Avoid => self.avoid.as_deref(),
+        }
+    }
+}
+
+/// Validated generator output for one emote plus its generation metadata.
+/// Written by [`super::EmoteTrackerHandle::apply_generated_meaning`], which
+/// skips every curated field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneratedMeaning {
+    pub emote_id: String,
+    pub name: String,
+    pub appearance: String,
+    pub meaning: Option<String>,
+    pub usage: Option<String>,
+    pub avoid: Option<String>,
+    /// Generation time (UTC ms).
+    pub generated_at: i64,
+    pub context_lines: i64,
+    pub usage_count: i64,
+}
+
+/// One chat message that used an emote, for context sampling.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UsageSample {
+    /// Message time (UTC ms).
+    pub at: i64,
+    pub twitch_user_id: String,
+    pub login: Option<String>,
+}
+
+/// Which usage counts toward Emote Meaning context: unflagged, outside every
+/// try-out window, not by a deny-listed login, at or after `since_ms`.
+#[derive(Debug, Clone, Default)]
+pub struct PostWindowFilter {
+    pub since_ms: i64,
+    /// Try-out window length after each `add` set event (ms).
+    pub tryout_ms: i64,
+    /// Logins excluded regardless of the stored `flagged` bit (lowercase).
+    pub deny_logins: Vec<String>,
 }
 
 /// Input for inserting one `usage_events` chat-usage row.

@@ -233,13 +233,30 @@ what chat usage matching sees.
 _Avoid_: glossary, global emotes, Emote Meaning (semantics are a sibling).
 
 **Emote Meaning:**
-Curated semantic annotation for a 7TV emote, keyed by `emote_id`, holding
-appearance (what it looks like), meaning (what it signals in chat), and optional
-usage/avoid guidance. Lives beside the Active Catalog; not membership.
+Semantic annotation for a 7TV emote, keyed by `emote_id`, holding appearance
+(what it looks like), meaning (what it signals in chat), and optional usage/avoid
+guidance. Written by the Emotes agent, a mod, or both. Lives beside the Active
+Catalog; not membership.
 _Avoid_: glossary, description (alone), prompt list.
 
+**Curated Field:**
+One Emote Meaning field whose current wording a mod owns. Automation leaves it
+unchanged until the mod unlocks it; the other fields remain automatic.
+_Avoid_: locked row, manual emote, approved meaning.
+
+**Try-out Window:**
+The initial period after an emote's latest addition to the channel set whose
+usage does not count as settled channel context. A re-add starts a new window;
+a rename does not.
+_Avoid_: cooldown, probation, grace period.
+
+**Emotes agent:**
+The bot's vision-capable annotation persona: the actor that writes automatic
+Emote Meanings from an emote's image, name, and settled channel usage.
+_Avoid_: Dreamer, emote picker, decision model, reranker.
+
 **Emote Tombstone:**
-An `emotes` row with `active = 0` kept after removal so history foreign keys and
+An inactive channel-emote row kept after removal so history foreign keys and
 last-known names remain.
 _Avoid_: deleted emote, hard delete.
 
@@ -249,7 +266,8 @@ the channel set.
 _Avoid_: changelog, log line.
 
 **Usage Event:**
-One recorded occurrence of an active emote token in a PRIVMSG.
+One recorded occurrence of an active channel emote or a global 7TV emote token
+in a PRIVMSG. Global usage has no add Set Event.
 _Avoid_: hit, impression.
 
 **Gap:**

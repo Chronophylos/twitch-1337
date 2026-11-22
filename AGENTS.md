@@ -243,7 +243,7 @@ error beside its form control (`aria-invalid` + `aria-describedby`, first one
 focused by `app.js`); the top summary only lists errors with no control
 (list-level, agent pointers, other profiles), named by profile, never by
 `ai.profiles[N]` path. `ai.aurora.profile` names the profile `!ai` uses; Aurora, Grok,
-Dreamer, and Media each have a required profile dropdown at `/settings`.
+Dreamer, Media, and the Emotes agent each have a required profile dropdown at `/settings`.
 Recap's profile dropdown is optional, with empty meaning off. Agents do not
 override model / effort / tier on top of a profile — pick a different profile
 instead. Dreamer and media keep their own timeout knobs. Every chat AI client is
@@ -258,6 +258,15 @@ caps, dreamer schedule, web/emote/media tool toggles, history caps, and every
 other runtime knob live in the dashboard (`/settings`, owner only) and
 persist to `$DATA_DIR/settings.ron`. A leftover legacy `[ai]` table in
 `config.toml` is ignored — runtime AI knobs are dashboard-managed only.
+
+The Emotes agent (`ai.emotes_agent`) maintains German Emote Meanings from a
+static 7TV CDN frame, emote name, post-window usage count and up to 20 matched
+Transcript lines. It requires a vision-capable Chat profile, resolves it per
+call through `LlmRegistry`, and runs on add, at its Berlin `run_at`, on
+Regenerate, and on owner Run now. `enabled`, `batch_size`, `min_usages`, and
+`tryout_hours` apply live. Editor changes set independent Curated Field bits;
+automatic writes never replace those fields until Unlock. The mod-gated editor
+is `/emotes/meanings`. See ADR-0014.
 
 `[aviationstack]` keeps only `api_key` in config.toml. `enabled`, `base_url`,
 and `timeout_secs` live in `settings.ron` (restart-required for connection

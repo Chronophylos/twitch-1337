@@ -7,11 +7,14 @@ use std::sync::Arc;
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode, header};
-use helpers::{FakeHelix, build_state_with_dirs, cookie_header, insert_session, install_crypto};
+use helpers::{
+    FakeHelix, build_state_with_dirs, cookie_header, insert_session, insert_session_as,
+    install_crypto,
+};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
 use twitch_1337_core::emote_tracker::{
-    DB_FILENAME, EmoteTrackerHandle, NewSetEvent, NewUsageEvent, SetEventKind,
+    DB_FILENAME, EmoteTrackerHandle, MeaningField, NewSetEvent, NewUsageEvent, SetEventKind,
 };
 use twitch_1337_web::auth::require_mod;
 use twitch_1337_web::routes::emotes;
@@ -266,6 +269,241 @@ async fn emotes_usage_load_more_pages_by_cursor() {
     assert!(html.contains("<html"), "full page");
     assert_eq!(usage_logins(&html).len(), 50);
     assert!(html.contains("Showing all 250"));
+}
+
+fn form_post(uri: &str, sid: &str, csrf: &str, form: String) -> Request<Body> {
+    Request::builder()
+        .uri(uri)
+        .method(Method::POST)
+        .header(header::COOKIE, cookie_header(sid, csrf))
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .body(Body::from(form))
+        .unwrap()
+}
+
+#[tokio::test]
+async fn meanings_are_mod_gated_and_render_image_badges_and_filters() {
+    install_crypto();
+    let (mut state, _td_pings, _td_mem) = build_state_with_dirs(mod_helix()).await;
+    let (tracker, _db_dir) = seeded_tracker().await;
+    tracker
+        .upsert_emote_meaning(
+            "aaaaaaaaaaaaaaaaaaaaaaaa",
+            "grinsendes Gesicht",
+            None,
+            None,
+            None,
+            1,
+        )
+        .await
+        .unwrap();
+    state.emote_tracker = Some(tracker);
+    let (sid, csrf, _) = insert_session_as(
+        &state,
+        "viewer",
+        "viewer",
+        twitch_1337_web::auth::Role::Viewer,
+    );
+    let denied = app(state.clone())
+        .oneshot(get("/emotes/meanings", &sid, &csrf, false))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    let (sid, csrf, _) = insert_session(&state, "42", "admin");
+    let response = app(state)
+        .oneshot(get(
+            "/emotes/meanings?filter=no_context",
+            &sid,
+            &csrf,
+            false,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = body_string(response).await;
+    assert!(html.contains("https://cdn.7tv.app/emote/aaaaaaaaaaaaaaaaaaaaaaaa/2x.webp"));
+    assert!(html.contains("auto"));
+    assert!(html.contains("Kappa"));
+    assert!(html.contains("name=\"original_appearance\" value=\"grinsendes Gesicht\""));
+}
+
+#[tokio::test]
+async fn meaning_edit_requires_csrf_marks_changed_field_and_unlock_restores_auto() {
+    install_crypto();
+    let (mut state, _td_pings, _td_mem) = build_state_with_dirs(mod_helix()).await;
+    let (tracker, _db_dir) = seeded_tracker().await;
+    tracker
+        .upsert_emote_meaning(
+            "aaaaaaaaaaaaaaaaaaaaaaaa",
+            "alt",
+            Some("auto"),
+            None,
+            None,
+            1,
+        )
+        .await
+        .unwrap();
+    state.emote_tracker = Some(tracker.clone());
+    let (sid, csrf, bare) = insert_session(&state, "42", "admin");
+    let uri = "/emotes/meanings/aaaaaaaaaaaaaaaaaaaaaaaa/edit";
+    let missing_csrf = app(state.clone())
+        .oneshot(form_post(
+            uri,
+            &sid,
+            &csrf,
+            "appearance=alt&meaning=mod&usage=&avoid=".into(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(missing_csrf.status(), StatusCode::FORBIDDEN);
+
+    let saved = app(state.clone())
+        .oneshot(form_post(
+            uri,
+            &sid,
+            &csrf,
+            format!(
+                "_csrf={bare}&original_appearance=alt&original_meaning=auto&original_usage=&original_avoid=&appearance=alt&meaning=mod&usage=&avoid="
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+    let row = tracker
+        .get_emote_meaning("aaaaaaaaaaaaaaaaaaaaaaaa")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.meaning.as_deref(), Some("mod"));
+    assert!(row.curated.contains(MeaningField::Meaning));
+    assert!(!row.curated.contains(MeaningField::Appearance));
+
+    let unlocked = app(state)
+        .oneshot(form_post(
+            "/emotes/meanings/aaaaaaaaaaaaaaaaaaaaaaaa/unlock",
+            &sid,
+            &csrf,
+            format!("_csrf={bare}&field=meaning"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(unlocked.status(), StatusCode::SEE_OTHER);
+    let row = tracker
+        .get_emote_meaning("aaaaaaaaaaaaaaaaaaaaaaaa")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!row.curated.contains(MeaningField::Meaning));
+}
+
+#[tokio::test]
+async fn meaning_edit_preserves_fields_generated_after_render() {
+    install_crypto();
+    let (mut state, _td_pings, _td_mem) = build_state_with_dirs(mod_helix()).await;
+    let (tracker, _db_dir) = seeded_tracker().await;
+    let id = "aaaaaaaaaaaaaaaaaaaaaaaa";
+    tracker
+        .upsert_emote_meaning(id, "alt", Some("auto"), None, None, 1)
+        .await
+        .unwrap();
+    state.emote_tracker = Some(tracker.clone());
+    let (sid, csrf, bare) = insert_session(&state, "42", "admin");
+
+    tracker
+        .upsert_emote_meaning(
+            id,
+            "generated-face",
+            Some("generated-meaning"),
+            Some("generated-usage"),
+            Some("generated-avoid"),
+            2,
+        )
+        .await
+        .unwrap();
+    let saved = app(state)
+        .oneshot(form_post(
+            "/emotes/meanings/aaaaaaaaaaaaaaaaaaaaaaaa/edit",
+            &sid,
+            &csrf,
+            format!(
+                "_csrf={bare}&original_appearance=alt&original_meaning=auto&original_usage=&original_avoid=&appearance=alt&meaning=mod&usage=&avoid="
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+
+    let row = tracker.get_emote_meaning(id).await.unwrap().unwrap();
+    assert_eq!(row.appearance, "generated-face");
+    assert_eq!(row.meaning.as_deref(), Some("mod"));
+    assert_eq!(row.usage.as_deref(), Some("generated-usage"));
+    assert_eq!(row.avoid.as_deref(), Some("generated-avoid"));
+    assert!(row.curated.contains(MeaningField::Meaning));
+    assert!(!row.curated.contains(MeaningField::Appearance));
+    assert!(!row.curated.contains(MeaningField::Usage));
+    assert!(!row.curated.contains(MeaningField::Avoid));
+}
+
+#[tokio::test]
+async fn meaning_edit_after_first_generation_preserves_untouched_no_row_fields() {
+    install_crypto();
+    let (mut state, _td_pings, _td_mem) = build_state_with_dirs(mod_helix()).await;
+    let (tracker, _db_dir) = seeded_tracker().await;
+    let id = "aaaaaaaaaaaaaaaaaaaaaaaa";
+    state.emote_tracker = Some(tracker.clone());
+    let (sid, csrf, bare) = insert_session(&state, "42", "admin");
+
+    tracker
+        .upsert_emote_meaning(
+            id,
+            "generated-face",
+            Some("generated-meaning"),
+            Some("generated-usage"),
+            Some("generated-avoid"),
+            2,
+        )
+        .await
+        .unwrap();
+    let saved = app(state)
+        .oneshot(form_post(
+            "/emotes/meanings/aaaaaaaaaaaaaaaaaaaaaaaa/edit",
+            &sid,
+            &csrf,
+            format!(
+                "_csrf={bare}&original_appearance=&original_meaning=&original_usage=&original_avoid=&appearance=mod-face&meaning=mod-meaning&usage=&avoid="
+            ),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(saved.status(), StatusCode::SEE_OTHER);
+
+    let row = tracker.get_emote_meaning(id).await.unwrap().unwrap();
+    assert_eq!(row.appearance, "mod-face");
+    assert_eq!(row.meaning.as_deref(), Some("mod-meaning"));
+    assert_eq!(row.usage.as_deref(), Some("generated-usage"));
+    assert_eq!(row.avoid.as_deref(), Some("generated-avoid"));
+    assert!(row.curated.contains(MeaningField::Appearance));
+    assert!(row.curated.contains(MeaningField::Meaning));
+    assert!(!row.curated.contains(MeaningField::Usage));
+    assert!(!row.curated.contains(MeaningField::Avoid));
+}
+
+#[tokio::test]
+async fn meanings_run_now_is_owner_only() {
+    install_crypto();
+    let (state, _td_pings, _td_mem) = build_state_with_dirs(mod_helix()).await;
+    let (sid, csrf, bare) = insert_session(&state, "42", "admin");
+    let denied = app(state.clone())
+        .oneshot(form_post(
+            "/emotes/meanings/run",
+            &sid,
+            &csrf,
+            format!("_csrf={bare}"),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]
