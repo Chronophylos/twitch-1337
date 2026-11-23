@@ -463,7 +463,12 @@ pub(crate) fn spawn_handlers<T, L>(
         supervisor,
         lifecycle.clone(),
         "message router",
-        run_message_router(incoming, broadcast_tx.clone(), lifecycle.clone()),
+        run_message_router(
+            incoming,
+            broadcast_tx.clone(),
+            lifecycle.clone(),
+            services.echo.clone(),
+        ),
     );
 
     // Schedules keeps its explicit child-task ownership API and is joined after
@@ -535,21 +540,14 @@ pub(crate) fn spawn_handlers<T, L>(
         let rx = broadcast_tx.subscribe();
         let w = Arc::new(t);
         let ch = services.channel.clone();
-        let echo_tap = services.echo.clone();
         let task_lifecycle = lifecycle.clone();
         register_loop(
             supervisor,
             lifecycle.clone(),
             "transcript tap",
             async move {
-                crate::twitch::handlers::transcript::run_transcript_tap(
-                    rx,
-                    w,
-                    ch,
-                    echo_tap,
-                    task_lifecycle,
-                )
-                .await;
+                crate::twitch::handlers::transcript::run_transcript_tap(rx, w, ch, task_lifecycle)
+                    .await;
             },
         );
     }
@@ -560,19 +558,10 @@ pub(crate) fn spawn_handlers<T, L>(
         let settings = services.settings.clone();
         let channel = services.channel.clone();
         let bot_username = services.bot_username.clone();
-        let echo_usage = services.echo.clone();
         let task_lifecycle = lifecycle.clone();
         register_loop(supervisor, lifecycle.clone(), "emote usage", async move {
-            run_emote_usage_handler(
-                rx,
-                handle,
-                settings,
-                channel,
-                bot_username,
-                echo_usage,
-                task_lifecycle,
-            )
-            .await
+            run_emote_usage_handler(rx, handle, settings, channel, bot_username, task_lifecycle)
+                .await
         });
     }
 
@@ -580,7 +569,6 @@ pub(crate) fn spawn_handlers<T, L>(
         let rx = broadcast_tx.subscribe();
         let sender = chat_sender.clone();
         let channel = services.channel.clone();
-        let echo_link_correction = services.echo.clone();
         let settings = services.settings.clone();
         let task_lifecycle = lifecycle.clone();
         register_lifecycle_loop(
@@ -588,15 +576,7 @@ pub(crate) fn spawn_handlers<T, L>(
             lifecycle.clone(),
             "link correction handler",
             async move {
-                run_link_correction_handler(
-                    rx,
-                    sender,
-                    channel,
-                    echo_link_correction,
-                    settings,
-                    task_lifecycle,
-                )
-                .await;
+                run_link_correction_handler(rx, sender, channel, settings, task_lifecycle).await;
             },
         );
     }
@@ -610,22 +590,9 @@ pub(crate) fn spawn_handlers<T, L>(
         let hos = services.hall_of_shame.clone();
         let clk = services.clock.clone();
         let dd = services.data_dir.clone();
-        let echo_tracker = services.echo.clone();
         let task_lifecycle = lifecycle.clone();
         register_loop(supervisor, lifecycle.clone(), "1337 handler", async move {
-            run_1337_handler(
-                btx,
-                sender,
-                channel,
-                lat,
-                lb,
-                hos,
-                clk,
-                dd,
-                echo_tracker,
-                task_lifecycle,
-            )
-            .await
+            run_1337_handler(btx, sender, channel, lat, lb, hos, clk, dd, task_lifecycle).await
         });
     }
 

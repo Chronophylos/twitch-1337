@@ -21,7 +21,6 @@ use crate::emote_tracker::{
 use crate::lifecycle::{Lifecycle, TaskGroup};
 use crate::settings::SettingsHandle;
 use crate::twitch::clanker::should_flag_usage;
-use crate::twitch::echo::EchoGuard;
 use crate::twitch::handlers::Inbound;
 
 pub const CATALOG_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
@@ -227,7 +226,6 @@ pub async fn run_emote_usage_handler(
     settings: SettingsHandle,
     channel: String,
     bot_username: String,
-    echo: Arc<EchoGuard>,
     lifecycle: Lifecycle,
 ) -> eyre::Result<()> {
     let mut active_names = HashMap::new();
@@ -244,9 +242,6 @@ pub async fn run_emote_usage_handler(
         .build()
         .wrap_err("build global emote usage HTTP client")?;
 
-    // Mouth logins never change post-startup; clone once so the per-message
-    // deny-list merge below is just a cheap chain, not a re-clone of the guard's set.
-    let mouth_logins: Vec<String> = echo.mouth_logins().iter().cloned().collect();
     let (mut usage_tasks, usage_tx, mut usage_completion_rx) =
         spawn_usage_writer(emote_tracker.clone(), &lifecycle).await;
 
@@ -333,17 +328,15 @@ pub async fn run_emote_usage_handler(
                 if emote_ids.is_empty() || lifecycle.is_cancelled() {
                     continue;
                 }
+                let origin = inbound.origin().await;
                 let sent = inbound.handler_span("emote_usage").in_scope(|| {
                     let snapshot = settings.load();
-                    let deny_with_mouths: Vec<String> = snapshot
-                        .twitch
-                        .emote_usage_deny_list
-                        .iter()
-                        .cloned()
-                        .chain(mouth_logins.iter().cloned())
-                        .collect();
-                    let flagged =
-                        should_flag_usage(&p.sender.login, &bot_username, &deny_with_mouths);
+                    let flagged = origin.flags_emote_usage()
+                        || should_flag_usage(
+                            &p.sender.login,
+                            &bot_username,
+                            &snapshot.twitch.emote_usage_deny_list,
+                        );
                     let at = p.server_timestamp.as_millisecond();
                     let login = Some(p.sender.login.clone());
                     let events: Vec<NewUsageEvent> = emote_ids

@@ -357,16 +357,10 @@ where
                 } else {
                     history_for_dispatch.as_ref()
                 };
-                let is_mouth = echo.is_mouth(&privmsg.sender.id, &privmsg.sender.login);
-                let skip_history = is_mouth
-                    || echo
-                        .is_echo(
-                            &privmsg.sender.id,
-                            &privmsg.sender.login,
-                            &privmsg.message_id,
-                        )
-                        .await;
-                if let Some(buffer) = target_buffer.filter(|_| !skip_history) {
+                // One classification for both decisions, at the same point
+                // the history push and dispatch happen.
+                let origin = inbound.origin().await;
+                if let Some(buffer) = target_buffer.filter(|_| origin.records_history()) {
                     let display_name = Some(privmsg.sender.name.as_str()).filter(|s| !s.is_empty());
                     let user_id = Some(privmsg.sender.id.as_str()).filter(|s| !s.is_empty());
                     buffer.lock().await.push_user_with_identity_at(
@@ -377,7 +371,7 @@ where
                         privmsg.server_timestamp,
                     );
                 }
-                if skip_history {
+                if !origin.dispatches_commands() {
                     // Mouths and echoed output are never fresh command input.
                     continue;
                 }
@@ -815,7 +809,8 @@ mod trace_tests {
         let (tx, rx) = broadcast::channel(4);
         let dispatcher = tokio::spawn(dispatch(rx, registry, admission, cancellation.clone()));
 
-        tx.send(Inbound::new(privmsg(text))).unwrap();
+        tx.send(Inbound::new(privmsg(text), Arc::new(EchoGuard::disabled())))
+            .unwrap();
         tokio::time::timeout(Duration::from_secs(5), ran_rx.recv())
             .await
             .expect("command did not run")
@@ -864,7 +859,11 @@ mod trace_tests {
         let registry = registry(ExecutionClass::Inline, ran_tx);
         let (admission, _receiver) = command_admission_channel();
         let (tx, rx) = broadcast::channel(4);
-        tx.send(Inbound::new(privmsg("einfach nur chat"))).unwrap();
+        tx.send(Inbound::new(
+            privmsg("einfach nur chat"),
+            Arc::new(EchoGuard::disabled()),
+        ))
+        .unwrap();
         drop(tx);
 
         // Closed after the queued message: returns once it is handled.
