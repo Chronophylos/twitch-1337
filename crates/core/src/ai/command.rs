@@ -252,8 +252,15 @@ where
         };
         ctx.cancellation.check()?;
         self.turn
-            .record_reply(agent, &recorded_login, &display_name, &line, ts)
-            .await;
+            .record_reply(
+                agent,
+                &recorded_login,
+                &display_name,
+                &line,
+                ts,
+                &ctx.cancellation,
+            )
+            .await?;
 
         Ok(())
     }

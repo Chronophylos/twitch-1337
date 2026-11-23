@@ -296,9 +296,11 @@ impl TurnRunner {
         }
     }
 
-    /// Record a reply chat actually saw: chat history (when enabled) and the
-    /// Transcript. A Transcript failure is logged here and not returned; the
-    /// reply is already out.
+    /// Record a reply chat actually saw: chat history (when enabled), then
+    /// the Transcript. Cancellation is checked between the two, so a
+    /// shutdown that lands while the history lock is held stops before the
+    /// Transcript write. A Transcript failure is logged here and not
+    /// returned; the reply is already out.
     pub async fn record_reply(
         &self,
         agent: Agent,
@@ -306,7 +308,8 @@ impl TurnRunner {
         display_name: &str,
         line: &str,
         ts: jiff::Timestamp,
-    ) {
+        cancellation: &CommandCancellation,
+    ) -> Result<(), crate::commands::CommandCancelled> {
         if let Some(chat) = &self.chat_ctx {
             chat.primary_history.lock().await.push_bot_with_identity_at(
                 login.to_owned(),
@@ -316,6 +319,7 @@ impl TurnRunner {
                 ts,
             );
         }
+        cancellation.check()?;
         if let Err(e) = self
             .memory
             .transcript
@@ -324,6 +328,7 @@ impl TurnRunner {
         {
             crate::log_handled!(error, e, "transcript bot-reply append failed");
         }
+        Ok(())
     }
 
     /// Run one agent turn: resolve the profile, assemble the prompt, drive
@@ -1299,6 +1304,61 @@ mod turn_tests {
             .expect("message for role")
             .content
             .clone()
+    }
+
+    /// A shutdown that lands after the reply went out must not reach the
+    /// Transcript: `record_reply` checks cancellation before appending.
+    #[tokio::test]
+    async fn record_reply_skips_transcript_once_cancelled() {
+        let f = fixture(Answer::Text("moin".into()), 30).await;
+        let today = f
+            .runner
+            .memory
+            .store
+            .memories_dir()
+            .join("transcripts/today.md");
+        let ts = jiff::Timestamp::now();
+
+        let cancelled = CommandCancellation::new();
+        cancelled.cancel();
+        assert!(
+            f.runner
+                .record_reply(
+                    Agent::Aurora,
+                    "aurora_bot",
+                    "Aurora",
+                    "zu spät",
+                    ts,
+                    &cancelled
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            !tokio::fs::read_to_string(&today)
+                .await
+                .unwrap_or_default()
+                .contains("zu spät"),
+            "a cancelled reply must not be transcribed"
+        );
+
+        f.runner
+            .record_reply(
+                Agent::Aurora,
+                "aurora_bot",
+                "Aurora",
+                "pünktlich",
+                ts,
+                &CommandCancellation::new(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            tokio::fs::read_to_string(&today)
+                .await
+                .unwrap()
+                .contains("pünktlich")
+        );
     }
 
     #[tokio::test]
