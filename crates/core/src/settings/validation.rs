@@ -40,6 +40,12 @@ impl Settings {
         validate_reply_emotes(&self.reply_emotes, &mut errs);
         validate_ai(&self.ai, validate_agent_profile_targets, &mut errs);
         validate_spoiler(self, validate_agent_profile_targets, &mut errs);
+        if !super::reupload::EXPIRES_DAYS_CHOICES.contains(&self.reupload.expires_days) {
+            errs.push(FieldError {
+                field: "reupload.expires_days".into(),
+                message: "must be one of 1, 7, 30, 90, 180, 365 or 0 (never)".into(),
+            });
+        }
         if let Some(v) = self.twitch.admin_channel.as_deref() {
             let t = v.trim();
             if t.is_empty() {

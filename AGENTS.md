@@ -4,7 +4,7 @@ Guide for coding agents working in this repo. Claude Code loads it through `CLAU
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), network lookups (AI tool, RDAP + optional ipinfo), game servers (`!servers [name]`, AMP), a public script sandbox (`!bash <script>`, Bashkit, limits at `/settings → Bash`), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb`), spoiler check (`!spoiler`, decision model), alerts (earthquake + solar flare + Earth-directed CME monitors and F1 Race-Week Reminders, passive, configured at `/settings → Alerts`), version (`!v`), help (`!help [befehl]`, aliases `!commands`/`!hilfe`; one catalog entry, or a link to the public `/commands` page when the dashboard is on; cooldown `cooldowns.help`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`; the catalog's `lookup` is the one trigger/alias resolver). `/commands` additionally documents enabled Aurora Viewer-Facing Tools from the shared availability catalog in `crates/core/src/ai/viewer_tools.rs`; this HTML-only section never changes `/commands.json`, autocomplete, or `!help`.
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), network lookups (AI tool, RDAP + optional ipinfo), game servers (`!servers [name]`, AMP), a public script sandbox (`!bash <script>`, Bashkit, limits at `/settings → Bash`), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb`), spoiler check (`!spoiler`, decision model), file reupload (`!reupload`, imgdrip + Litterbox), alerts (earthquake + solar flare + Earth-directed CME monitors and F1 Race-Week Reminders, passive, configured at `/settings → Alerts`), version (`!v`), help (`!help [befehl]`, aliases `!commands`/`!hilfe`; one catalog entry, or a link to the public `/commands` page when the dashboard is on; cooldown `cooldowns.help`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`; the catalog's `lookup` is the one trigger/alias resolver). `/commands` additionally documents enabled Aurora Viewer-Facing Tools from the shared availability catalog in `crates/core/src/ai/viewer_tools.rs`; this HTML-only section never changes `/commands.json`, autocomplete, or `!help`.
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
@@ -280,6 +280,19 @@ Decision, ADR-0010). Decision profiles are OpenRouter-only and skip
 per call, outside `LlmRegistry`; only the key comes from
 `LlmRegistry::secret_for`. A profile without a model or without a key in `[ai.keys]`
 makes the command answer "nicht konfiguriert".
+
+`!reupload <url>` (or `!reupload` as a reply to a message with a link)
+rehosts a file some viewers cannot open (`crates/core/src/reupload.rs`).
+Images (JPEG, PNG, GIF, WebP, sniffed by magic bytes) go to imgdrip.com, max
+20 MiB, with expiry `reupload.expires_days` (1/7/30/90/180/365, 0 = never,
+default 30). Everything else goes to Litterbox (catbox.moe), kept 72 h. Both
+hosts are anonymous and keyless, so there is no config.toml section. An HTML
+page is resolved one hop through `og:video`, then `og:image`. The source is
+fetched through the SSRF-guarded `fetch_raw` capped at `reupload.max_bytes`
+(default 100 MiB, max 1 GiB); an image over 20 MiB is refused, never sent to
+Litterbox. Per-user cooldown `cooldowns.reupload` (default 60 s). All live,
+`/settings → Commands · Reupload`. Host error text is logged, never sent to
+chat.
 
 Alert monitors live entirely in `settings.ron` — there is no config.toml
 section and no API key, because all four feeds (EMSC seismicportal.eu, NOAA
