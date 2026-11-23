@@ -36,6 +36,10 @@ pub enum FenceLabel<'a> {
     Transcript {
         date: &'a str,
     },
+    /// Recap Notes for one channel: chat-derived, rendered in the user slot.
+    Recap {
+        channel: &'a str,
+    },
 }
 
 /// Body as the model should see it: the `links` frontmatter rendered as a
@@ -67,6 +71,9 @@ pub(super) fn render_label_attrs(label: &FenceLabel<'_>) -> String {
         FenceLabel::Lore => "kind=lore".into(),
         FenceLabel::Scratch { slug } => format!("kind=scratch slug={slug}"),
         FenceLabel::Transcript { date } => format!("kind=transcript date={date}"),
+        FenceLabel::Recap { channel } => {
+            format!("kind=recap channel={}", sanitize_attr_value(channel))
+        }
         FenceLabel::User {
             id,
             login,
