@@ -67,10 +67,12 @@ pub struct SevenTvEmoteProvider {
     http: reqwest::Client,
     base_url: String,
     emote_tracker: Arc<EmoteTrackerHandle>,
+    last_caps: parking_lot::Mutex<EmotesLiveCaps>,
     cache: Mutex<PromptCache>,
 }
 
 /// Live-readable knobs snapshotted from [`SettingsHandle`] on each use.
+#[derive(Clone)]
 struct EmotesLiveCaps {
     include_global: bool,
     refresh_interval: Duration,
@@ -106,31 +108,26 @@ struct SevenTvEmote {
     name: String,
 }
 
-/// Read the live-tunable emote knobs from a [`SettingsHandle`].
-///
-/// Extracted as a free function so tests can verify live-rebinding without
-/// constructing a full [`SevenTvEmoteProvider`] (which requires a live
-/// `reqwest::Client`).
-fn live_caps_from_handle(settings: &SettingsHandle) -> EmotesLiveCaps {
-    let snap = settings.load();
-    if let Some(cfg) = snap.ai.emotes.as_ref() {
-        EmotesLiveCaps {
+impl From<&AiEmotes> for EmotesLiveCaps {
+    fn from(cfg: &AiEmotes) -> Self {
+        Self {
             include_global: cfg.include_global,
             refresh_interval: Duration::from_secs(cfg.refresh_interval_secs),
             max_prompt_emotes: cfg.max_prompt_emotes,
             min_baseline_emotes: cfg.min_baseline_emotes.min(cfg.max_prompt_emotes),
             pinned_emotes: cfg.pinned_emotes.clone(),
         }
-    } else {
-        let fallback = AiEmotes::default();
-        EmotesLiveCaps {
-            include_global: fallback.include_global,
-            refresh_interval: Duration::from_secs(fallback.refresh_interval_secs),
-            max_prompt_emotes: fallback.max_prompt_emotes,
-            min_baseline_emotes: fallback.min_baseline_emotes.min(fallback.max_prompt_emotes),
-            pinned_emotes: fallback.pinned_emotes,
-        }
     }
+}
+
+/// Read the live-tunable emote knobs while the section is present.
+///
+/// Extracted as a free function so tests can verify live-rebinding without
+/// constructing a full [`SevenTvEmoteProvider`] (which requires a live
+/// `reqwest::Client`).
+fn live_caps_from_handle(settings: &SettingsHandle) -> Option<EmotesLiveCaps> {
+    let snap = settings.load();
+    snap.ai.emotes.as_ref().map(EmotesLiveCaps::from)
 }
 
 impl SevenTvEmoteProvider {
@@ -149,6 +146,7 @@ impl SevenTvEmoteProvider {
             .emotes
             .as_ref()
             .ok_or_else(|| eyre!("emotes not configured"))?;
+        let initial_caps = EmotesLiveCaps::from(cfg);
 
         let http = reqwest::Client::builder()
             .user_agent(APP_USER_AGENT)
@@ -168,17 +166,21 @@ impl SevenTvEmoteProvider {
             http,
             base_url,
             emote_tracker,
+            last_caps: parking_lot::Mutex::new(initial_caps),
             cache: Mutex::new(PromptCache::default()),
         })
     }
 
     /// Snapshot the live-tunable knobs from the current settings.
     ///
-    /// If the emotes section has somehow been removed from settings while the
-    /// provider is running, falls back to compiled defaults so the provider
-    /// degrades gracefully rather than panicking.
+    /// Removing the section requires a restart. Until that happens, keep using
+    /// the last configured values instead of silently switching to defaults.
     fn live_caps(&self) -> EmotesLiveCaps {
-        live_caps_from_handle(&self.settings)
+        let mut last_caps = self.last_caps.lock();
+        if let Some(caps) = live_caps_from_handle(&self.settings) {
+            *last_caps = caps;
+        }
+        last_caps.clone()
     }
 
     /// Return a turn-specific prompt block for the Twitch channel id.
@@ -1072,7 +1074,7 @@ mod tests {
             .collect();
 
         let handle = make_emotes_handle(5);
-        let caps = live_caps_from_handle(&handle);
+        let caps = live_caps_from_handle(&handle).expect("emotes section is configured");
         assert_eq!(caps.max_prompt_emotes, 5);
         let prompt5 =
             build_prompt_block(&emotes, caps.max_prompt_emotes, 5, &[], "hi", "").unwrap();
@@ -1084,7 +1086,7 @@ mod tests {
         s.ai.emotes.as_mut().unwrap().min_baseline_emotes = 2;
         handle.store(Arc::new(s));
 
-        let caps2 = live_caps_from_handle(&handle);
+        let caps2 = live_caps_from_handle(&handle).expect("emotes section is configured");
         assert_eq!(caps2.max_prompt_emotes, 2);
         let prompt2 = build_prompt_block(
             &emotes,
@@ -1101,6 +1103,31 @@ mod tests {
             !prompt2.contains("- C;"),
             "prompt should be capped at 2:\n{prompt2}"
         );
+    }
+
+    #[tokio::test]
+    async fn provider_keeps_last_live_caps_after_emotes_section_is_removed() {
+        crate::install_crypto_provider();
+        let dir = tempfile::tempdir().unwrap();
+        let tracker = Arc::new(
+            EmoteTrackerHandle::open(&dir.path().join(crate::emote_tracker::DB_FILENAME)).unwrap(),
+        );
+        let settings = make_emotes_handle(5);
+        let provider = SevenTvEmoteProvider::new(settings.clone(), tracker).unwrap();
+        assert_eq!(provider.live_caps().max_prompt_emotes, 5);
+
+        let mut snapshot = (*settings.load()).clone();
+        snapshot.ai.emotes.as_mut().unwrap().max_prompt_emotes = 7;
+        settings.store(Arc::new(snapshot));
+        assert_eq!(provider.live_caps().max_prompt_emotes, 7);
+
+        let mut snapshot = (*settings.load()).clone();
+        snapshot.ai.emotes = None;
+        settings.store(Arc::new(snapshot));
+
+        let caps = provider.live_caps();
+        assert_eq!(caps.max_prompt_emotes, 7);
+        assert_eq!(caps.min_baseline_emotes, 0);
     }
 
     fn tracker_test_settings(
