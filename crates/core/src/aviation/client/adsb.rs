@@ -203,6 +203,38 @@ enum BackendFailure {
     Fatal,
 }
 
+/// Select an aircraft from an ambiguous callsign response. The tracked
+/// aircraft's hex wins; otherwise the freshest position wins, with a missing
+/// position sorted last. Full ties retain the backend's first entry.
+fn select_callsign_aircraft(
+    aircraft: Vec<NearbyAircraft>,
+    preferred_hex: Option<&str>,
+) -> Option<NearbyAircraft> {
+    aircraft.into_iter().min_by(|a, b| {
+        let a_preferred = preferred_hex.is_some_and(|hex| {
+            a.hex
+                .as_deref()
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(hex))
+        });
+        let b_preferred = preferred_hex.is_some_and(|hex| {
+            b.hex
+                .as_deref()
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(hex))
+        });
+        b_preferred.cmp(&a_preferred).then_with(|| {
+            match (
+                a.seen_pos.filter(|seen| seen.is_finite()),
+                b.seen_pos.filter(|seen| seen.is_finite()),
+            ) {
+                (Some(a), Some(b)) => a.total_cmp(&b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        })
+    })
+}
+
 impl AviationClient {
     fn live_backend_indices(&self) -> Vec<usize> {
         let now = Instant::now();
@@ -518,7 +550,11 @@ impl AviationClient {
 
     /// Skips the lookup (`Ok(None)`) for a callsign outside the ICAO charset:
     /// feed values are untrusted and land in the URL path.
-    pub async fn get_aircraft_by_callsign(&self, callsign: &str) -> Result<Option<NearbyAircraft>> {
+    pub async fn get_aircraft_by_callsign(
+        &self,
+        callsign: &str,
+        preferred_hex: Option<&str>,
+    ) -> Result<Option<NearbyAircraft>> {
         if !FlightIdentifier::is_valid_callsign(callsign) {
             debug!(callsign = %callsign, "Skipping ADS-B lookup for invalid callsign");
             return Ok(None);
@@ -529,7 +565,15 @@ impl AviationClient {
             .fetch_adsb_merged(AdsbEndpoint::Callsign(callsign))
             .await?;
 
-        Ok(resp.aircraft.into_iter().next())
+        let candidate_count = resp.aircraft.len();
+        if candidate_count > 1 {
+            debug!(
+                callsign = %callsign,
+                candidate_count,
+                "Multiple aircraft matched ADS-B callsign lookup"
+            );
+        }
+        Ok(select_callsign_aircraft(resp.aircraft, preferred_hex))
     }
 }
 
@@ -625,7 +669,7 @@ mod tests {
         .with_adsb_aggregator_timeout(Duration::from_millis(50));
 
         let aircraft = client
-            .get_aircraft_by_callsign("DLH1234")
+            .get_aircraft_by_callsign("DLH1234", None)
             .await
             .expect("lookup succeeds through fallback")
             .expect("aircraft returned");
@@ -633,6 +677,31 @@ mod tests {
         assert_eq!(aircraft.flight.as_deref(), Some("DLH1234"));
         assert_eq!(primary.received_requests().await.unwrap().len(), 1);
         assert_eq!(backup.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn adsb_callsign_lookup_prefers_freshest_position() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/callsign/DLH1234"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ac": [
+                    {"hex": "aaa111", "flight": "DLH1234", "seen_pos": 30.0},
+                    {"hex": "bbb222", "flight": "DLH1234", "seen_pos": 2.0}
+                ]
+            })))
+            .mount(&server)
+            .await;
+        let client =
+            test_client_with_aggregators(vec![AdsbAggregator::readsb_v2("primary", server.uri())]);
+
+        let aircraft = client
+            .get_aircraft_by_callsign("DLH1234", None)
+            .await
+            .expect("lookup succeeds")
+            .expect("aircraft returned");
+
+        assert_eq!(aircraft.hex.as_deref(), Some("bbb222"));
     }
 
     #[test]
@@ -683,6 +752,121 @@ mod tests {
             rssi,
             seen_pos,
         }
+    }
+
+    #[test]
+    fn callsign_selection_prefers_matching_known_hex() {
+        let selected = select_callsign_aircraft(
+            vec![
+                ac(Some("aaa111"), Some(1.0), None),
+                ac(Some("bbb222"), Some(30.0), None),
+            ],
+            Some("BBB222"),
+        )
+        .expect("one aircraft is selected");
+
+        assert_eq!(selected.hex.as_deref(), Some("bbb222"));
+    }
+
+    #[test]
+    fn callsign_selection_without_known_hex_prefers_freshest_position() {
+        let selected = select_callsign_aircraft(
+            vec![
+                ac(Some("aaa111"), Some(30.0), None),
+                ac(Some("bbb222"), Some(2.0), None),
+            ],
+            None,
+        )
+        .expect("one aircraft is selected");
+
+        assert_eq!(selected.hex.as_deref(), Some("bbb222"));
+    }
+
+    #[test]
+    fn callsign_selection_sorts_missing_position_last() {
+        let selected = select_callsign_aircraft(
+            vec![
+                ac(Some("aaa111"), None, None),
+                ac(Some("bbb222"), Some(30.0), None),
+            ],
+            None,
+        )
+        .expect("one aircraft is selected");
+
+        assert_eq!(selected.hex.as_deref(), Some("bbb222"));
+    }
+
+    #[test]
+    fn callsign_selection_sorts_nan_positions_last() {
+        for non_finite in [f64::NAN, -f64::NAN] {
+            let selected = select_callsign_aircraft(
+                vec![
+                    ac(Some("aaa111"), Some(non_finite), None),
+                    ac(Some("bbb222"), Some(30.0), None),
+                ],
+                None,
+            )
+            .expect("one aircraft is selected");
+            assert_eq!(selected.hex.as_deref(), Some("bbb222"));
+
+            let selected = select_callsign_aircraft(
+                vec![
+                    ac(Some("bbb222"), Some(30.0), None),
+                    ac(Some("aaa111"), Some(non_finite), None),
+                ],
+                None,
+            )
+            .expect("one aircraft is selected");
+            assert_eq!(selected.hex.as_deref(), Some("bbb222"));
+        }
+    }
+
+    #[test]
+    fn callsign_selection_sorts_infinite_positions_last() {
+        for non_finite in [f64::INFINITY, f64::NEG_INFINITY] {
+            let selected = select_callsign_aircraft(
+                vec![
+                    ac(Some("aaa111"), Some(non_finite), None),
+                    ac(Some("bbb222"), Some(30.0), None),
+                ],
+                None,
+            )
+            .expect("one aircraft is selected");
+            assert_eq!(selected.hex.as_deref(), Some("bbb222"));
+
+            let selected = select_callsign_aircraft(
+                vec![
+                    ac(Some("bbb222"), Some(30.0), None),
+                    ac(Some("aaa111"), Some(non_finite), None),
+                ],
+                None,
+            )
+            .expect("one aircraft is selected");
+            assert_eq!(selected.hex.as_deref(), Some("bbb222"));
+        }
+    }
+
+    #[test]
+    fn callsign_selection_uses_freshness_when_known_hex_is_not_returned() {
+        let selected = select_callsign_aircraft(
+            vec![
+                ac(Some("aaa111"), Some(30.0), None),
+                ac(Some("bbb222"), Some(2.0), None),
+            ],
+            Some("ccc333"),
+        )
+        .expect("one aircraft is selected");
+
+        assert_eq!(selected.hex.as_deref(), Some("bbb222"));
+    }
+
+    #[test]
+    fn callsign_selection_keeps_a_single_result() {
+        let selected =
+            select_callsign_aircraft(vec![ac(Some("aaa111"), None, None)], Some("ccc333"))
+                .expect("the only aircraft is selected");
+
+        assert_eq!(selected.hex.as_deref(), Some("aaa111"));
     }
 
     #[test]

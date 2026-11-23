@@ -66,7 +66,11 @@ impl AdsbProvider for FakeAdsbProvider {
             .cloned())
     }
 
-    async fn get_aircraft_by_callsign(&self, callsign: &str) -> Result<Option<NearbyAircraft>> {
+    async fn get_aircraft_by_callsign(
+        &self,
+        callsign: &str,
+        _preferred_hex: Option<&str>,
+    ) -> Result<Option<NearbyAircraft>> {
         Ok(self
             .by_callsign
             .lock()
