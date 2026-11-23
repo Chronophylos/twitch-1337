@@ -2687,6 +2687,138 @@ mod tests {
         task.await.unwrap().unwrap();
     }
 
+    /// Graceful shutdown joins an in-flight command instead of only
+    /// cancelling it: the manager returns only after the command finished.
+    #[tokio::test]
+    async fn graceful_drain_joins_an_in_flight_command() {
+        let test_sender = test_sender();
+        let gate = Arc::new(Semaphore::new(0));
+        let started = Arc::new(AsyncMutex::new(Vec::new()));
+        let started_notify = Arc::new(Notify::new());
+        let command = TestCommand::background(
+            "ai",
+            "!ai",
+            started.clone(),
+            started_notify.clone(),
+            Some(gate.clone()),
+        );
+        let (sender, manager) =
+            make_manager(registry(vec![command]), CommandExecutionSettings::default());
+        let group = manager.task_group();
+        sender
+            .sender
+            .try_send(invocation(test_sender.sender.clone(), "ai", "user", "!ai"))
+            .unwrap();
+        let cancellation = CommandCancellation::new();
+        let mut task = tokio::spawn(manager.run(cancellation.clone()));
+        started_notify.notified().await;
+
+        cancellation.cancel();
+        drop(sender);
+        assert!(
+            timeout(Duration::from_millis(200), &mut task)
+                .await
+                .is_err(),
+            "drain must wait for the in-flight command"
+        );
+
+        gate.add_permits(1);
+        timeout(Duration::from_secs(5), task)
+            .await
+            .expect("drain finishes once the command does")
+            .unwrap()
+            .unwrap();
+        assert!(group.is_empty());
+    }
+
+    struct BlockingWaitCommand {
+        release: parking_lot::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        finished: Arc<std::sync::atomic::AtomicBool>,
+        spawned: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl Command<TestTransport, TestLogin> for BlockingWaitCommand {
+        fn id(&self) -> &'static str {
+            "ai"
+        }
+
+        fn name(&self) -> &'static str {
+            "!ai"
+        }
+
+        fn execution_policy(&self) -> ExecutionClass {
+            ExecutionClass::Background
+        }
+
+        fn description(&self) -> &str {
+            "test"
+        }
+
+        fn usage(&self) -> &str {
+            "test"
+        }
+
+        /// Returns at once, leaving its blocking child running; the receiver
+        /// is dropped, so only the group still owns the child.
+        async fn execute(&self, _ctx: CommandContext<TestTransport, TestLogin>) -> Result<()> {
+            let release = self.release.lock().take().expect("executed once");
+            let finished = self.finished.clone();
+            let group = CommandTaskGroup::current().expect("command task group");
+            drop(
+                group
+                    .spawn_blocking(move || {
+                        release.recv().ok();
+                        finished.store(true, std::sync::atomic::Ordering::SeqCst);
+                    })
+                    .unwrap(),
+            );
+            self.spawned.notify_one();
+            Ok(())
+        }
+    }
+
+    /// A blocking child outliving its command is still joined by the graceful
+    /// drain: the manager does not return while it runs.
+    #[tokio::test]
+    async fn graceful_drain_joins_a_blocking_child_that_outlives_its_command() {
+        let test_sender = test_sender();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let finished = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spawned = Arc::new(Notify::new());
+        let command = Arc::new(BlockingWaitCommand {
+            release: parking_lot::Mutex::new(Some(release_rx)),
+            finished: finished.clone(),
+            spawned: spawned.clone(),
+        });
+        let (sender, manager) =
+            make_manager(registry(vec![command]), CommandExecutionSettings::default());
+        sender
+            .sender
+            .try_send(invocation(test_sender.sender.clone(), "ai", "user", "!ai"))
+            .unwrap();
+        let cancellation = CommandCancellation::new();
+        let mut task = tokio::spawn(manager.run(cancellation.clone()));
+        spawned.notified().await;
+
+        cancellation.cancel();
+        drop(sender);
+        assert!(
+            timeout(Duration::from_millis(200), &mut task)
+                .await
+                .is_err(),
+            "drain must wait for the blocking child"
+        );
+
+        release_tx.send(()).unwrap();
+        timeout(Duration::from_secs(5), task)
+            .await
+            .expect("drain finishes once the blocking child does")
+            .unwrap()
+            .unwrap();
+        assert!(finished.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
     #[tokio::test]
     async fn invariant_failure_uses_single_cleanup_path() {
         let test_sender = test_sender();
