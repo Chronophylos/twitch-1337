@@ -515,6 +515,44 @@ async fn post_settings_enabling_prefill_card_flags_restart() {
 }
 
 #[tokio::test]
+async fn post_settings_disabling_emotes_card_flags_restart() {
+    let (state, _dirs) = owner_state().await;
+    let owner = Owner::login(&state);
+    let defaults = state.settings_store.defaults().clone();
+    let res = owner
+        .save(
+            &state,
+            &defaults,
+            &[("ai.emotes.__shown", "1"), ("ai.emotes.enabled", "1")],
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(state.settings.load().ai.emotes.is_some());
+
+    let current = state.settings.load();
+    let res = owner
+        .save(&state, &current, &[("ai.emotes.__shown", "1")])
+        .await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert!(state.settings.load().ai.emotes.is_none());
+    let flash = read_flash(&res).expect("save must emit a flash cookie");
+    assert!(
+        flash.contains("Restart bot to apply: ai.emotes (disabling requires restart)"),
+        "disabling emotes must render the restart marker; got {flash:?}",
+    );
+
+    let res = owner.get(&state, "/settings").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    let card_start = html.find("<section id=\"sec-ai-emotes\"").unwrap();
+    let card_end = card_start + html[card_start..].find("</section>").unwrap();
+    let card = &html[card_start..card_end];
+    assert!(card.contains("is-card-off"));
+    assert!(card.contains("class=\"restart-required\">restart required</span>"));
+    assert!(card.contains("Enabling or disabling requires a restart."));
+}
+
+#[tokio::test]
 async fn post_settings_card_invisible_leaves_toggle_alone() {
     // Regression for the `<path>.__shown` sentinel pattern: a save that
     // does not render a toggle card must NOT inadvertently disable it.

@@ -6,7 +6,7 @@
   <header class="settings-card-head">
     <div>
       <h2>AI · Emotes</h2>
-      <p>Inject channel + global emote names into the system prompt. Enabling requires a restart.</p>
+      <p>Inject channel + global emote names into the system prompt. Enabling or disabling requires a restart.</p>
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
@@ -14,7 +14,7 @@
   <input type="hidden" name="ai.emotes.__shown" value="1">
   <div class="settings-rows">
     <div class="settings-row" data-section="ai_emotes">
-      {% call m::row_head("enabled", "Inject channel + global emote names into the system prompt. Enabling requires a restart.", "ai.emotes.enabled") %}{% endcall %}
+      {% call m::row_head("enabled", "Inject channel + global emote names into the system prompt. Enabling or disabling requires a restart.", "ai.emotes.enabled") %}{% endcall %}
       <div class="row-control-cell">
         <label class="toggle">
           <input type="checkbox" id="ai.emotes.enabled" name="ai.emotes.enabled" data-card-toggle value="1" role="switch"

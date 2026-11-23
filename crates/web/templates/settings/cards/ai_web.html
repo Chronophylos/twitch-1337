@@ -6,7 +6,7 @@
   <header class="settings-card-head">
     <div>
       <h2>AI · Web tools</h2>
-      <p>Lets the model search a SearXNG instance. Enabling requires a restart.</p>
+      <p>Lets the model search a SearXNG instance. Enabling or disabling requires a restart.</p>
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
@@ -14,7 +14,7 @@
   <input type="hidden" name="ai.web.__shown" value="1">
   <div class="settings-rows">
     <div class="settings-row" data-section="ai_web">
-      {% call m::row_head("enabled", "Let the model search a SearXNG instance. Enabling requires a restart.", "ai.web.enabled") %}{% endcall %}
+      {% call m::row_head("enabled", "Let the model search a SearXNG instance. Enabling or disabling requires a restart.", "ai.web.enabled") %}{% endcall %}
       <div class="row-control-cell">
         <label class="toggle">
           <input type="checkbox" id="ai.web.enabled" name="ai.web.enabled" data-card-toggle value="1" role="switch"

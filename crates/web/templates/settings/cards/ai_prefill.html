@@ -6,7 +6,7 @@
   <header class="settings-card-head">
     <div>
       <h2>AI · History prefill</h2>
-      <p>Backfill chat history from a Rustlog-compatible API on startup. Enabling requires a restart.</p>
+      <p>Backfill chat history from a Rustlog-compatible API on startup. Enabling or disabling requires a restart.</p>
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
@@ -14,7 +14,7 @@
   <input type="hidden" name="ai.prefill.__shown" value="1">
   <div class="settings-rows">
     <div class="settings-row" data-section="ai_prefill">
-      {% call m::row_head("enabled", "Backfill chat history from a Rustlog-compatible API on startup. Enabling requires a restart.", "ai.prefill.enabled") %}{% endcall %}
+      {% call m::row_head("enabled", "Backfill chat history from a Rustlog-compatible API on startup. Enabling or disabling requires a restart.", "ai.prefill.enabled") %}{% endcall %}
       <div class="row-control-cell">
         <label class="toggle">
           <input type="checkbox" id="ai.prefill.enabled" name="ai.prefill.enabled" data-card-toggle value="1" role="switch"

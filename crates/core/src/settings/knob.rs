@@ -160,7 +160,7 @@ pub struct KnobMeta {
     /// Posted by the settings form.
     pub form: bool,
     /// A field: any change needs a restart. A presence toggle
-    /// (`presence == true`): enabling needs a restart.
+    /// (`presence == true`): enabling or disabling needs a restart.
     pub restart: bool,
     /// The `<section>.enabled` toggle of an `Option` section.
     pub presence: bool,
@@ -229,8 +229,8 @@ pub fn overrides_from_form(pairs: &[(String, String)]) -> (SettingsOverrides, Ve
 }
 
 /// Knobs flagged `restart` whose resolved value changed between `before`
-/// and `after`, in table order. A presence section reports only when it
-/// goes from off to on; its inner fields report only while it stays on.
+/// and `after`, in table order. A presence section reports when it toggles
+/// in either direction; its inner fields report only while it stays on.
 pub fn restart_required(before: &Settings, after: &Settings) -> Vec<String> {
     let (b, a) = match (serde_json::to_value(before), serde_json::to_value(after)) {
         (Ok(b), Ok(a)) => (b, a),
@@ -248,8 +248,10 @@ pub fn restart_required(before: &Settings, after: &Settings) -> Vec<String> {
         if k.presence {
             let section = k.path.strip_suffix(".enabled").unwrap_or(&k.path);
             let ptr = pointer(section);
-            if at(&b, &ptr) == null && at(&a, &ptr) != null {
-                out.push(format!("{section} (enabling requires restart)"));
+            match (at(&b, &ptr) == null, at(&a, &ptr) == null) {
+                (true, false) => out.push(format!("{section} (enabling requires restart)")),
+                (false, true) => out.push(format!("{section} (disabling requires restart)")),
+                _ => {}
             }
         } else {
             let ptr = pointer(&k.path);
@@ -526,6 +528,18 @@ mod tests {
             edit(&mut after);
             assert_eq!(restart_required(&before, &after), vec![path]);
         }
+    }
+
+    #[test]
+    fn restart_required_reports_disabling_emotes() {
+        let mut before = Settings::compiled_defaults();
+        before.ai.emotes = Some(AiEmotes::default());
+        let after = Settings::compiled_defaults();
+
+        assert_eq!(
+            restart_required(&before, &after),
+            vec!["ai.emotes (disabling requires restart)"]
+        );
     }
 
     #[test]
