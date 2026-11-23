@@ -442,17 +442,19 @@ impl TestBotBuilder {
             let (settings_store, settings_handle) =
                 twitch_1337::settings::SettingsStore::open(data_dir.path(), audit, "test_chan")
                     .expect("open settings");
-            if let Some(mut o) = self.settings_overrides.take() {
-                normalize_test_history_overrides(&mut o);
-                let actor = twitch_1337::settings::Actor {
-                    user_id: "test".into(),
-                    user_login: "test".into(),
-                };
-                settings_store
-                    .apply(o, actor)
-                    .await
-                    .expect("apply test overrides");
-            }
+            // F1 reminders are on by default and poll the live Jolpica API on
+            // the first tick or settings change; keep tests off the network.
+            let mut o = self.settings_overrides.take().unwrap_or_default();
+            o.alerts.f1.enabled.get_or_insert(false);
+            normalize_test_history_overrides(&mut o);
+            let actor = twitch_1337::settings::Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            };
+            settings_store
+                .apply(o, actor)
+                .await
+                .expect("apply test overrides");
 
             let http = reqwest::Client::new();
             let av_settings = settings_handle.load().aviationstack.clone();
