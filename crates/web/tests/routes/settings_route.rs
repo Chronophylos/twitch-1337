@@ -27,6 +27,20 @@ use helpers::{
 
 const OWNER_ID: &str = "123";
 
+const PILL_EDITOR_PATHS: [&str; 11] = [
+    "twitch.hidden_admins",
+    "twitch.viewer_allowlist",
+    "twitch.emote_usage_deny_list",
+    "ai.emotes.pinned_emotes",
+    "reply_emotes.invalid",
+    "reply_emotes.denied",
+    "reply_emotes.cooldown",
+    "reply_emotes.timeout",
+    "reply_emotes.limit",
+    "reply_emotes.failure",
+    "reply_emotes.unavailable",
+];
+
 /// Fresh state owned by [`OWNER_ID`]; keep the tempdirs alive for the test.
 async fn owner_state() -> (WebState, (TempDir, TempDir, TempDir)) {
     install_crypto();
@@ -590,20 +604,19 @@ async fn ai_history_length_below_n_plus_batch_returns_400() {
 }
 
 #[tokio::test]
-async fn permissions_lists_render_saved_values() {
-    // hidden_admins / viewer_allowlist / emote_usage_deny_list are the
-    // multi-line (textarea) rows: one entry per line, posted back verbatim.
+async fn permissions_lists_render_saved_values_in_canonical_inputs() {
     let (state, _dirs) = owner_state().await;
     let owner = Owner::login(&state);
 
-    // Seed the permission lists via POST.
+    // The parser remains deliberately semantic-free: nonnumeric IDs and
+    // differently cased entries persist in their posted order.
     let defaults = state.settings_store.defaults().clone();
     let res = owner
         .save(
             &state,
             &defaults,
             &[
-                ("twitch.hidden_admins", "111\n222"),
+                ("twitch.hidden_admins", "not-a-number\nAdmin\nadmin"),
                 ("twitch.viewer_allowlist", "333\n444"),
                 ("twitch.emote_usage_deny_list", "evilbot\notherbot"),
             ],
@@ -613,8 +626,17 @@ async fn permissions_lists_render_saved_values() {
     let s = state.settings.load();
     assert_eq!(
         s.twitch.hidden_admins,
-        vec!["111".to_owned(), "222".to_owned()],
-        "hidden_admins must persist from POST",
+        vec![
+            "not-a-number".to_owned(),
+            "Admin".to_owned(),
+            "admin".to_owned()
+        ],
+        "hidden_admins must preserve nonnumeric, case-distinct entries in order",
+    );
+    assert_eq!(
+        s.twitch.viewer_allowlist,
+        vec!["333".to_owned(), "444".to_owned()],
+        "viewer_allowlist must persist from POST",
     );
     assert_eq!(
         s.twitch.emote_usage_deny_list,
@@ -622,21 +644,20 @@ async fn permissions_lists_render_saved_values() {
         "emote_usage_deny_list must persist from POST"
     );
 
-    // GET and confirm each textarea renders its saved entries one per line.
+    // The old textareas are gone; each hidden input carries exactly the same
+    // newline-delimited value the settings parser already accepts.
     let res = owner.get(&state, "/settings").await;
     assert_eq!(res.status(), StatusCode::OK);
     let html = body_string(res).await;
     for (name, joined) in [
-        ("twitch.hidden_admins", "111\n222"),
+        ("twitch.hidden_admins", "not-a-number\nAdmin\nadmin"),
         ("twitch.viewer_allowlist", "333\n444"),
         ("twitch.emote_usage_deny_list", "evilbot\notherbot"),
     ] {
-        let start = html
-            .find(&format!("name=\"{name}\""))
-            .unwrap_or_else(|| panic!("{name} textarea missing"));
-        let body = &html[start..];
-        let body = &body[body.find('>').unwrap() + 1..body.find("</textarea>").unwrap()];
-        assert_eq!(body, joined, "{name} must render its saved entries");
+        let tag = tag_with_name(&html, name);
+        assert!(tag.starts_with("<input"), "{name} must be an input");
+        assert_eq!(attr(tag, "type"), Some("hidden"), "{name} canonical input");
+        assert_eq!(attr(tag, "value"), Some(joined), "{name} ordered value");
     }
 }
 
@@ -718,12 +739,11 @@ async fn emotes_card_include_global_untouched_without_sentinel() {
 }
 
 #[tokio::test]
-async fn emotes_card_pinned_emotes_persists_from_textarea() {
-    // Pinned emotes (one-per-line textarea) must round-trip through the save
-    // handler into the live settings handle.
+async fn emotes_card_pinned_emotes_round_trips_in_displayed_order() {
     let (state, _dirs) = owner_state().await;
+    let owner = Owner::login(&state);
     let defaults = state.settings_store.defaults().clone();
-    let res = Owner::login(&state)
+    let res = owner
         .save(
             &state,
             &defaults,
@@ -731,7 +751,7 @@ async fn emotes_card_pinned_emotes_persists_from_textarea() {
                 ("ai.emotes.__shown", "1"),
                 ("ai.emotes.enabled", "1"),
                 ("ai.emotes.max_prompt_emotes", "20"),
-                ("ai.emotes.pinned_emotes", "PepeLa\nokjj\nClueless"),
+                ("ai.emotes.pinned_emotes", "Clueless\nPepeLa\nokjj"),
             ],
         )
         .await;
@@ -746,9 +766,21 @@ async fn emotes_card_pinned_emotes_persists_from_textarea() {
         .map(|e| e.pinned_emotes.clone());
     assert_eq!(
         pinned,
-        Some(vec!["PepeLa".into(), "okjj".into(), "Clueless".into()]),
-        "pinned_emotes must persist from the textarea",
+        Some(vec!["Clueless".into(), "PepeLa".into(), "okjj".into()]),
+        "pinned_emotes must preserve the editor's order",
     );
+
+    let res = owner.get(&state, "/settings").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    let canonical = tag_with_name(&html, "ai.emotes.pinned_emotes");
+    assert_eq!(attr(canonical, "type"), Some("hidden"));
+    assert_eq!(attr(canonical, "value"), Some("Clueless\nPepeLa\nokjj"));
+    let editor_at = html
+        .find("data-pill-editor=\"ai.emotes.pinned_emotes\"")
+        .expect("pinned emote pill editor");
+    let editor_tag = &html[editor_at..html[editor_at..].find('>').unwrap() + editor_at + 1];
+    assert!(editor_tag.contains("data-pill-reorder"));
 }
 
 #[tokio::test]
@@ -760,7 +792,7 @@ async fn reply_emotes_card_persists_pools_and_empty_means_disabled() {
             &state,
             &defaults,
             &[
-                ("reply_emotes.invalid", "OnlyThis"),
+                ("reply_emotes.invalid", "OnlyThis\nSecondEmote"),
                 ("reply_emotes.failure", ""),
             ],
         )
@@ -768,7 +800,7 @@ async fn reply_emotes_card_persists_pools_and_empty_means_disabled() {
     assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
     let current = state.settings.load();
-    assert_eq!(current.reply_emotes.invalid, ["OnlyThis"]);
+    assert_eq!(current.reply_emotes.invalid, ["OnlyThis", "SecondEmote"]);
     assert!(current.reply_emotes.failure.is_empty());
 }
 
@@ -1708,10 +1740,11 @@ async fn f1_alerts_card_renders_and_round_trips() {
     assert_eq!(f1.poll_secs, 3600);
 }
 
-/// Every row is labelled with the knob's short name, never its dotted path,
-/// and every list textarea shows at least four lines in a wide row.
+/// Every row is labelled with the knob's short name, never its dotted path.
+/// Every newline-list knob uses the reusable pill editor in a wide row and
+/// keeps its canonical value in a hidden input, not a textarea.
 #[tokio::test]
-async fn settings_rows_use_short_labels_and_four_line_textareas() {
+async fn settings_rows_use_short_labels_and_wide_pill_editors() {
     let (state, _dirs) = owner_state().await;
     let res = Owner::login(&state).get(&state, "/settings").await;
     assert_eq!(res.status(), StatusCode::OK);
@@ -1726,22 +1759,30 @@ async fn settings_rows_use_short_labels_and_four_line_textareas() {
     }
     assert!(labels > 50, "settings form lost its rows ({labels})");
 
-    let mut textareas = 0;
-    let mut from = 0;
-    while let Some(rel) = form[from..].find("<textarea") {
-        let at = from + rel;
-        let tag = &form[at..at + form[at..].find('>').expect("textarea tag closed")];
-        let id = attr(tag, "id").unwrap_or_default();
-        let rows: u32 = attr(tag, "rows").and_then(|r| r.parse().ok()).unwrap_or(0);
-        assert!(rows >= 4, "textarea {id} has rows={rows}");
+    for name in PILL_EDITOR_PATHS {
+        let canonical = tag_with_name(form, name);
+        assert!(
+            canonical.starts_with("<input"),
+            "{name} must not be a textarea"
+        );
+        assert_eq!(attr(canonical, "type"), Some("hidden"), "{name}");
+        assert_eq!(attr(canonical, "class"), Some("pill-canonical"), "{name}");
+        assert!(
+            form.contains(&format!("id=\"{name}_entry\"")),
+            "{name} entry input missing"
+        );
+
+        let marker = format!("data-pill-editor=\"{name}\"");
+        let at = form
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{name} pill editor"));
         let row_start = form[..at].rfind("<div class=\"settings-row").expect("row");
         let row_tag = &form[row_start..row_start + form[row_start..].find('>').expect("row tag")];
-        assert!(
-            row_tag.contains("row-wide"),
-            "textarea {id} is not in a wide row"
-        );
-        textareas += 1;
-        from = at + tag.len();
+        assert!(row_tag.contains("row-wide"), "{name} is not in a wide row");
     }
-    assert!(textareas >= 4, "list textareas missing ({textareas})");
+    assert_eq!(
+        form.matches("data-pill-editor=\"").count(),
+        PILL_EDITOR_PATHS.len(),
+        "unexpected pill editor count"
+    );
 }

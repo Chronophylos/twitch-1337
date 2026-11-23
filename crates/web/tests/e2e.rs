@@ -13,6 +13,36 @@ mod harness;
 
 use harness::E2eSession;
 
+fn pill_editor(name: &str) -> String {
+    format!("[data-pill-editor=\"{name}\"]")
+}
+
+fn pill_entry(name: &str) -> String {
+    format!("{} [data-pill-entry]", pill_editor(name))
+}
+
+async fn pill_values(s: &E2eSession, name: &str) -> Vec<String> {
+    let editor = serde_json::to_string(&pill_editor(name)).unwrap();
+    let value = s
+        .eval(&format!(
+            "return Array.from(document.querySelector({editor}).querySelectorAll('.pill-value'))\
+             .map((el) => el.textContent);"
+        ))
+        .await;
+    serde_json::from_value(value).unwrap()
+}
+
+async fn pill_canonical_value(s: &E2eSession, name: &str) -> String {
+    let editor = serde_json::to_string(&pill_editor(name)).unwrap();
+    s.eval(&format!(
+        "return document.querySelector({editor}).querySelector('.pill-canonical').value;"
+    ))
+    .await
+    .as_str()
+    .unwrap_or_default()
+    .to_owned()
+}
+
 /// Create a ping (form POST), add a member (form POST), then delete it
 /// (htmx outerHTML swap). Exercises both the form-nav and htmx paths.
 #[tokio::test]
@@ -162,6 +192,362 @@ async fn settings_save_cooldown() {
         .unwrap_or_default()
         .unwrap_or_default();
     assert_eq!(val, "47", "cooldowns.ai did not persist");
+
+    s.close().await;
+}
+
+/// The reusable list editor covers the permission fields and all seven reply
+/// pools: commit gestures, paste, duplicates, removal, persistence, and form
+/// state restoration all use the canonical newline-delimited input.
+#[tokio::test]
+async fn settings_pill_editor_add_paste_remove_save_reset_and_discard() {
+    use fantoccini::key::Key;
+
+    let s = E2eSession::start_as_owner().await;
+    s.goto("/settings").await;
+
+    const PATH: &str = "twitch.hidden_admins";
+    let editor = pill_editor(PATH);
+    let entry = pill_entry(PATH);
+    let input = s.wait_for(&entry).await;
+    assert_eq!(pill_values(&s, PATH).await, Vec::<String>::new());
+
+    // Enter commits without implicitly submitting the settings form.
+    s.exec("window.__e2eMarker = true;").await;
+    input.click().await.expect("focus pill entry");
+    input.send_keys("Alpha").await.expect("type first pill");
+    input
+        .send_keys(&char::from(Key::Enter).to_string())
+        .await
+        .expect("commit with Enter");
+    assert_eq!(pill_values(&s, PATH).await, ["Alpha"]);
+    assert_eq!(
+        s.eval("return window.__e2eMarker === true;").await,
+        serde_json::Value::Bool(true),
+        "Enter must not submit and reload the form"
+    );
+    s.wait_for("#settings-save-bar.visible").await;
+    assert_eq!(s.wait_text("#settings-save-bar [data-count]").await, "1");
+
+    // An exact duplicate is rejected with announced inline feedback. Comma
+    // is the commit gesture, and no comma or blank pill enters the value.
+    input
+        .send_keys("Alpha,")
+        .await
+        .expect("duplicate with comma");
+    assert_eq!(pill_values(&s, PATH).await, ["Alpha"]);
+    let feedback_selector = format!("{editor} [data-pill-feedback]");
+    let feedback_text = s.wait_text(&feedback_selector).await;
+    assert!(
+        feedback_text.contains("Alpha") && feedback_text.contains("already"),
+        "duplicate feedback missing: {feedback_text:?}"
+    );
+    let feedback = s.find(&feedback_selector).await;
+    assert_eq!(
+        feedback.attr("role").await.unwrap().as_deref(),
+        Some("status")
+    );
+    assert_eq!(
+        feedback.attr("aria-live").await.unwrap().as_deref(),
+        Some("polite")
+    );
+
+    // Case is preserved and significant. Leaving the field commits its text.
+    input
+        .send_keys("alpha")
+        .await
+        .expect("type case-distinct pill");
+    let entry_js = serde_json::to_string(&entry).unwrap();
+    s.exec(&format!("document.querySelector({entry_js}).blur();"))
+        .await;
+    assert_eq!(pill_values(&s, PATH).await, ["Alpha", "alpha"]);
+
+    // Paste splits on commas, whitespace, and newlines, preserving order and
+    // dropping separator-only/blank pieces.
+    s.exec(&format!(
+        "const input = document.querySelector({entry_js}); \
+         const data = new DataTransfer(); \
+         data.setData('text/plain', ' Beta, Gamma\\nDelta  Epsilon '); \
+         input.dispatchEvent(new ClipboardEvent('paste', \
+           {{ bubbles: true, cancelable: true, clipboardData: data }}));"
+    ))
+    .await;
+    assert_eq!(
+        pill_values(&s, PATH).await,
+        ["Alpha", "alpha", "Beta", "Gamma", "Delta", "Epsilon"]
+    );
+    input
+        .send_keys(&char::from(Key::Enter).to_string())
+        .await
+        .expect("blank Enter");
+    assert_eq!(pill_values(&s, PATH).await.len(), 6, "no blank pill");
+
+    // Remove once by pointer and once by keyboard. Backspace in the empty
+    // entry removes the final pill without disturbing the other values.
+    s.click(&format!(
+        "{editor} [aria-label=\"Remove Beta from hidden_admins\"]"
+    ))
+    .await;
+    assert_eq!(
+        pill_values(&s, PATH).await,
+        ["Alpha", "alpha", "Gamma", "Delta", "Epsilon"]
+    );
+    let gamma_remove = s
+        .find(&format!(
+            "{editor} [aria-label=\"Remove Gamma from hidden_admins\"]"
+        ))
+        .await;
+    gamma_remove
+        .send_keys(&char::from(Key::Enter).to_string())
+        .await
+        .expect("keyboard remove");
+    assert_eq!(
+        pill_values(&s, PATH).await,
+        ["Alpha", "alpha", "Delta", "Epsilon"]
+    );
+    input
+        .send_keys(&char::from(Key::Backspace).to_string())
+        .await
+        .expect("Backspace removes last pill");
+    assert_eq!(pill_values(&s, PATH).await, ["Alpha", "alpha", "Delta"]);
+
+    input
+        .send_keys("Comma,")
+        .await
+        .expect("commit a new pill by comma");
+    assert_eq!(
+        pill_values(&s, PATH).await,
+        ["Alpha", "alpha", "Delta", "Comma"]
+    );
+
+    // Every visible entry and pill button has a computed accessible name.
+    for css in [entry.clone(), format!("{editor} .pill-remove")] {
+        let (_, name) = s.accessibility(&s.find(&css).await).await;
+        assert!(!name.trim().is_empty(), "unnamed pill control: {css}");
+    }
+
+    // None of the unordered lists (including all seven reply pools) exposes
+    // drag or keyboard reordering controls.
+    assert_eq!(
+        s.find_all("[data-pill-editor^=\"reply_emotes.\"]")
+            .await
+            .len(),
+        7,
+        "all reply pools must use the pill editor"
+    );
+    assert_eq!(
+        s.eval(
+            "return Array.from(document.querySelectorAll(\
+               '[data-pill-editor]:not([data-pill-reorder])')).every((editor) => \
+               !editor.querySelector('[data-pill-action=\"earlier\"], [data-pill-action=\"later\"]') && \
+               !editor.querySelector('[draggable=\"true\"]'));"
+        )
+        .await,
+        serde_json::Value::Bool(true)
+    );
+    for name in [
+        "reply_emotes.invalid",
+        "reply_emotes.denied",
+        "reply_emotes.cooldown",
+        "reply_emotes.timeout",
+        "reply_emotes.limit",
+        "reply_emotes.failure",
+        "reply_emotes.unavailable",
+    ] {
+        assert!(
+            !pill_values(&s, name).await.is_empty(),
+            "saved defaults must render as pills in {name}"
+        );
+    }
+
+    // Leave both a permission entry and a reply-pool entry pending. Save must
+    // flush pending text before the browser constructs the form body.
+    s.fill(&entry, "Pending").await;
+    assert_eq!(
+        pill_canonical_value(&s, PATH).await,
+        "Alpha\nalpha\nDelta\nComma",
+        "uncommitted text is not yet canonical"
+    );
+    const REPLY_PATH: &str = "reply_emotes.invalid";
+    s.fill(&pill_entry(REPLY_PATH), "PillCheck").await;
+    s.click("button[type=\"submit\"].btn.primary[form=\"settings-form\"]")
+        .await;
+    s.wait_js(
+        "return window.__e2eMarker === undefined \
+         && document.getElementById('settings-form') !== null;",
+    )
+    .await;
+    assert!(
+        s.find_all(".flash.error").await.is_empty(),
+        "pill save must not hit validation errors"
+    );
+
+    // A fresh GET proves both lists persisted in their displayed order.
+    s.goto("/settings").await;
+    let expected = vec!["Alpha", "alpha", "Delta", "Comma", "Pending"];
+    assert_eq!(pill_values(&s, PATH).await, expected);
+    assert_eq!(
+        pill_canonical_value(&s, PATH).await,
+        expected.join("\n"),
+        "canonical order must match displayed order"
+    );
+    assert_eq!(
+        pill_values(&s, REPLY_PATH).await,
+        ["FDM", "4Head", "LUL", "PillCheck"]
+    );
+
+    // Regression: clicking Remove blurs pending entry text. The blur commit
+    // must not detach the pressed button before its click removes this pill.
+    let input = s.wait_for(&entry).await;
+    input
+        .send_keys("AddedOnRemoveBlur")
+        .await
+        .expect("leave unique text pending before remove");
+    s.click(&format!(
+        "{editor} [aria-label=\"Remove Delta from hidden_admins\"]"
+    ))
+    .await;
+    let after_pending_remove = vec!["Alpha", "alpha", "Comma", "Pending", "AddedOnRemoveBlur"];
+    assert_eq!(pill_values(&s, PATH).await, after_pending_remove);
+    assert_eq!(
+        pill_canonical_value(&s, PATH).await,
+        after_pending_remove.join("\n"),
+        "blur addition and remove click must both reach the canonical value"
+    );
+
+    // Row reset restores the compiled default (empty), not the saved baseline.
+    let input = s.wait_for(&entry).await;
+    input.send_keys("ResetMe").await.expect("type reset probe");
+    input
+        .send_keys(&char::from(Key::Enter).to_string())
+        .await
+        .expect("commit reset probe");
+    s.click("[aria-label=\"Reset twitch.hidden_admins to default\"]")
+        .await;
+    assert_eq!(pill_values(&s, PATH).await, Vec::<String>::new());
+    assert_eq!(pill_canonical_value(&s, PATH).await, "");
+    assert_eq!(s.wait_text("#settings-save-bar [data-count]").await, "1");
+
+    // Discard restores the saved pills and canonical value in place, including
+    // clearing any still-pending entry text.
+    s.fill(&entry, "AlsoDiscarded").await;
+    s.exec("window.__e2eMarker = true;").await;
+    s.click("#settings-save-bar [data-discard]").await;
+    s.wait_gone("#settings-save-bar.visible").await;
+    assert_eq!(pill_values(&s, PATH).await, expected);
+    assert_eq!(pill_canonical_value(&s, PATH).await, expected.join("\n"));
+    assert_eq!(
+        s.find(&entry)
+            .await
+            .prop("value")
+            .await
+            .unwrap_or_default()
+            .unwrap_or_default(),
+        ""
+    );
+    assert_eq!(
+        s.eval("return window.__e2eMarker === true;").await,
+        serde_json::Value::Bool(true),
+        "Discard must not reload the page"
+    );
+
+    s.close().await;
+}
+
+/// Ordered pinned emotes expose both keyboard move controls and native drag
+/// reordering; the saved canonical order is exactly the displayed pill order.
+#[tokio::test]
+async fn settings_pinned_emote_pills_reorder_by_keyboard_and_drag() {
+    use fantoccini::key::Key;
+
+    let s = E2eSession::start_as_owner().await;
+    s.goto("/settings").await;
+    s.exec(
+        "const toggle = document.getElementById('ai.emotes.enabled'); \
+         if (!toggle.checked) toggle.click();",
+    )
+    .await;
+    s.wait_js(
+        "return !document.getElementById('sec-ai-emotes').classList.contains('is-card-off');",
+    )
+    .await;
+
+    const PATH: &str = "ai.emotes.pinned_emotes";
+    let editor = pill_editor(PATH);
+    let entry = pill_entry(PATH);
+    let input = s.wait_for(&entry).await;
+    assert_eq!(pill_values(&s, PATH).await, ["PepeLa", "okjj"]);
+    input.send_keys("Clueless").await.expect("type third pin");
+    input
+        .send_keys(&char::from(Key::Enter).to_string())
+        .await
+        .expect("commit third pin");
+    assert_eq!(pill_values(&s, PATH).await, ["PepeLa", "okjj", "Clueless"]);
+
+    for (css, expected_name) in [
+        (
+            format!("{editor} [data-pill-index=\"0\"] [data-pill-action=\"later\"]"),
+            "Move PepeLa later in pinned_emotes",
+        ),
+        (
+            format!("{editor} [data-pill-index=\"1\"] [data-pill-action=\"earlier\"]"),
+            "Move okjj earlier in pinned_emotes",
+        ),
+    ] {
+        let (_, name) = s.accessibility(&s.find(&css).await).await;
+        assert_eq!(name, expected_name);
+    }
+
+    // Regression: the move button's activating blur commits the pending pin,
+    // but must leave the pressed button attached so the move also happens.
+    input
+        .send_keys("AddedOnReorderBlur")
+        .await
+        .expect("leave unique text pending before reorder");
+    s.click(&format!(
+        "{editor} [data-pill-index=\"0\"] [data-pill-action=\"later\"]"
+    ))
+    .await;
+    let after_pending_move = vec!["okjj", "PepeLa", "Clueless", "AddedOnReorderBlur"];
+    assert_eq!(pill_values(&s, PATH).await, after_pending_move);
+    assert_eq!(
+        pill_canonical_value(&s, PATH).await,
+        after_pending_move.join("\n"),
+        "blur addition and reorder click must both reach the canonical value"
+    );
+
+    // Chrome dispatches the same DragEvent path as a native HTML5 drag. Move
+    // the final pill onto the first, then inspect the canonical input.
+    let editor_js = serde_json::to_string(&editor).unwrap();
+    s.exec(&format!(
+        "const editor = document.querySelector({editor_js}); \
+         const source = editor.querySelector('[data-pill-index=\"2\"]'); \
+         const target = editor.querySelector('[data-pill-index=\"0\"]'); \
+         const data = new DataTransfer(); \
+         source.dispatchEvent(new DragEvent('dragstart', \
+           {{ bubbles: true, cancelable: true, dataTransfer: data }})); \
+         target.dispatchEvent(new DragEvent('dragover', \
+           {{ bubbles: true, cancelable: true, dataTransfer: data }})); \
+         target.dispatchEvent(new DragEvent('drop', \
+           {{ bubbles: true, cancelable: true, dataTransfer: data }}));"
+    ))
+    .await;
+    let expected = vec!["Clueless", "okjj", "PepeLa", "AddedOnReorderBlur"];
+    assert_eq!(pill_values(&s, PATH).await, expected);
+    assert_eq!(pill_canonical_value(&s, PATH).await, expected.join("\n"));
+
+    s.exec("window.__e2eMarker = true;").await;
+    s.click("button[type=\"submit\"].btn.primary[form=\"settings-form\"]")
+        .await;
+    s.wait_js(
+        "return window.__e2eMarker === undefined \
+         && document.getElementById('settings-form') !== null;",
+    )
+    .await;
+    assert!(s.find_all(".flash.error").await.is_empty());
+    s.goto("/settings").await;
+    assert_eq!(pill_values(&s, PATH).await, expected);
+    assert_eq!(pill_canonical_value(&s, PATH).await, expected.join("\n"));
 
     s.close().await;
 }
@@ -372,7 +758,7 @@ async fn settings_rows_share_one_layout() {
                  out.push(`${card.id} control edges ${JSON.stringify(edges)}`); \
              } \
              for (const f of document.querySelectorAll( \
-                 '#settings-form .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select)')) { \
+                 '#settings-form .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, .pill-editor, select)')) { \
                const cs = getComputedStyle(f); \
                if (parseFloat(cs.borderTopWidth) < 1 || clear(cs.borderTopColor) || clear(cs.backgroundColor)) \
                  out.push(`unframed ${f.id || f.className}`); \
@@ -411,7 +797,7 @@ async fn settings_rows_share_one_layout() {
         ("[id=\"ai.memory.soul_bytes_display\"]", ".bytes-wrap"),
         ("[id=\"ai.aurora.persona_name\"]", ".text-input"),
         ("[id=\"ai.aurora.profile\"]", "select"),
-        ("[id=\"twitch.hidden_admins\"]", ".text-input"),
+        ("[id=\"twitch.hidden_admins_entry\"]", ".pill-editor"),
     ] {
         s.wait_js(&format!(
             "const el = document.querySelector('{css}'); el.focus(); \

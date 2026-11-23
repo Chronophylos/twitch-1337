@@ -151,6 +151,40 @@
 </div>
 {% endmacro %}
 
+{# Newline-list row. The visible pill editor owns the entry interaction;
+   the hidden canonical input keeps the existing dotted form name and
+   newline-delimited parser contract. Only ordered lists set `reorder`. #}
+{% macro pill_row(section, k, hint, values, default, enabled_by = "", reorder = false) %}
+<div class="settings-row row-wide" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>
+  {% call row_head(k.label(), hint, k.path, "_entry") %}{% endcall %}
+  <div class="row-control-cell">
+    <div class="pill-editor" data-pill-editor="{{ k.path }}" data-pill-label="{{ k.label() }}"{% if reorder %} data-pill-reorder{% endif %}>
+      <div class="pill-list" data-pill-list role="list" aria-label="{{ k.label() }} entries"></div>
+      <input type="text"
+             class="pill-entry"
+             id="{{ k.path }}_entry"
+             data-pill-entry
+             aria-describedby="{{ k.path }}_feedback"
+             autocomplete="off"
+             spellcheck="false">
+      <input type="hidden"
+             class="pill-canonical"
+             id="{{ k.path }}"
+             name="{{ k.path }}"
+             value="{{ values.join("\n") }}"
+             data-default="{{ default.join("\n") }}"
+             data-key="{{ k.path }}">
+      <p class="pill-feedback" id="{{ k.path }}_feedback" data-pill-feedback role="status" aria-live="polite" aria-atomic="true"></p>
+    </div>
+  </div>
+  <div class="row-right">
+    {% call restart_badge(k) %}{% endcall %}
+    {% call row_reset(k.path) %}{% endcall %}
+    <span class="row-default">default <span class="mono">{% if default.is_empty() %}(empty){% else %}{{ default.join(", ") }}{% endif %}</span></span>
+  </div>
+</div>
+{% endmacro %}
+
 {# Time-of-day row for `HH:MM` strings (Berlin wallclock). #}
 {% macro time_row(section, k, hint, value, default, enabled_by = "") %}
 <div class="settings-row" data-section="{{ section }}"{% if !enabled_by.is_empty() %} data-card-enabled-by="{{ enabled_by }}"{% endif %}>

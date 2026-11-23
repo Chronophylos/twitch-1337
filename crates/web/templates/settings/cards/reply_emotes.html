@@ -5,87 +5,31 @@
   <header class="settings-card-head">
     <div>
       <h2>Chat · Error-Emotes</h2>
-      <p>One emote token per line and category. Replies pick a random entry at send time; an empty pool sends no emote. Maximum 20 entries, 25 characters each, no duplicates.</p>
+      <p>Add emote tokens to each category. Replies pick a random entry at send time; an empty pool sends no emote. Maximum 20 entries, 25 characters each, no duplicates.</p>
     </div>
     <div class="settings-card-tag"><span class="card-dirty" hidden>0 modified</span></div>
   </header>
   <div class="settings-rows">
-    <div class="settings-row row-wide" data-section="reply_emotes">
-      {% call m::row_head("invalid", "Wrong usage, invalid values, and not-found results.", "reply_emotes.invalid") %}{% endcall %}
-      <div class="row-control-cell">
-        <textarea class="text-input" rows="4" id="reply_emotes.invalid" name="reply_emotes.invalid" data-key="reply_emotes.invalid" data-default="{{ defaults.reply_emotes.invalid.join("\n") }}">{{ current.reply_emotes.invalid.join("\n") }}</textarea>
-      </div>
-      <div class="row-right">
-        {% call m::restart_badge(self.knob("reply_emotes.invalid")) %}{% endcall %}
-        {% call m::row_reset("reply_emotes.invalid") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{% if defaults.reply_emotes.invalid.is_empty() %}(empty){% else %}{{ defaults.reply_emotes.invalid.join(", ") }}{% endif %}</span></span>
-      </div>
-    </div>
-    <div class="settings-row row-wide" data-section="reply_emotes">
-      {% call m::row_head("denied", "Permission refusals and locked commands.", "reply_emotes.denied") %}{% endcall %}
-      <div class="row-control-cell">
-        <textarea class="text-input" rows="4" id="reply_emotes.denied" name="reply_emotes.denied" data-key="reply_emotes.denied" data-default="{{ defaults.reply_emotes.denied.join("\n") }}">{{ current.reply_emotes.denied.join("\n") }}</textarea>
-      </div>
-      <div class="row-right">
-        {% call m::restart_badge(self.knob("reply_emotes.denied")) %}{% endcall %}
-        {% call m::row_reset("reply_emotes.denied") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{% if defaults.reply_emotes.denied.is_empty() %}(empty){% else %}{{ defaults.reply_emotes.denied.join(", ") }}{% endif %}</span></span>
-      </div>
-    </div>
-    <div class="settings-row row-wide" data-section="reply_emotes">
-      {% call m::row_head("cooldown", "Per-user cooldown rejections.", "reply_emotes.cooldown") %}{% endcall %}
-      <div class="row-control-cell">
-        <textarea class="text-input" rows="4" id="reply_emotes.cooldown" name="reply_emotes.cooldown" data-key="reply_emotes.cooldown" data-default="{{ defaults.reply_emotes.cooldown.join("\n") }}">{{ current.reply_emotes.cooldown.join("\n") }}</textarea>
-      </div>
-      <div class="row-right">
-        {% call m::restart_badge(self.knob("reply_emotes.cooldown")) %}{% endcall %}
-        {% call m::row_reset("reply_emotes.cooldown") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{% if defaults.reply_emotes.cooldown.is_empty() %}(empty){% else %}{{ defaults.reply_emotes.cooldown.join(", ") }}{% endif %}</span></span>
-      </div>
-    </div>
-    <div class="settings-row row-wide" data-section="reply_emotes">
-      {% call m::row_head("timeout", "Operations that exceeded their time limit.", "reply_emotes.timeout") %}{% endcall %}
-      <div class="row-control-cell">
-        <textarea class="text-input" rows="4" id="reply_emotes.timeout" name="reply_emotes.timeout" data-key="reply_emotes.timeout" data-default="{{ defaults.reply_emotes.timeout.join("\n") }}">{{ current.reply_emotes.timeout.join("\n") }}</textarea>
-      </div>
-      <div class="row-right">
-        {% call m::restart_badge(self.knob("reply_emotes.timeout")) %}{% endcall %}
-        {% call m::row_reset("reply_emotes.timeout") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{% if defaults.reply_emotes.timeout.is_empty() %}(empty){% else %}{{ defaults.reply_emotes.timeout.join(", ") }}{% endif %}</span></span>
-      </div>
-    </div>
-    <div class="settings-row row-wide" data-section="reply_emotes">
-      {% call m::row_head("limit", "Resource, capacity, and quota limits.", "reply_emotes.limit") %}{% endcall %}
-      <div class="row-control-cell">
-        <textarea class="text-input" rows="4" id="reply_emotes.limit" name="reply_emotes.limit" data-key="reply_emotes.limit" data-default="{{ defaults.reply_emotes.limit.join("\n") }}">{{ current.reply_emotes.limit.join("\n") }}</textarea>
-      </div>
-      <div class="row-right">
-        {% call m::restart_badge(self.knob("reply_emotes.limit")) %}{% endcall %}
-        {% call m::row_reset("reply_emotes.limit") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{% if defaults.reply_emotes.limit.is_empty() %}(empty){% else %}{{ defaults.reply_emotes.limit.join(", ") }}{% endif %}</span></span>
-      </div>
-    </div>
-    <div class="settings-row row-wide" data-section="reply_emotes">
-      {% call m::row_head("failure", "Generic, upstream, persistence, and execution failures.", "reply_emotes.failure") %}{% endcall %}
-      <div class="row-control-cell">
-        <textarea class="text-input" rows="4" id="reply_emotes.failure" name="reply_emotes.failure" data-key="reply_emotes.failure" data-default="{{ defaults.reply_emotes.failure.join("\n") }}">{{ current.reply_emotes.failure.join("\n") }}</textarea>
-      </div>
-      <div class="row-right">
-        {% call m::restart_badge(self.knob("reply_emotes.failure")) %}{% endcall %}
-        {% call m::row_reset("reply_emotes.failure") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{% if defaults.reply_emotes.failure.is_empty() %}(empty){% else %}{{ defaults.reply_emotes.failure.join(", ") }}{% endif %}</span></span>
-      </div>
-    </div>
-    <div class="settings-row row-wide" data-section="reply_emotes">
-      {% call m::row_head("unavailable", "Features or accounts that are temporarily unavailable.", "reply_emotes.unavailable") %}{% endcall %}
-      <div class="row-control-cell">
-        <textarea class="text-input" rows="4" id="reply_emotes.unavailable" name="reply_emotes.unavailable" data-key="reply_emotes.unavailable" data-default="{{ defaults.reply_emotes.unavailable.join("\n") }}">{{ current.reply_emotes.unavailable.join("\n") }}</textarea>
-      </div>
-      <div class="row-right">
-        {% call m::restart_badge(self.knob("reply_emotes.unavailable")) %}{% endcall %}
-        {% call m::row_reset("reply_emotes.unavailable") %}{% endcall %}
-        <span class="row-default">default <span class="mono">{% if defaults.reply_emotes.unavailable.is_empty() %}(empty){% else %}{{ defaults.reply_emotes.unavailable.join(", ") }}{% endif %}</span></span>
-      </div>
-    </div>
+    {% call m::pill_row("reply_emotes", self.knob("reply_emotes.invalid"),
+       "Wrong usage, invalid values, and not-found results. Random pick; order does not matter.",
+       current.reply_emotes.invalid, defaults.reply_emotes.invalid) %}{% endcall %}
+    {% call m::pill_row("reply_emotes", self.knob("reply_emotes.denied"),
+       "Permission refusals and locked commands. Random pick; order does not matter.",
+       current.reply_emotes.denied, defaults.reply_emotes.denied) %}{% endcall %}
+    {% call m::pill_row("reply_emotes", self.knob("reply_emotes.cooldown"),
+       "Per-user cooldown rejections. Random pick; order does not matter.",
+       current.reply_emotes.cooldown, defaults.reply_emotes.cooldown) %}{% endcall %}
+    {% call m::pill_row("reply_emotes", self.knob("reply_emotes.timeout"),
+       "Operations that exceeded their time limit. Random pick; order does not matter.",
+       current.reply_emotes.timeout, defaults.reply_emotes.timeout) %}{% endcall %}
+    {% call m::pill_row("reply_emotes", self.knob("reply_emotes.limit"),
+       "Resource, capacity, and quota limits. Random pick; order does not matter.",
+       current.reply_emotes.limit, defaults.reply_emotes.limit) %}{% endcall %}
+    {% call m::pill_row("reply_emotes", self.knob("reply_emotes.failure"),
+       "Generic, upstream, persistence, and execution failures. Random pick; order does not matter.",
+       current.reply_emotes.failure, defaults.reply_emotes.failure) %}{% endcall %}
+    {% call m::pill_row("reply_emotes", self.knob("reply_emotes.unavailable"),
+       "Features or accounts that are temporarily unavailable. Random pick; order does not matter.",
+       current.reply_emotes.unavailable, defaults.reply_emotes.unavailable) %}{% endcall %}
   </div>
 </section>
