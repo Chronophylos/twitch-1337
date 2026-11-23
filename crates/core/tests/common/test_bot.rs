@@ -486,7 +486,7 @@ impl TestBotBuilder {
             .await
             .expect("open memory store");
 
-            let ai_memory = twitch_1337::ai::command::build_ai_memory_v2(
+            let ai_memory = twitch_1337::ai::memory::build_ai_memory_v2(
                 self.config.ai.is_some(),
                 memory_store.clone(),
             )
@@ -503,7 +503,7 @@ impl TestBotBuilder {
             } else {
                 None
             };
-            let chat_ctx = twitch_1337::ai::command::ChatContext::build(
+            let chat_ctx = twitch_1337::ai::chat_context::ChatContext::build(
                 &settings_handle,
                 self.config.ai.is_some(),
                 &channel,

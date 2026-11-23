@@ -8,12 +8,11 @@ use llm::{ChatCompletionRequest, LlmClient, LlmError, Message, Result as LlmResu
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
-use crate::ai::chat_history::ChatHistory;
+use crate::ai::chat_history::{ChatHistory, eligible};
 use crate::ai::recap::{
     RECAP_BACKOFF_CAP, RECAP_BACKOFF_INITIAL, RECAP_FLUSH_AGE, RECAP_MAX_GENERATION,
     RECAP_PARK_FAILURES, RecapChannelLog, RecapFile, RecapHandle, RecapIdentity, RecapNote,
-    RecapState, append_note, eligible, format_batch_line, identities_from_batch,
-    rebind_through_seq,
+    RecapState, append_note, format_batch_line, identities_from_batch, rebind_through_seq,
 };
 use crate::settings::SettingsHandle;
 use crate::util::observability;

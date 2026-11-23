@@ -2,8 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::ai::chat_history::ChatHistoryEntry;
-use crate::ai::recap::{eligible, is_own, n_not_own};
+use crate::ai::chat_history::{ChatHistoryEntry, eligible, is_own, n_not_own};
 use crate::twitch::mouth::Agent;
 
 use super::BuildOpts;

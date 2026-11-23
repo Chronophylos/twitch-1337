@@ -504,7 +504,7 @@ fn validate_spoiler(s: &Settings, validate_profile_target: bool, errs: &mut Vec<
 }
 
 fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldError>) {
-    if crate::alerts::class_rank(&a.solar.min_class).is_none() {
+    if crate::settings::alerts::class_rank(&a.solar.min_class).is_none() {
         errs.push(FieldError {
             field: "alerts.solar.min_class".into(),
             message: format!(

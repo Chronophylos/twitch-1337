@@ -8,7 +8,7 @@ use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use llm::{ChatCompletionRequest, Message, TraceIds};
 
-use crate::ai::command::ChatContext;
+use crate::ai::chat_context::ChatContext;
 use crate::cooldown::PerUserCooldown;
 use crate::llm_factory::LlmRegistry;
 use crate::settings::SettingsHandle;

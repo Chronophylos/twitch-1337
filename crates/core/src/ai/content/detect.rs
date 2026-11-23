@@ -11,6 +11,19 @@ pub enum Bucket {
     Text,
 }
 
+impl Bucket {
+    /// The dashboard's byte cap for this bucket.
+    pub fn cap(self, media: &crate::settings::ai::AiMedia) -> bytesize::ByteSize {
+        match self {
+            Bucket::Image => media.max_image_size,
+            Bucket::Pdf => media.max_pdf_size,
+            Bucket::Audio => media.max_audio_size,
+            Bucket::Video => media.max_video_size,
+            Bucket::Text => media.max_text_size,
+        }
+    }
+}
+
 /// Best-effort bucket selection using `Content-Type` header first, then magic
 /// bytes from `infer`. Returns `None` if neither maps to a supported bucket.
 pub fn detect(content_type_header: &str, leading_bytes: &[u8]) -> Option<Bucket> {

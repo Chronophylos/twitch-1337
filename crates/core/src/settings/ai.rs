@@ -178,12 +178,16 @@ fn default_reply_hard_chars() -> usize {
     490
 }
 
+/// Upper bound for `ai.history.length` and `ai.history.n`.
+pub const MAX_HISTORY_LENGTH: u64 = 5_000;
+pub const DEFAULT_HISTORY_LENGTH: u64 = 200;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 pub struct AiHistory {
-    #[knob(max = crate::ai::chat_history::MAX_HISTORY_LENGTH)]
+    #[knob(max = MAX_HISTORY_LENGTH)]
     pub length: u64,
     #[serde(default)]
-    #[knob(min = 1, max = crate::ai::chat_history::MAX_HISTORY_LENGTH)]
+    #[knob(min = 1, max = MAX_HISTORY_LENGTH)]
     pub n: u64,
 }
 
@@ -376,7 +380,7 @@ impl Default for AiAurora {
 impl Default for AiHistory {
     fn default() -> Self {
         Self {
-            length: crate::ai::chat_history::DEFAULT_HISTORY_LENGTH,
+            length: DEFAULT_HISTORY_LENGTH,
             n: 20,
         }
     }
@@ -479,19 +483,6 @@ impl Default for AiMedia {
             max_audio_size: bytesize::ByteSize::mib(25),
             max_video_size: bytesize::ByteSize::mib(50),
             max_text_size: bytesize::ByteSize::mib(1),
-        }
-    }
-}
-
-impl AiMedia {
-    pub fn cap_for(&self, bucket: crate::ai::content::detect::Bucket) -> bytesize::ByteSize {
-        use crate::ai::content::detect::Bucket;
-        match bucket {
-            Bucket::Image => self.max_image_size,
-            Bucket::Pdf => self.max_pdf_size,
-            Bucket::Audio => self.max_audio_size,
-            Bucket::Video => self.max_video_size,
-            Bucket::Text => self.max_text_size,
         }
     }
 }

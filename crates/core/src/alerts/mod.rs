@@ -11,7 +11,7 @@ pub mod quake;
 pub mod solar;
 pub mod state;
 
-pub use solar::class_rank;
+pub use crate::settings::alerts::class_rank;
 
 use std::collections::VecDeque;
 use std::future::Future;
