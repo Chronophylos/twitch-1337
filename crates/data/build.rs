@@ -4,36 +4,24 @@
     clippy::panic,
     reason = "build script: a panic is a build failure on committed data"
 )]
-use csv::ReaderBuilder;
+#[path = "src/bake.rs"]
+mod bake;
+
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Deserialize)]
-struct RawAirport {
-    ident: String,
-    #[serde(rename = "type")]
-    airport_type: String,
-    latitude_deg: f64,
-    longitude_deg: f64,
-    elevation_ft: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawRunway {
-    airport_ident: String,
-    length_ft: Option<String>,
-    surface: Option<String>,
-    closed: Option<u8>,
-}
-
-fn is_hard_surface(surface: &str) -> bool {
-    const PREFIXES: &[&str] = &["ASP", "CON", "BIT", "PEM"];
-    let upper = surface.to_ascii_uppercase();
-    PREFIXES.iter().any(|p| upper.starts_with(p))
+fn report_counts(path: &Path, counts: bake::RowCounts) {
+    println!(
+        "cargo:warning={}: kept={}, filtered={}, malformed={}",
+        path.display(),
+        counts.kept,
+        counts.filtered,
+        counts.malformed
+    );
 }
 
 fn main() {
@@ -44,75 +32,16 @@ fn main() {
     let airports_csv = ourairports_dir.join("airports.csv");
     let runways_csv = ourairports_dir.join("runways.csv");
 
-    // Parse runways: map airport_ident -> longest hard-surface non-closed runway length
-    let mut best_runway: HashMap<String, u32> = HashMap::new();
-    {
-        let mut rdr = ReaderBuilder::new()
-            .from_path(&runways_csv)
-            .unwrap_or_else(|e| panic!("open {}: {e}", runways_csv.display()));
-        for result in rdr.deserialize::<RawRunway>() {
-            let Ok(rwy) = result else {
-                continue;
-            };
-            if rwy.closed == Some(1) {
-                continue;
-            }
-            if !matches!(&rwy.surface, Some(s) if is_hard_surface(s)) {
-                continue;
-            }
-            let length: u32 = match &rwy.length_ft {
-                Some(s) => match s.parse() {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                },
-                None => continue,
-            };
-            let entry = best_runway.entry(rwy.airport_ident.clone()).or_insert(0);
-            if length > *entry {
-                *entry = length;
-            }
-        }
-    }
+    // Parse runways: map airport_ident -> longest hard-surface non-closed runway length.
+    let parsed_runways = bake::read_runways(&runways_csv).unwrap_or_else(|error| panic!("{error}"));
+    report_counts(&runways_csv, parsed_runways.counts);
+    let best_runway = parsed_runways.rows;
 
-    // Parse airports, filter, and generate code
-    let mut airports = Vec::new();
-    {
-        let mut rdr = ReaderBuilder::new()
-            .from_path(&airports_csv)
-            .unwrap_or_else(|e| panic!("open {}: {e}", airports_csv.display()));
-        for result in rdr.deserialize::<RawAirport>() {
-            let Ok(apt) = result else {
-                continue;
-            };
-            // Skip non-airports
-            match apt.airport_type.as_str() {
-                "large_airport" | "medium_airport" | "small_airport" => {}
-                _ => continue,
-            }
-            // Must have ICAO-style ident (4 letters)
-            if apt.ident.len() != 4 || !apt.ident.chars().all(|c| c.is_ascii_alphanumeric()) {
-                continue;
-            }
-            // Must have a hard-surface runway
-            let Some(&runway_len) = best_runway.get(&apt.ident) else {
-                continue;
-            };
-            let elevation: i32 = apt
-                .elevation_ft
-                .as_deref()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0);
-
-            airports.push((
-                apt.ident.clone(),
-                apt.latitude_deg,
-                apt.longitude_deg,
-                elevation,
-                runway_len,
-                apt.airport_type.clone(),
-            ));
-        }
-    }
+    // Parse airports, filter deliberately, and reject excessive malformed rows.
+    let parsed_airports =
+        bake::read_airports(&airports_csv, &best_runway).unwrap_or_else(|error| panic!("{error}"));
+    report_counts(&airports_csv, parsed_airports.counts);
+    let airports = parsed_airports.rows;
 
     // Generate Rust source
     let gen_path = out_dir.join("airport_db.rs");
@@ -137,10 +66,6 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed={}", airports_csv.display());
     println!("cargo:rerun-if-changed={}", runways_csv.display());
-    println!(
-        "cargo:warning=Generated airport DB with {} airports",
-        airports.len()
-    );
 
     generate_aircraft_db(&out_dir, &manifest_dir);
     generate_lookup_airport_db(&out_dir, &manifest_dir);
@@ -159,6 +84,7 @@ struct AircraftToml {
 #[derive(Debug, Deserialize)]
 struct AircraftMeta {
     name: String,
+    // ICAO aircraft type designator, not an airport code; digits are valid.
     icao_type: String,
 }
 
@@ -409,19 +335,6 @@ fn generate_aircraft_db(out_dir: &Path, manifest_dir: &Path) {
     );
 }
 
-fn sanitize_lookup_name(name: &str) -> String {
-    name.chars()
-        .filter(|c| {
-            !c.is_control()
-                && *c != '\u{00ad}'
-                && *c != '\u{200b}'
-                && *c != '\u{200c}'
-                && *c != '\u{200d}'
-                && *c != '\u{feff}'
-        })
-        .collect()
-}
-
 /// Packed lookup-airport blob (`LKA1`):
 /// header (12) + rows (`count` × 24) + UTF-8 name blob.
 /// Row: icao[4] iata[3] flags lat_le lon_le name_off_le name_len_le.
@@ -437,50 +350,26 @@ fn generate_lookup_airport_db(out_dir: &Path, manifest_dir: &Path) {
     let path = manifest_dir.join("assets/location/airports.csv");
     println!("cargo:rerun-if-changed={}", path.display());
 
+    let parsed = bake::read_lookup_airports(&path).unwrap_or_else(|error| panic!("{error}"));
+    report_counts(&path, parsed.counts);
+
     let mut rows = Vec::new();
     let mut name_blob = Vec::new();
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(false)
-        .from_path(&path)
-        .expect("open location airports.csv");
-    for result in rdr.records() {
-        let Ok(rec) = result else { continue };
-        if rec.len() < 5 {
-            continue;
-        }
-        let icao = rec[0].trim();
-        let iata = rec[1].trim();
-        let name = sanitize_lookup_name(rec[2].trim());
-        let Ok(lat) = rec[3].trim().parse::<f32>() else {
-            continue;
-        };
-        let Ok(lon) = rec[4].trim().parse::<f32>() else {
-            continue;
-        };
-
-        let icao_ok = icao.len() == 4;
-        let iata_ok = iata.len() == 3;
-        if !icao_ok && !iata_ok {
-            continue;
-        }
-
+    for row in parsed.rows {
         let name_off = u32::try_from(name_blob.len()).expect("name blob offset fits u32");
-        let name_len = u32::try_from(name.len()).expect("name length fits u32");
-        name_blob.extend_from_slice(name.as_bytes());
+        let name_len = u32::try_from(row.name.len()).expect("name length fits u32");
+        name_blob.extend_from_slice(row.name.as_bytes());
 
-        let mut icao_bytes = [0u8; 4];
-        let mut iata_bytes = [0u8; 3];
-        let mut flags = 0u8;
-        if icao_ok {
-            icao_bytes.copy_from_slice(icao.as_bytes());
+        let mut flags = 0;
+        if row.has_ident {
             flags |= LOOKUP_FLAG_ICAO;
         }
-        if iata_ok {
-            iata_bytes.copy_from_slice(iata.as_bytes());
+        if row.has_iata {
             flags |= LOOKUP_FLAG_IATA;
         }
-
-        rows.push((icao_bytes, iata_bytes, flags, lat, lon, name_off, name_len));
+        rows.push((
+            row.ident, row.iata, flags, row.lat, row.lon, name_off, name_len,
+        ));
     }
 
     let count = u32::try_from(rows.len()).expect("airport count fits u32");
@@ -506,51 +395,25 @@ fn generate_lookup_airport_db(out_dir: &Path, manifest_dir: &Path) {
         reason = "build-script output under OUT_DIR, not runtime persistence"
     )]
     fs::write(&bin_path, &blob).expect("write location_airports.bin");
-    println!(
-        "cargo:warning=Generated packed lookup airport DB with {} airports ({} bytes)",
-        rows.len(),
-        blob.len()
-    );
 }
 
 fn generate_plz_db(out_dir: &Path, manifest_dir: &Path) {
     let path = manifest_dir.join("assets/location/plz.csv");
     println!("cargo:rerun-if-changed={}", path.display());
 
-    let mut rows = Vec::new();
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(false)
-        .from_path(&path)
-        .expect("open location plz.csv");
-    for result in rdr.records() {
-        let Ok(rec) = result else { continue };
-        if rec.len() < 3 {
-            continue;
-        }
-        let plz = rec[0].trim();
-        if plz.len() != 5 || !plz.chars().all(|c| c.is_ascii_digit()) {
-            continue;
-        }
-        let Ok(lat) = rec[1].trim().parse::<f32>() else {
-            continue;
-        };
-        let Ok(lon) = rec[2].trim().parse::<f32>() else {
-            continue;
-        };
-        let mut plz_bytes = [0u8; 5];
-        plz_bytes.copy_from_slice(plz.as_bytes());
-        rows.push((plz_bytes, lat, lon));
-    }
+    let parsed = bake::read_plz(&path).unwrap_or_else(|error| panic!("{error}"));
+    report_counts(&path, parsed.counts);
+    let rows = parsed.rows;
 
     let count = u32::try_from(rows.len()).expect("plz count fits u32");
     let mut blob = Vec::with_capacity(8 + rows.len() * PLZ_ROW_SIZE);
     blob.extend_from_slice(b"PLZ1");
     blob.extend_from_slice(&count.to_le_bytes());
-    for (plz, lat, lon) in &rows {
-        blob.extend_from_slice(plz);
-        blob.extend_from_slice(&[0u8; 3]);
-        blob.extend_from_slice(&lat.to_le_bytes());
-        blob.extend_from_slice(&lon.to_le_bytes());
+    for row in &rows {
+        blob.extend_from_slice(&row.plz);
+        blob.extend_from_slice(&[0; 3]);
+        blob.extend_from_slice(&row.lat.to_le_bytes());
+        blob.extend_from_slice(&row.lon.to_le_bytes());
     }
 
     let bin_path = out_dir.join("plz.bin");
@@ -559,9 +422,4 @@ fn generate_plz_db(out_dir: &Path, manifest_dir: &Path) {
         reason = "build-script output under OUT_DIR, not runtime persistence"
     )]
     fs::write(&bin_path, &blob).expect("write plz.bin");
-    println!(
-        "cargo:warning=Generated packed PLZ DB with {} entries ({} bytes)",
-        rows.len(),
-        blob.len()
-    );
 }
