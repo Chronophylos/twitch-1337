@@ -71,9 +71,10 @@ pub type AuthenticatedTwitchClient<
 
 pub use ai::chat_history::{
     ChatHistory, ChatHistoryBuffer, ChatHistoryEntry, ChatHistoryPage, ChatHistoryQuery,
-    ChatHistorySource, DEFAULT_HISTORY_LENGTH, MAX_HISTORY_LENGTH, MAX_TOOL_RESULT_MESSAGES,
+    ChatHistorySource, MAX_TOOL_RESULT_MESSAGES,
 };
 pub use config::{load_configuration, validate_config};
+pub use settings::ai::{DEFAULT_HISTORY_LENGTH, MAX_HISTORY_LENGTH};
 pub use twitch::{
     handlers::tracker_1337::{PersonalBest, PersonalWorst, load_hall_of_shame, load_leaderboard},
     setup::{setup_and_verify_twitch_client, setup_twitch_client},
@@ -159,11 +160,11 @@ pub struct Services {
     pub memory_store: crate::ai::memory::store::MemoryStore,
     /// Pre-built v2 memory bundle (store + transcript + knobs). `None`
     /// when AI is disabled.
-    pub ai_memory: Option<crate::ai::command::AiMemoryV2>,
+    pub ai_memory: Option<crate::ai::memory::AiMemoryV2>,
     /// Shared chat-history buffers built once at composition via
-    /// [`crate::ai::command::ChatContext::build`]. `None` when AI or chat
+    /// [`crate::ai::chat_context::ChatContext::build`]. `None` when AI or chat
     /// history is disabled.
-    pub chat_ctx: Option<crate::ai::command::ChatContext>,
+    pub chat_ctx: Option<crate::ai::chat_context::ChatContext>,
     /// 7TV emote grounding provider, built once at composition. `None`
     /// when AI, `ai.emotes`, or the tracker is unavailable.
     pub emote_provider: Option<Arc<crate::twitch::seventv::SevenTvEmoteProvider>>,

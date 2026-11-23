@@ -21,8 +21,9 @@ use llm::{
     ToolExecutor, ToolResultMessage, TraceIds, execute_tool, run_agent,
 };
 
-use crate::ai::command::{AiCommandDeps, AiMemoryV2, AiWeb, ChatContext};
+use crate::ai::chat_context::ChatContext;
 use crate::ai::content;
+use crate::ai::memory::AiMemoryV2;
 use crate::ai::memory::inject;
 use crate::ai::memory::tools::{
     ChatTurnExecutor, ChatTurnExecutorOpts, chat_turn_tools, grok_chat_turn_tools,
@@ -152,24 +153,73 @@ pub enum TurnOutcome {
     Silent,
 }
 
+/// Optional web tool-call dependencies for main `!ai` responses.
+#[derive(Clone)]
+pub struct AiWeb {
+    pub executor: Arc<content::ContentToolExecutor>,
+    pub settings: SettingsHandle,
+}
+
+impl AiWeb {
+    /// Live read of `ai.web.max_rounds`. Falls back to compiled default
+    /// (3) if the web card was disabled between construction and use.
+    pub fn max_rounds(&self) -> usize {
+        self.settings
+            .load()
+            .ai
+            .web
+            .as_ref()
+            .map(|w| w.max_rounds)
+            .unwrap_or(3)
+    }
+}
+
+/// Everything a Turn needs, handed over once at composition. The Twitch
+/// adapter (`AiCommand`) keeps only its cooldown and talks to the Turn
+/// through [`TurnRunner`]'s methods.
+pub struct TurnDeps {
+    pub registry: Arc<crate::llm_factory::LlmRegistry>,
+    pub settings: SettingsHandle,
+    pub chat_ctx: Option<ChatContext>,
+    pub memory: AiMemoryV2,
+    pub web: Option<AiWeb>,
+    pub emotes: Option<Arc<SevenTvEmoteProvider>>,
+    pub bot_username: String,
+    pub doener: Arc<crate::doener::DoeneratlasClient>,
+    pub repology: Arc<crate::repology::RepologyClient>,
+    pub pronouns: Arc<crate::pronouns::PronounsClient>,
+    pub model_catalog: Arc<ModelCatalog>,
+    pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
+    pub echo: Arc<crate::twitch::echo::EchoGuard>,
+    pub dhl: Option<Arc<crate::dhl::DhlClient>>,
+    pub rdap: Arc<crate::rdap::RdapClient>,
+    pub ipinfo: Option<Arc<crate::ipinfo::IpinfoClient>>,
+    pub command_catalog: crate::ai::commands_tool::CatalogCell,
+    /// Viewer-Facing Tool availability shared with the public commands page.
+    pub aurora_tools: crate::ai::viewer_tools::AuroraToolCatalog,
+    pub emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
+    pub recap: Option<Arc<RecapHandle>>,
+    /// Interpreter permits shared with `!bash` (`Services::bash_permits`),
+    /// taken by Aurora's `run_bash` tool.
+    pub bash_permits: Arc<tokio::sync::Semaphore>,
+}
+
 /// Owns every dependency the turn body needs, which is all of
-/// [`AiCommandDeps`] — the adapter keeps only the cooldown.
+/// [`TurnDeps`] — the adapter keeps only the cooldown.
 pub struct TurnRunner {
     registry: Arc<crate::llm_factory::LlmRegistry>,
     settings: SettingsHandle,
-    // ponytail: crate-visible because `AiCommand` reads these five for the
-    // speak/record tail. Give them accessors if a third caller shows up.
-    pub(crate) chat_ctx: Option<ChatContext>,
-    pub(crate) memory: AiMemoryV2,
+    chat_ctx: Option<ChatContext>,
+    memory: AiMemoryV2,
     web: Option<AiWeb>,
     emotes: Option<Arc<SevenTvEmoteProvider>>,
-    pub(crate) bot_username: String,
+    bot_username: String,
     doener: Arc<crate::doener::DoeneratlasClient>,
     repology: Arc<crate::repology::RepologyClient>,
     pronouns: Arc<crate::pronouns::PronounsClient>,
     model_catalog: Arc<ModelCatalog>,
-    pub(crate) mouths: Arc<crate::twitch::mouth::MouthRouter>,
-    pub(crate) echo: Arc<crate::twitch::echo::EchoGuard>,
+    mouths: Arc<crate::twitch::mouth::MouthRouter>,
+    echo: Arc<crate::twitch::echo::EchoGuard>,
     dhl: Option<Arc<crate::dhl::DhlClient>>,
     rdap: Arc<crate::rdap::RdapClient>,
     ipinfo: Option<Arc<crate::ipinfo::IpinfoClient>>,
@@ -187,7 +237,7 @@ pub struct TurnRunner {
 }
 
 impl TurnRunner {
-    pub fn new(deps: AiCommandDeps) -> Self {
+    pub fn new(deps: TurnDeps) -> Self {
         let tool_catalog = deps.aurora_tools.clone();
         tool_catalog.initialize(AuroraToolAvailability {
             dhl: deps.dhl.is_some(),
@@ -218,6 +268,61 @@ impl TurnRunner {
             recap: deps.recap,
             bash_permits: deps.bash_permits,
             prompt_nonce: inject::fresh_nonce(),
+        }
+    }
+
+    /// Login the utility bot speaks under when no Mouth is configured.
+    pub fn bot_username(&self) -> &str {
+        &self.bot_username
+    }
+
+    /// Send a reply through the agent's Mouth. `Ok(Some(login))` when a
+    /// Mouth spoke it (its Helix id is registered with `EchoGuard` so the
+    /// message is not read back as input), `Ok(None)` when the agent has no
+    /// Mouth and the caller must send it over IRC itself.
+    pub async fn speak(
+        &self,
+        agent: Agent,
+        req: crate::twitch::mouth::SpeakRequest<'_>,
+    ) -> Result<Option<String>, crate::twitch::mouth::SpeakError> {
+        match self.mouths.speak(agent, req).await? {
+            crate::twitch::mouth::SpeakOutcome::Spoken(spoken) => {
+                if let Some(id) = spoken.message_id.as_deref() {
+                    self.echo.register(id).await;
+                }
+                Ok(Some(spoken.login))
+            }
+            crate::twitch::mouth::SpeakOutcome::NoMouth => Ok(None),
+        }
+    }
+
+    /// Record a reply chat actually saw: chat history (when enabled) and the
+    /// Transcript. A Transcript failure is logged here and not returned; the
+    /// reply is already out.
+    pub async fn record_reply(
+        &self,
+        agent: Agent,
+        login: &str,
+        display_name: &str,
+        line: &str,
+        ts: jiff::Timestamp,
+    ) {
+        if let Some(chat) = &self.chat_ctx {
+            chat.primary_history.lock().await.push_bot_with_identity_at(
+                login.to_owned(),
+                Some(display_name),
+                agent,
+                line.to_owned(),
+                ts,
+            );
+        }
+        if let Err(e) = self
+            .memory
+            .transcript
+            .append_line(ts, login, None, line)
+            .await
+        {
+            crate::log_handled!(error, e, "transcript bot-reply append failed");
         }
     }
 
@@ -930,7 +1035,7 @@ mod turn_tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::ai::command::AiMemoryV2;
+    use crate::ai::memory::AiMemoryV2;
     use crate::ai::memory::store::{MemoryStore, UserIdentity};
     use crate::ai::memory::transcript::TranscriptWriter;
     use crate::ai::memory::types::FileKind;
@@ -1127,7 +1232,7 @@ mod turn_tests {
             settings: settings.clone(),
         });
 
-        let runner = TurnRunner::new(AiCommandDeps {
+        let runner = TurnRunner::new(TurnDeps {
             registry,
             settings: settings.clone(),
             chat_ctx: None,

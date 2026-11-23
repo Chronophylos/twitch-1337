@@ -115,6 +115,29 @@ impl Default for F1Alerts {
     }
 }
 
+/// Rank a GOES class string as `(letter_rank, magnitude)`:
+/// `A < B < C < M < X`, ties broken by the numeric part (`M6.1 > M6.0`).
+/// A bare letter (`"M"`) counts as magnitude 0. Returns `None` for
+/// anything else, which is also how the settings validator rejects a
+/// bad `alerts.solar.min_class`.
+pub fn class_rank(class: &str) -> Option<(u8, f64)> {
+    let class = class.trim();
+    let letter = class.chars().next()?.to_ascii_uppercase();
+    let rank = match letter {
+        'A' => 0,
+        'B' => 1,
+        'C' => 2,
+        'M' => 3,
+        'X' => 4,
+        _ => return None,
+    };
+    let mag = match class[1..].trim() {
+        "" => 0.0,
+        rest => rest.parse::<f64>().ok()?,
+    };
+    Some((rank, mag))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -126,6 +149,22 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn class_rank_orders_and_rejects() {
+        assert!(class_rank("B9.6") < class_rank("C1.5"));
+        assert!(class_rank("C1.5") < class_rank("M2.1"));
+        assert!(class_rank("M2.1") < class_rank("X1.8"));
+        // Numeric part breaks ties inside one letter class.
+        assert!(class_rank("M6.0") < class_rank("M6.1"));
+        assert!(class_rank("M5.9") < class_rank("M6"));
+        assert_eq!(class_rank("M"), Some((3, 0.0)));
+        assert_eq!(class_rank("m2.1"), Some((3, 2.1)));
+        assert_eq!(class_rank("M6"), Some((3, 6.0)));
+        assert_eq!(class_rank("Q1.0"), None);
+        assert_eq!(class_rank(""), None);
+        assert_eq!(class_rank("Mbanana"), None);
+    }
 
     fn actor() -> Actor {
         Actor {

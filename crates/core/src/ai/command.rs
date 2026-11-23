@@ -1,5 +1,4 @@
 use std::borrow::Cow;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -8,14 +7,8 @@ use jiff::Timestamp;
 use tracing::debug;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
-use crate::ai::chat_history::{ChatHistory, ChatHistoryBuffer};
-use crate::ai::content;
-use crate::ai::memory::store::MemoryStore;
-use crate::ai::memory::transcript::TranscriptWriter;
 use crate::ai::memory::types::Role;
-use crate::ai::model_catalog::ModelCatalog;
-use crate::ai::recap::RecapHandle;
-use crate::ai::turn::{TurnInput, TurnOutcome, TurnReplyParent, TurnRunner, TurnSpeaker};
+use crate::ai::turn::{TurnDeps, TurnInput, TurnOutcome, TurnReplyParent, TurnRunner, TurnSpeaker};
 use crate::commands::{
     Command, CommandContext, CommandInfo, CommandKind, ExecutionClass, Permission,
     reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
@@ -23,69 +16,6 @@ use crate::commands::{
 use crate::cooldown::PerUserCooldown;
 use crate::settings::{Settings, SettingsHandle};
 use crate::twitch::mouth::{Agent, SpeakError};
-use crate::twitch::seventv::SevenTvEmoteProvider;
-
-/// Chat history buffer and channel login for `!ai`.
-#[derive(Clone)]
-pub struct ChatContext {
-    pub primary_history: ChatHistory,
-    pub primary_login: String,
-}
-
-impl ChatContext {
-    /// Build the shared chat-history buffer once at composition (main /
-    /// `TestBotBuilder`). Every consumer — `!ai`, `!news`, `!haiku`, the
-    /// dispatcher's history recording, and the recap batcher — clones the
-    /// same buffer out of `Services` instead of relaying it through handler
-    /// configs.
-    ///
-    /// Returns `None` when AI is disabled or chat history is off. Rebinds
-    /// `recap` to the freshly built buffer so a restart resumes the recap
-    /// without a gap.
-    pub async fn build(
-        settings: &SettingsHandle,
-        ai_enabled: bool,
-        channel: &str,
-        recap: Option<&RecapHandle>,
-    ) -> Option<ChatContext> {
-        let snapshot = settings.load();
-        if !(ai_enabled && snapshot.ai.history.length > 0) {
-            return None;
-        }
-        let history_length = snapshot.ai.history.length as usize;
-        let prefill_cfg = snapshot
-            .ai
-            .prefill
-            .as_ref()
-            .map(super::prefill::HistoryPrefillConfig::from);
-        let buffer = if let Some(cfg) = &prefill_cfg {
-            tracing::info!("ai.prefill configured; fetching history before startup continues");
-            let prefilled =
-                super::prefill::prefill_chat_history(channel, history_length, cfg).await;
-            ChatHistoryBuffer::from_prefill(settings.clone(), prefilled)
-        } else {
-            ChatHistoryBuffer::new(settings.clone())
-        };
-        let primary_history: ChatHistory = Arc::new(tokio::sync::Mutex::new(buffer));
-
-        if let Some(handle) = recap {
-            let entries = primary_history.lock().await.snapshot();
-            handle.rebind_primary(&entries).await;
-        }
-
-        Some(ChatContext {
-            primary_history,
-            primary_login: channel.to_owned(),
-        })
-    }
-}
-
-/// Memory v2 bundle: store handle and transcript writer.
-#[derive(Clone)]
-pub struct AiMemoryV2 {
-    pub store: MemoryStore,
-    pub transcript: TranscriptWriter,
-}
 
 /// Classify the speaker role from Twitch IRC badge list.
 pub fn classify_role(badges: &[twitch_irc::message::Badge]) -> Role {
@@ -96,27 +26,6 @@ pub fn classify_role(badges: &[twitch_irc::message::Badge]) -> Role {
         Role::Moderator
     } else {
         Role::Regular
-    }
-}
-
-/// Optional web tool-call dependencies for main `!ai` responses.
-#[derive(Clone)]
-pub struct AiWeb {
-    pub executor: Arc<content::ContentToolExecutor>,
-    pub settings: SettingsHandle,
-}
-
-impl AiWeb {
-    /// Live read of `ai.web.max_rounds`. Falls back to compiled default
-    /// (3) if the web card was disabled between construction and use.
-    pub fn max_rounds(&self) -> usize {
-        self.settings
-            .load()
-            .ai
-            .web
-            .as_ref()
-            .map(|w| w.max_rounds)
-            .unwrap_or(3)
     }
 }
 
@@ -131,39 +40,12 @@ pub struct AiCommand {
     turn: TurnRunner,
 }
 
-pub struct AiCommandDeps {
-    pub registry: Arc<crate::llm_factory::LlmRegistry>,
-    pub settings: SettingsHandle,
-    pub chat_ctx: Option<ChatContext>,
-    pub memory: AiMemoryV2,
-    pub web: Option<AiWeb>,
-    pub emotes: Option<Arc<SevenTvEmoteProvider>>,
-    pub bot_username: String,
-    pub doener: Arc<crate::doener::DoeneratlasClient>,
-    pub repology: Arc<crate::repology::RepologyClient>,
-    pub pronouns: Arc<crate::pronouns::PronounsClient>,
-    pub model_catalog: Arc<ModelCatalog>,
-    pub mouths: Arc<crate::twitch::mouth::MouthRouter>,
-    pub echo: Arc<crate::twitch::echo::EchoGuard>,
-    pub dhl: Option<Arc<crate::dhl::DhlClient>>,
-    pub rdap: Arc<crate::rdap::RdapClient>,
-    pub ipinfo: Option<Arc<crate::ipinfo::IpinfoClient>>,
-    pub command_catalog: crate::ai::commands_tool::CatalogCell,
-    /// Viewer-Facing Tool availability shared with the public commands page.
-    pub aurora_tools: crate::ai::viewer_tools::AuroraToolCatalog,
-    pub emote_tracker: Option<Arc<crate::emote_tracker::EmoteTrackerHandle>>,
-    pub recap: Option<Arc<RecapHandle>>,
-    /// Interpreter permits shared with `!bash` (`Services::bash_permits`),
-    /// taken by Aurora's `run_bash` tool.
-    pub bash_permits: Arc<tokio::sync::Semaphore>,
-}
-
 fn ai_cooldown_duration(s: &Settings) -> Duration {
     Duration::from_secs(s.cooldowns.ai)
 }
 
 impl AiCommand {
-    pub fn new(deps: AiCommandDeps) -> Self {
+    pub fn new(deps: TurnDeps) -> Self {
         let cooldown = PerUserCooldown::live(deps.settings.clone(), ai_cooldown_duration);
         Self {
             cooldown,
@@ -338,14 +220,9 @@ where
             text: line.clone(),
             reply_parent_message_id: Some(ctx.privmsg.message_id.clone()),
         };
-        let recorded_login = match self.turn.mouths.speak(agent, req).await {
-            Ok(crate::twitch::mouth::SpeakOutcome::Spoken(spoken)) => {
-                if let Some(id) = spoken.message_id.as_deref() {
-                    self.turn.echo.register(id).await;
-                }
-                spoken.login
-            }
-            Ok(crate::twitch::mouth::SpeakOutcome::NoMouth) => {
+        let recorded_login = match self.turn.speak(agent, req).await {
+            Ok(Some(login)) => login,
+            Ok(None) => {
                 ctx.cancellation.check()?;
                 // Same rule as the Mouth Err arm: chat saw nothing, so no
                 // history or transcript write (the sender already logged it).
@@ -356,7 +233,7 @@ where
                 {
                     return Ok(());
                 }
-                self.turn.bot_username.clone()
+                self.turn.bot_username().to_owned()
             }
             Err(e) => {
                 crate::log_handled!(error, e, agent = ?agent, "mouth speak failed");
@@ -374,25 +251,9 @@ where
             }
         };
         ctx.cancellation.check()?;
-        if let Some(chat) = &self.turn.chat_ctx {
-            chat.primary_history.lock().await.push_bot_with_identity_at(
-                recorded_login.clone(),
-                Some(&display_name),
-                agent,
-                line.clone(),
-                ts,
-            );
-        }
-        ctx.cancellation.check()?;
-        if let Err(e) = self
-            .turn
-            .memory
-            .transcript
-            .append_line(ts, &recorded_login, None, &line)
-            .await
-        {
-            crate::log_handled!(error, e, "transcript bot-reply append failed");
-        }
+        self.turn
+            .record_reply(agent, &recorded_login, &display_name, &line, ts)
+            .await;
 
         Ok(())
     }
@@ -419,27 +280,6 @@ fn user_facing_mouth_message(err: &SpeakError) -> Option<(ReplyEmoteCategory, &'
             "KI-Account kann gerade nicht reden",
         )),
     }
-}
-
-/// Construct the AI memory v2 bundle. `None` when `[ai]` is absent from
-/// `config.toml`.
-///
-/// `store` is built once in main.rs (or by tests) and shared with the web
-/// dashboard via [`crate::Services::memory_store`]. Sharing the same `Arc`-
-/// backed store keeps the per-path mutex map coherent across the bot's
-/// IRC handlers, the dreamer ritual, and the dashboard editor — two
-/// distinct stores would silently race past each other's locks and break
-/// byte-cap enforcement.
-pub async fn build_ai_memory_v2(
-    ai_present: bool,
-    store: MemoryStore,
-) -> Result<Option<AiMemoryV2>> {
-    if !ai_present {
-        return Ok(None);
-    }
-
-    let transcript = TranscriptWriter::open(store.memories_dir()).await?;
-    Ok(Some(AiMemoryV2 { store, transcript }))
 }
 
 #[cfg(test)]

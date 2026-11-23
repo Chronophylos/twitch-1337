@@ -11,7 +11,7 @@ use tokio::sync::oneshot;
 use tracing::{Instrument as _, info, info_span};
 use twitch_1337_core::{
     AuthenticatedLoginCredentials, PersonalBest, PersonalWorst, Services,
-    ai::command::ChatContext,
+    ai::chat_context::ChatContext,
     ai::memory::store::MemoryStore,
     aviation, doener, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
     llm_factory, load_configuration, load_hall_of_shame, load_leaderboard,
@@ -345,7 +345,7 @@ async fn prepare(
     // Build the v2 memory bundle (store + transcript) once at composition;
     // `run_bot` reads it from `Services`. `None` when AI is off.
     let ai_memory =
-        twitch_1337::ai::command::build_ai_memory_v2(config.ai.is_some(), memory_store.clone())
+        twitch_1337::ai::memory::build_ai_memory_v2(config.ai.is_some(), memory_store.clone())
             .await
             .wrap_err("build ai memory v2")?;
 

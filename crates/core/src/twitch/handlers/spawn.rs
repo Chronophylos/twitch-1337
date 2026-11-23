@@ -181,7 +181,7 @@ where
                 .user_agent(crate::APP_USER_AGENT)
                 .build()
                 .wrap_err("build media HTTP client for command composition")?;
-            search.map(|client| ai::command::AiWeb {
+            search.map(|client| ai::turn::AiWeb {
                 executor: Arc::new(ai::content::ContentToolExecutor::new(
                     client,
                     media_http,
@@ -219,31 +219,29 @@ where
                 .wrap_err("build RDAP HTTP client for command composition")?,
         );
 
-        command_list.push(Arc::new(ai::command::AiCommand::new(
-            ai::command::AiCommandDeps {
-                registry: services.llm.clone(),
-                settings: services.settings.clone(),
-                chat_ctx: services.chat_ctx.clone(),
-                memory,
-                web,
-                emotes: services.emote_provider.clone(),
-                bot_username: services.bot_username.clone(),
-                doener: services.doener.clone(),
-                repology,
-                pronouns,
-                dhl: services.dhl.clone(),
-                rdap,
-                ipinfo: services.ipinfo.clone(),
-                command_catalog: services.command_catalog.clone(),
-                aurora_tools: services.aurora_tools.clone(),
-                emote_tracker: services.emote_tracker.clone(),
-                model_catalog,
-                mouths: services.mouths.clone(),
-                echo: services.echo.clone(),
-                recap: services.recap.clone(),
-                bash_permits: services.bash_permits.clone(),
-            },
-        )));
+        command_list.push(Arc::new(ai::command::AiCommand::new(ai::turn::TurnDeps {
+            registry: services.llm.clone(),
+            settings: services.settings.clone(),
+            chat_ctx: services.chat_ctx.clone(),
+            memory,
+            web,
+            emotes: services.emote_provider.clone(),
+            bot_username: services.bot_username.clone(),
+            doener: services.doener.clone(),
+            repology,
+            pronouns,
+            dhl: services.dhl.clone(),
+            rdap,
+            ipinfo: services.ipinfo.clone(),
+            command_catalog: services.command_catalog.clone(),
+            aurora_tools: services.aurora_tools.clone(),
+            emote_tracker: services.emote_tracker.clone(),
+            model_catalog,
+            mouths: services.mouths.clone(),
+            echo: services.echo.clone(),
+            recap: services.recap.clone(),
+            bash_permits: services.bash_permits.clone(),
+        })));
         command_list.push(Arc::new(commands::news::NewsCommand::new(
             services.llm.clone(),
             services.settings.clone(),

@@ -15,3 +15,31 @@ pub use tools::{
 };
 pub use transcript::TranscriptWriter;
 pub use types::{Caps, FileKind, Frontmatter, MemoryFile, Role};
+
+/// Memory v2 bundle: store handle and transcript writer.
+#[derive(Clone)]
+pub struct AiMemoryV2 {
+    pub store: MemoryStore,
+    pub transcript: TranscriptWriter,
+}
+
+/// Construct the AI memory v2 bundle. `None` when `[ai]` is absent from
+/// `config.toml`.
+///
+/// `store` is built once in main.rs (or by tests) and shared with the web
+/// dashboard via [`crate::Services::memory_store`]. Sharing the same `Arc`-
+/// backed store keeps the per-path mutex map coherent across the bot's
+/// IRC handlers, the dreamer ritual, and the dashboard editor — two
+/// distinct stores would silently race past each other's locks and break
+/// byte-cap enforcement.
+pub async fn build_ai_memory_v2(
+    ai_present: bool,
+    store: MemoryStore,
+) -> eyre::Result<Option<AiMemoryV2>> {
+    if !ai_present {
+        return Ok(None);
+    }
+
+    let transcript = TranscriptWriter::open(store.memories_dir()).await?;
+    Ok(Some(AiMemoryV2 { store, transcript }))
+}

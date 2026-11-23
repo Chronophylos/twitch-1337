@@ -426,7 +426,7 @@ impl SearchClient {
             return Err(FetchError::UnsupportedContentType(header_ct));
         };
 
-        let bucket_cap = caps.cap_for(bucket).as_u64();
+        let bucket_cap = bucket.cap(caps).as_u64();
         if buf.len() as u64 > bucket_cap {
             return Err(FetchError::TooLarge);
         }

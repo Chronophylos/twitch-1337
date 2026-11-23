@@ -7,8 +7,6 @@ use serde::Serialize;
 use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
 
-pub const MAX_HISTORY_LENGTH: u64 = 5_000;
-pub const DEFAULT_HISTORY_LENGTH: u64 = 200;
 pub const MAX_TOOL_RESULT_MESSAGES: usize = 200;
 const DEFAULT_TOOL_RESULT_MESSAGES: usize = 50;
 
@@ -293,6 +291,78 @@ impl ChatHistoryBuffer {
             next_before_seq,
         }
     }
+}
+
+// Recap-eligibility windows over a history snapshot. Shared by the Recap
+// batcher and the Recent Chat renderer, so they live with the entry type
+// rather than in either consumer.
+pub fn is_own(entry: &ChatHistoryEntry, agent: Agent, self_logins: &[String]) -> bool {
+    match entry.agent {
+        Some(entry_agent) => entry_agent == agent,
+        None => self_logins
+            .iter()
+            .any(|login| login.eq_ignore_ascii_case(&entry.username)),
+    }
+}
+
+/// Newest `n` lines that are not this agent's own, oldest-first.
+pub fn n_not_own<'a>(
+    entries: &'a [ChatHistoryEntry],
+    n: usize,
+    agent: Agent,
+    self_logins: &[String],
+) -> Vec<&'a ChatHistoryEntry> {
+    let mut picked: Vec<&ChatHistoryEntry> = Vec::with_capacity(n);
+    for entry in entries.iter().rev() {
+        if is_own(entry, agent, self_logins) {
+            continue;
+        }
+        picked.push(entry);
+        if picked.len() == n {
+            break;
+        }
+    }
+    picked.reverse();
+    picked
+}
+
+/// Oldest seq among Aurora's N-not-own window and Grok's, whichever is older
+/// (smaller seq). `None` if the buffer is empty.
+pub fn eligibility_cut_seq(
+    entries: &[ChatHistoryEntry],
+    n: usize,
+    self_logins: &[String],
+) -> Option<u64> {
+    if entries.is_empty() {
+        return None;
+    }
+    let aurora_oldest = n_not_own(entries, n, Agent::Aurora, self_logins)
+        .first()
+        .map(|e| e.seq);
+    let grok_oldest = n_not_own(entries, n, Agent::Grok, self_logins)
+        .first()
+        .map(|e| e.seq);
+    match (aurora_oldest, grok_oldest) {
+        (Some(a), Some(g)) => Some(a.min(g)),
+        (Some(a), None) => Some(a),
+        (None, Some(g)) => Some(g),
+        (None, None) => entries.last().map(|e| e.seq + 1),
+    }
+}
+
+pub fn eligible<'a>(
+    entries: &'a [ChatHistoryEntry],
+    n: usize,
+    through_seq: u64,
+    self_logins: &[String],
+) -> Vec<&'a ChatHistoryEntry> {
+    let Some(cut) = eligibility_cut_seq(entries, n, self_logins) else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter(|e| e.seq < cut && e.seq > through_seq)
+        .collect()
 }
 
 #[cfg(test)]
