@@ -353,13 +353,19 @@ pub(crate) async fn run_ping_actor_until(
                 let result = manager
                     .create_ping(name, template, created_by, cooldown)
                     .await;
+                let ok = result.is_ok();
                 reply.send(result).ok();
-                publish_names(&manager, &names_tx);
+                if ok {
+                    publish_names(&manager, &names_tx);
+                }
             }
             PingCommand::DeletePing { name, reply } => {
                 let result = manager.delete_ping(&name).await;
+                let ok = result.is_ok();
                 reply.send(result).ok();
-                publish_names(&manager, &names_tx);
+                if ok {
+                    publish_names(&manager, &names_tx);
+                }
             }
             PingCommand::EditTemplate {
                 name,

@@ -95,6 +95,7 @@ pub async fn main() -> Result<()> {
     install_crypto_provider();
     let config = load_configuration().await?;
     ensure_data_dir().await?;
+    twitch_1337_core::util::persist::sweep_stale_tmp(&get_data_dir());
     // Dashboard-managed runtime settings. Opened before IRC connect so the
     // settings-store value `admin_channel` can be passed to the IRC setup,
     // which needs it to join channels at startup.
