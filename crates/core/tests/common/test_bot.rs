@@ -488,7 +488,6 @@ impl TestBotBuilder {
 
             let ai_memory = twitch_1337::ai::command::build_ai_memory_v2(
                 self.config.ai.is_some(),
-                &settings_handle.load(),
                 memory_store.clone(),
             )
             .await

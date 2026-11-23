@@ -1187,6 +1187,27 @@ fn tag_with_name<'a>(html: &'a str, name: &str) -> &'a str {
     &html[start..=end]
 }
 
+/// The settings row containing the control named `name`.
+fn settings_row_with_name<'a>(form: &'a str, name: &str) -> &'a str {
+    let marker = format!("name=\"{name}\"");
+    let at = form
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing element with {marker}"));
+    let start = form[..at]
+        .rfind("<div class=\"settings-row\"")
+        .expect("settings row open");
+    let next_row = form[at..]
+        .find("<div class=\"settings-row\"")
+        .map(|rel| at + rel);
+    let section_end = form[at..].find("</section>").map(|rel| at + rel);
+    let end = next_row
+        .into_iter()
+        .chain(section_end)
+        .min()
+        .unwrap_or(form.len());
+    &form[start..end]
+}
+
 /// The markup between `<form id="settings-form"` and its `</form>`.
 fn settings_form(html: &str) -> &str {
     let start = html
@@ -1277,6 +1298,33 @@ async fn settings_form_names_match_the_knob_table() {
         attr(tag_with_name(form, "ai.web.max_rounds"), "max"),
         Some("6")
     );
+}
+
+#[tokio::test]
+async fn settings_rows_render_restart_badges_from_knob_table() {
+    let (state, _dirs) = owner_state().await;
+    let res = Owner::login(&state).get(&state, "/settings").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = body_string(res).await;
+    let form = settings_form(&html);
+
+    for path in [
+        "ai.web.base_url",
+        "ai.web.timeout",
+        "ai.web.cache_ttl_secs",
+        "ai.web.cache_capacity",
+    ] {
+        let k = twitch_1337_core::settings::knobs()
+            .iter()
+            .find(|k| k.path == path)
+            .expect("web connection knob");
+        assert!(k.badge(), "{path} must be restart-required");
+        let row = settings_row_with_name(form, path);
+        assert!(
+            row.contains("<span class=\"restart-required\">restart required</span>"),
+            "{path} must render its restart marker",
+        );
+    }
 }
 
 #[tokio::test]

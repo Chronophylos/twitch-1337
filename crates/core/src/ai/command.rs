@@ -80,16 +80,11 @@ impl ChatContext {
     }
 }
 
-/// Memory v2 bundle: store handle, transcript writer, and per-turn knobs.
+/// Memory v2 bundle: store handle and transcript writer.
 #[derive(Clone)]
 pub struct AiMemoryV2 {
     pub store: MemoryStore,
     pub transcript: TranscriptWriter,
-    pub inject_byte_budget: usize,
-    pub max_turn_rounds: usize,
-    pub max_writes_per_turn: usize,
-    /// Artificial floor on turn wall time before the reply is spoken.
-    pub min_response_delay: Duration,
 }
 
 /// Classify the speaker role from Twitch IRC badge list.
@@ -314,8 +309,12 @@ where
 
         let outcome = Box::pin(self.turn.run_turn(input)).await?;
         ctx.cancellation.check()?;
-        let (line, display_name) = match outcome {
-            TurnOutcome::Reply { text, display_name } => (text, display_name),
+        let (line, display_name, min_response_delay) = match outcome {
+            TurnOutcome::Reply {
+                text,
+                display_name,
+                min_response_delay,
+            } => (text, display_name, min_response_delay),
             TurnOutcome::Notice { text, category } => {
                 ctx.cancellation.check()?;
                 ctx.sender
@@ -327,12 +326,7 @@ where
         };
 
         // Pad the tail so a sub-second turn still reads as thinking.
-        if let Some(pad) = self
-            .turn
-            .memory
-            .min_response_delay
-            .checked_sub(turn_started.elapsed())
-        {
+        if let Some(pad) = min_response_delay.checked_sub(turn_started.elapsed()) {
             debug!(pad_ms = pad.as_millis(), "padding AI response delay");
             tokio::time::sleep(pad).await;
         }
@@ -427,8 +421,8 @@ fn user_facing_mouth_message(err: &SpeakError) -> Option<(ReplyEmoteCategory, &'
     }
 }
 
-/// Construct the AI memory v2 bundle from settings. `None` when `[ai]` is
-/// absent from `config.toml`.
+/// Construct the AI memory v2 bundle. `None` when `[ai]` is absent from
+/// `config.toml`.
 ///
 /// `store` is built once in main.rs (or by tests) and shared with the web
 /// dashboard via [`crate::Services::memory_store`]. Sharing the same `Arc`-
@@ -438,7 +432,6 @@ fn user_facing_mouth_message(err: &SpeakError) -> Option<(ReplyEmoteCategory, &'
 /// byte-cap enforcement.
 pub async fn build_ai_memory_v2(
     ai_present: bool,
-    settings: &crate::settings::Settings,
     store: MemoryStore,
 ) -> Result<Option<AiMemoryV2>> {
     if !ai_present {
@@ -446,14 +439,7 @@ pub async fn build_ai_memory_v2(
     }
 
     let transcript = TranscriptWriter::open(store.memories_dir()).await?;
-    Ok(Some(AiMemoryV2 {
-        store,
-        transcript,
-        inject_byte_budget: settings.ai.memory.inject_byte_budget,
-        max_turn_rounds: settings.ai.aurora.max_turn_rounds,
-        max_writes_per_turn: settings.ai.aurora.max_writes_per_turn,
-        min_response_delay: Duration::from_millis(settings.ai.aurora.min_response_delay_ms),
-    }))
+    Ok(Some(AiMemoryV2 { store, transcript }))
 }
 
 #[cfg(test)]

@@ -301,14 +301,17 @@ impl Eq for AiPrefill {}
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
 #[knobs(presence)]
 pub struct AiWeb {
+    #[knob(restart)]
     pub base_url: String,
+    #[knob(restart)]
     pub timeout: u64,
     #[knob(min = 1, max = 10)]
     pub max_results: usize,
     #[knob(min = 1, max = 6)]
     pub max_rounds: usize,
+    #[knob(restart)]
     pub cache_ttl_secs: u64,
-    #[knob(min = 1)]
+    #[knob(min = 1, restart)]
     pub cache_capacity: usize,
 }
 

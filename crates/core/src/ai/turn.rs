@@ -134,8 +134,13 @@ pub struct TurnInput {
 /// it reaches chat.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TurnOutcome {
-    /// The agent's answer, plus the persona it should be recorded under.
-    Reply { text: String, display_name: String },
+    /// The agent's answer, the persona it should be recorded under, and the
+    /// response-delay floor captured with the rest of this turn's settings.
+    Reply {
+        text: String,
+        display_name: String,
+        min_response_delay: Duration,
+    },
     /// A short notice for the invoking viewer, sent over plain IRC rather
     /// than the agent's mouth. The Twitch adapter picks the emote at send time.
     Notice {
@@ -226,9 +231,13 @@ impl TurnRunner {
         let agent = input.agent;
         let grok_alias = agent == Agent::Grok;
 
-        // Snapshot connection knobs once per turn so dashboard edits take
-        // effect on the next invocation without a bot restart.
+        // Snapshot settings once per turn so dashboard edits take effect on
+        // the next invocation without a bot restart or mid-turn drift.
         let snap = self.settings.load();
+        let inject_byte_budget = snap.ai.memory.inject_byte_budget;
+        let max_turn_rounds = snap.ai.aurora.max_turn_rounds;
+        let max_writes_per_turn = snap.ai.aurora.max_writes_per_turn;
+        let min_response_delay = Duration::from_millis(snap.ai.aurora.min_response_delay_ms);
         // Each agent resolves its own profile at turn time.
         let profile_name = if grok_alias {
             &snap.ai.grok.profile
@@ -327,7 +336,7 @@ impl TurnRunner {
         // go in the user message: any scratch write or chat line would otherwise
         // invalidate the system-message cache every turn.
         let build_opts = inject::BuildOpts {
-            inject_byte_budget: mem.inject_byte_budget,
+            inject_byte_budget,
             // Per-process nonce: memory only changes bytes when its
             // content actually changes, so the prefix caches across turns.
             nonce: self.prompt_nonce.clone(),
@@ -481,11 +490,7 @@ impl TurnRunner {
             speaker_role: role,
             // Grok has no write tools registered; a zero quota backs up the
             // dispatch gate against a hallucinated write_file call.
-            max_writes_per_turn: if grok_alias {
-                0
-            } else {
-                mem.max_writes_per_turn
-            },
+            max_writes_per_turn: if grok_alias { 0 } else { max_writes_per_turn },
             readable_paths,
             inject_nonce: self.prompt_nonce.clone(),
             known_identities,
@@ -565,10 +570,10 @@ impl TurnRunner {
                     // Every LLM round may use its full timeout, plus one round's
                     // worth for all tool execution in the turn.
                     let rounds_with_tools =
-                        u32::try_from(mem.max_turn_rounds.saturating_add(1)).unwrap_or(u32::MAX);
+                        u32::try_from(max_turn_rounds.saturating_add(1)).unwrap_or(u32::MAX);
                     let turn_deadline = turn_timeout.saturating_mul(rounds_with_tools);
                     let opts = AgentOpts {
-                        max_rounds: mem.max_turn_rounds,
+                        max_rounds: max_turn_rounds,
                         per_round_timeout: Some(turn_timeout),
                         max_calls_per_round: Some(MAX_TOOL_CALLS_PER_ROUND),
                         deadline: Some(turn_deadline),
@@ -656,6 +661,7 @@ impl TurnRunner {
                                 TurnOutcome::Reply {
                                     text: line,
                                     display_name: display_name.clone(),
+                                    min_response_delay,
                                 }
                             }
                         }
@@ -922,10 +928,12 @@ mod turn_tests {
 
     use super::*;
     use crate::ai::command::AiMemoryV2;
-    use crate::ai::memory::store::MemoryStore;
+    use crate::ai::memory::store::{MemoryStore, UserIdentity};
     use crate::ai::memory::transcript::TranscriptWriter;
-    use crate::settings::Settings;
+    use crate::ai::memory::types::FileKind;
+    use crate::settings::audit::MemoryAuditLog;
     use crate::settings::provider::AiProvider;
+    use crate::settings::{Actor, Settings, SettingsOverrides, SettingsStore};
     use crate::twitch::echo::MouthIdentities;
     use crate::twitch::mouth::MouthRouter;
 
@@ -946,6 +954,8 @@ mod turn_tests {
         Calls(&'static str, usize),
         /// First round: one `run_bash` call per script. Later rounds: text.
         Scripts(Vec<&'static str>),
+        /// First round: `n` valid scratch writes. Later rounds: text.
+        ScratchWrites(usize),
     }
 
     #[async_trait]
@@ -971,7 +981,9 @@ mod turn_tests {
                     status: *status,
                     body: "nope".into(),
                 }),
-                Answer::Calls(..) | Answer::Scripts(_) if !first_round => {
+                Answer::Calls(..) | Answer::Scripts(_) | Answer::ScratchWrites(_)
+                    if !first_round =>
+                {
                     Ok(ToolChatCompletionResponse::Message("fertig".into()))
                 }
                 Answer::Calls(name, n) => Ok(ToolChatCompletionResponse::ToolCalls {
@@ -998,18 +1010,40 @@ mod turn_tests {
                         .collect(),
                     reasoning_content: None,
                 }),
+                Answer::ScratchWrites(n) => Ok(ToolChatCompletionResponse::ToolCalls {
+                    calls: (0..*n)
+                        .map(|i| ToolCall {
+                            id: format!("call{i}"),
+                            name: "write_scratch".into(),
+                            arguments: serde_json::json!({
+                                "slug": format!("note{i}"),
+                                "body": "note",
+                            }),
+                            arguments_parse_error: None,
+                        })
+                        .collect(),
+                    reasoning_content: None,
+                }),
             }
+        }
+    }
+
+    fn actor() -> Actor {
+        Actor {
+            user_id: "owner-id".into(),
+            user_login: "owner".into(),
         }
     }
 
     struct Fixture {
         runner: TurnRunner,
         llm: Arc<CapturingLlm>,
+        settings_store: Arc<SettingsStore>,
         _dir: TempDir,
     }
 
     async fn fixture(answer: Answer, timeout_secs: u64) -> Fixture {
-        fixture_with_web(answer, timeout_secs, None).await
+        Box::pin(fixture_with_web(answer, timeout_secs, None)).await
     }
 
     /// `web` = (SearXNG URL, `ai.web.max_rounds`) to register web tools.
@@ -1018,7 +1052,13 @@ mod turn_tests {
         timeout_secs: u64,
         web: Option<(String, usize)>,
     ) -> Fixture {
-        fixture_with(answer, timeout_secs, web, "http://127.0.0.1:1").await
+        Box::pin(fixture_with(
+            answer,
+            timeout_secs,
+            web,
+            "http://127.0.0.1:1",
+        ))
+        .await
     }
 
     /// `rdap_base` points `lookup_network` at a wiremock RDAP server.
@@ -1035,6 +1075,7 @@ mod turn_tests {
         // network for the `{model}` substitution; any other provider
         // short-circuits to the raw model id.
         s.ai.profiles[0].provider = AiProvider::OpenAiCompatible;
+        s.ai.profiles[0].base_url = Some("http://127.0.0.1:1".into());
         s.ai.profiles[0].model = "test-model".into();
         s.ai.profiles[0].timeout = timeout_secs;
         if let Some((base_url, max_rounds)) = &web {
@@ -1044,7 +1085,16 @@ mod turn_tests {
                 ..Default::default()
             });
         }
-        let settings: SettingsHandle = SettingsHandle::from_settings(s);
+        let (settings_store, settings) =
+            SettingsStore::open(dir.path(), Arc::new(MemoryAuditLog::new()), "testchan").unwrap();
+        let mut initial = SettingsOverrides::default();
+        initial.ai.profiles = Some(s.ai.profiles.clone());
+        if let Some(web) = &s.ai.web {
+            initial.ai.web.enabled = Some(true);
+            initial.ai.web.base_url = Some(web.base_url.clone());
+            initial.ai.web.max_rounds = Some(web.max_rounds);
+        }
+        settings_store.apply(initial, actor()).await.unwrap();
 
         let store = MemoryStore::open(dir.path(), settings.clone())
             .await
@@ -1078,14 +1128,7 @@ mod turn_tests {
             registry,
             settings: settings.clone(),
             chat_ctx: None,
-            memory: AiMemoryV2 {
-                store,
-                transcript,
-                inject_byte_budget: 8192,
-                max_turn_rounds: 3,
-                max_writes_per_turn: 2,
-                min_response_delay: Duration::ZERO,
-            },
+            memory: AiMemoryV2 { store, transcript },
             web,
             emotes: None,
             bot_username: "utilitybot".into(),
@@ -1119,6 +1162,7 @@ mod turn_tests {
         Fixture {
             runner,
             llm,
+            settings_store,
             _dir: dir,
         }
     }
@@ -1147,6 +1191,80 @@ mod turn_tests {
             .expect("message for role")
             .content
             .clone()
+    }
+
+    #[tokio::test]
+    async fn max_turn_rounds_edit_applies_to_next_turn() {
+        let f = fixture(Answer::Scripts(vec!["printf ran"]), 30).await;
+        let mut patch = SettingsOverrides::default();
+        patch.ai.aurora.max_turn_rounds = Some(1);
+        f.settings_store.apply(patch, actor()).await.unwrap();
+
+        let out = f.runner.run_turn(input(Agent::Aurora, "hi")).await.unwrap();
+
+        assert_eq!(out, TurnOutcome::Silent);
+        assert_eq!(f.llm.calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn max_writes_per_turn_edit_applies_to_next_turn() {
+        let f = fixture(Answer::ScratchWrites(2), 30).await;
+        let mut patch = SettingsOverrides::default();
+        patch.ai.aurora.max_writes_per_turn = Some(1);
+        f.settings_store.apply(patch, actor()).await.unwrap();
+
+        let out = f.runner.run_turn(input(Agent::Aurora, "hi")).await.unwrap();
+
+        assert!(matches!(out, TurnOutcome::Reply { .. }), "got {out:?}");
+        let calls = f.llm.calls.lock().unwrap();
+        let results = &calls[1].prior_rounds[0].results;
+        assert_eq!(results.len(), 2);
+        assert!(!results[0].content.starts_with("write_quota_exhausted"));
+        assert!(results[1].content.starts_with("write_quota_exhausted"));
+    }
+
+    #[tokio::test]
+    async fn inject_byte_budget_edit_applies_to_next_turn() {
+        let f = fixture(Answer::Text("moin".into()), 30).await;
+        f.runner
+            .memory
+            .store
+            .write(
+                &FileKind::User {
+                    user_id: "111".into(),
+                },
+                "live-inject-budget-marker",
+                UserIdentity::of("alice", "Alice"),
+            )
+            .await
+            .unwrap();
+        let mut patch = SettingsOverrides::default();
+        patch.ai.memory.inject_byte_budget = Some(65_536);
+        f.settings_store.apply(patch, actor()).await.unwrap();
+
+        let out = f.runner.run_turn(input(Agent::Aurora, "hi")).await.unwrap();
+
+        assert!(matches!(out, TurnOutcome::Reply { .. }), "got {out:?}");
+        let calls = f.llm.calls.lock().unwrap();
+        assert!(part(&calls[0], llm::Role::System).contains("live-inject-budget-marker"));
+    }
+
+    #[tokio::test]
+    async fn min_response_delay_edit_applies_to_next_turn() {
+        let f = fixture(Answer::Text("moin".into()), 30).await;
+        let mut patch = SettingsOverrides::default();
+        patch.ai.aurora.min_response_delay_ms = Some(1_234);
+        f.settings_store.apply(patch, actor()).await.unwrap();
+
+        let out = f.runner.run_turn(input(Agent::Aurora, "hi")).await.unwrap();
+
+        let TurnOutcome::Reply {
+            min_response_delay, ..
+        } = out
+        else {
+            panic!("expected reply, got {out:?}");
+        };
+        assert_eq!(min_response_delay, Duration::from_millis(1_234));
     }
 
     /// Memory belongs in the cached system prefix; scratch, recent chat and
@@ -1352,12 +1470,12 @@ mod turn_tests {
             })))
             .mount(&rdap)
             .await;
-        let f = fixture_with(
+        let f = Box::pin(fixture_with(
             Answer::Calls(crate::ai::network_tool::LOOKUP_NETWORK_TOOL_NAME, 5),
             30,
             None,
             &rdap.uri(),
-        )
+        ))
         .await;
 
         let out = f
