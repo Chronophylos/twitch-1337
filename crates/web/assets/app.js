@@ -290,6 +290,246 @@ const unsavedGuards = [];
     .filter((m) => m.hidden && m.display);
   const magRowByHidden = new Map(magRows.map((m) => [m.hidden, m]));
 
+  // Newline-list knobs keep their canonical value in a hidden input. The
+  // visible pills are a projection of that value, so the existing row state,
+  // persistence, reset, and unsaved-change code continues to see one control.
+  const pillRows = Array.from(form.querySelectorAll('[data-pill-editor]'))
+    .map((el) => ({
+      el,
+      canonical: el.querySelector('.pill-canonical'),
+      entry: el.querySelector('[data-pill-entry]'),
+      list: el.querySelector('[data-pill-list]'),
+      feedback: el.querySelector('[data-pill-feedback]'),
+      label: el.dataset.pillLabel ?? 'list',
+      reorder: el.hasAttribute('data-pill-reorder'),
+      values: [],
+    }))
+    .filter((p) => p.canonical && p.entry && p.list && p.feedback);
+  const pillRowByHidden = new Map(pillRows.map((p) => [p.canonical, p]));
+  let draggedPill = null;
+
+  function parsePills(value) {
+    return value.split('\n').map((v) => v.trim()).filter(Boolean);
+  }
+
+  function clearPillFeedback(p) {
+    p.feedback.textContent = '';
+  }
+
+  function pillButton(action, label, text, disabled = false) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `pill-${action}`;
+    button.dataset.pillAction = action;
+    button.setAttribute('aria-label', label);
+    button.textContent = text;
+    button.disabled = disabled;
+    return button;
+  }
+
+  function createPill(p, value, index) {
+    const pill = document.createElement('div');
+    pill.className = 'pill';
+    pill.dataset.pillIndex = String(index);
+    pill.setAttribute('role', 'listitem');
+    if (p.reorder) pill.draggable = true;
+
+    const text = document.createElement('span');
+    text.className = 'pill-value';
+    text.textContent = value;
+    pill.append(text);
+
+    if (p.reorder) {
+      pill.append(
+        pillButton('earlier', `Move ${value} earlier in ${p.label}`, '↑', index === 0),
+        pillButton('later', `Move ${value} later in ${p.label}`, '↓', index === p.values.length - 1),
+      );
+    }
+    pill.append(pillButton('remove', `Remove ${value} from ${p.label}`, '×'));
+    return pill;
+  }
+
+  function renderPills(p) {
+    p.list.replaceChildren();
+    p.values.forEach((value, index) => p.list.append(createPill(p, value, index)));
+  }
+
+  function commitPills(p, values) {
+    p.values = values;
+    p.canonical.value = values.join('\n');
+    renderPills(p);
+    p.canonical.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function commitAddedPills(p, values) {
+    const firstNew = p.values.length;
+    p.values = values;
+    p.canonical.value = values.join('\n');
+    // Blur may be caused by pressing an existing pill's button or dragging
+    // that pill. Keep every existing node intact until its click/drag arrives.
+    for (let index = firstNew; index < values.length; index++) {
+      p.list.append(createPill(p, values[index], index));
+    }
+    if (p.reorder && firstNew > 0) {
+      const previousLast = p.list.querySelector(
+        `[data-pill-index="${firstNew - 1}"] [data-pill-action="later"]`,
+      );
+      if (previousLast) previousLast.disabled = false;
+    }
+    p.canonical.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  function syncPillRow(p) {
+    p.values = parsePills(p.canonical.value);
+    p.entry.value = '';
+    clearPillFeedback(p);
+    renderPills(p);
+  }
+
+  function addPills(p, candidates) {
+    const values = [...p.values];
+    const duplicates = [];
+    for (const candidate of candidates) {
+      const value = candidate.trim();
+      if (!value) continue;
+      if (values.includes(value)) {
+        duplicates.push(value);
+      } else {
+        values.push(value);
+      }
+    }
+    p.entry.value = '';
+    if (values.length !== p.values.length) commitAddedPills(p, values);
+    if (duplicates.length) {
+      p.feedback.textContent = duplicates
+        .map((value) => `“${value}” is already in ${p.label}.`)
+        .join(' ');
+    } else {
+      clearPillFeedback(p);
+    }
+  }
+
+  function commitPendingPill(p) {
+    addPills(p, [p.entry.value]);
+  }
+
+  function clearDragState() {
+    draggedPill = null;
+    for (const p of pillRows) {
+      for (const pill of p.list.querySelectorAll('.pill')) {
+        pill.classList.remove('is-dragging', 'is-drop-target');
+      }
+    }
+  }
+
+  for (const p of pillRows) {
+    syncPillRow(p);
+
+    p.entry.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ',') {
+        // In particular, never let Enter bubble into implicit form submission.
+        e.preventDefault();
+        commitPendingPill(p);
+      } else if (e.key === 'Backspace' && p.entry.value === '' && p.values.length) {
+        e.preventDefault();
+        commitPills(p, p.values.slice(0, -1));
+        clearPillFeedback(p);
+      }
+    });
+    p.entry.addEventListener('input', () => clearPillFeedback(p));
+    p.entry.addEventListener('blur', () => commitPendingPill(p));
+    p.entry.addEventListener('paste', (e) => {
+      const pasted = e.clipboardData?.getData('text/plain');
+      if (!pasted) return;
+      e.preventDefault();
+      const pieces = pasted.split(/[\s,]+/);
+      const pending = p.entry.value.trim();
+      if (pending) pieces.unshift(pending);
+      addPills(p, pieces);
+    });
+
+    p.el.addEventListener('click', (e) => {
+      if (e.target === p.el || e.target === p.list) p.entry.focus();
+    });
+
+    p.list.addEventListener('click', (e) => {
+      const button = e.target.closest('button[data-pill-action]');
+      const pill = button?.closest('[data-pill-index]');
+      if (!button || !pill) return;
+      const index = Number(pill.dataset.pillIndex);
+      if (!Number.isInteger(index) || index < 0 || index >= p.values.length) return;
+      const action = button.dataset.pillAction;
+      const values = [...p.values];
+
+      if (action === 'remove') {
+        values.splice(index, 1);
+        commitPills(p, values);
+        clearPillFeedback(p);
+        p.entry.focus();
+        return;
+      }
+      if (!p.reorder || (action !== 'earlier' && action !== 'later')) return;
+      const to = action === 'earlier' ? index - 1 : index + 1;
+      if (to < 0 || to >= values.length) return;
+      const [moved] = values.splice(index, 1);
+      values.splice(to, 0, moved);
+      commitPills(p, values);
+      clearPillFeedback(p);
+      const next = p.list.querySelector(
+        `[data-pill-index="${to}"] [data-pill-action="${action}"]`,
+      );
+      const focusTarget = next?.disabled
+        ? p.list.querySelector(`[data-pill-index="${to}"] [data-pill-action="remove"]`)
+        : next;
+      focusTarget?.focus();
+    });
+
+    if (!p.reorder) continue;
+    p.list.addEventListener('dragstart', (e) => {
+      const pill = e.target.closest('[data-pill-index]');
+      if (!pill) return;
+      clearDragState();
+      const index = Number(pill.dataset.pillIndex);
+      draggedPill = { editor: p, index };
+      pill.classList.add('is-dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', p.values[index] ?? '');
+      }
+    });
+    p.list.addEventListener('dragover', (e) => {
+      if (draggedPill?.editor !== p) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      for (const pill of p.list.querySelectorAll('.pill')) {
+        pill.classList.toggle('is-drop-target', pill === e.target.closest('[data-pill-index]'));
+      }
+    });
+    p.list.addEventListener('drop', (e) => {
+      if (draggedPill?.editor !== p) return;
+      e.preventDefault();
+      const { index: from } = draggedPill;
+      const target = e.target.closest('[data-pill-index]');
+      const to = target ? Number(target.dataset.pillIndex) : p.values.length - 1;
+      clearDragState();
+      if (from === to || from < 0 || from >= p.values.length || to < 0 || to >= p.values.length) {
+        return;
+      }
+      const values = [...p.values];
+      const [moved] = values.splice(from, 1);
+      values.splice(to, 0, moved);
+      commitPills(p, values);
+      clearPillFeedback(p);
+    });
+    p.list.addEventListener('dragend', clearDragState);
+  }
+
+  // A click normally commits through blur first; this also covers keyboard
+  // and programmatic requestSubmit paths before the browser builds FormData.
+  form.addEventListener('submit', () => {
+    for (const p of pillRows) commitPendingPill(p);
+  });
+
   function formatMag(tenths) {
     return (Number(tenths) / 10).toFixed(1);
   }
@@ -414,8 +654,10 @@ const unsavedGuards = [];
     if (b) syncBytesRow(b);
     const m = magRowByHidden.get(r.input);
     if (m) syncMagRow(m);
+    const p = pillRowByHidden.get(r.input);
+    if (p) syncPillRow(p);
     refreshAll();
-    r.input.focus();
+    if (p) p.entry.focus(); else r.input.focus();
   });
 
   // Restore every control to its load-time value in place. A reload would
@@ -429,6 +671,7 @@ const unsavedGuards = [];
     }
     for (const b of bytesRows) syncBytesRow(b);
     for (const m of magRows) syncMagRow(m);
+    for (const p of pillRows) syncPillRow(p);
     for (const seg of form.querySelectorAll('.segmented .segment')) {
       seg.classList.toggle('is-active', !!seg.querySelector('input')?.checked);
     }

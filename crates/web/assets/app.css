@@ -1406,6 +1406,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 .num-wrap,
 .bytes-wrap,
 .text-input,
+.pill-editor,
 .row-control-cell select {
   background: var(--bg-3);
   border: 1px solid var(--line-2);
@@ -1413,13 +1414,13 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   color: var(--fg);
   transition: border-color 0.12s ease, background 0.12s ease, opacity 0.12s ease;
 }
-.settings-row:hover .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
+.settings-row:hover .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, .pill-editor, select) {
   border-color: var(--line-strong);
 }
-.settings-row.is-dirty .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, select) {
+.settings-row.is-dirty .row-control-cell :is(.num-wrap, .bytes-wrap, .text-input, .pill-editor, select) {
   border-color: var(--accent-soft);
 }
-.settings-row .row-control-cell :is(.num-wrap:focus-within, .bytes-wrap:focus-within, .text-input:focus, select:focus) {
+.settings-row .row-control-cell :is(.num-wrap:focus-within, .bytes-wrap:focus-within, .text-input:focus, .pill-editor:focus-within, select:focus) {
   border-color: var(--accent);
   background: var(--bg-2);
 }
@@ -1430,7 +1431,7 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
 /* Width contract: the control box fills the control cell (and so the wide
    and full variants); numbers and times stay compact. Toggles keep their
    switch size. All start at the cell's left edge. */
-.row-control-cell > :is(.text-input, select, .bytes-wrap, .range-wrap) { width: 100%; }
+.row-control-cell > :is(.text-input, select, .bytes-wrap, .range-wrap, .pill-editor) { width: 100%; }
 .num-wrap,
 .text-input.is-narrow { width: 160px; max-width: 100%; }
 
@@ -1514,6 +1515,76 @@ textarea.text-input {
   min-height: calc(4 * 1.5em + 16px);
   resize: vertical;
 }
+
+/* Newline-list knobs: pills and the pending-entry input share one framed
+   control. The hidden canonical input never participates in the layout. */
+.pill-editor {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 6px;
+  cursor: text;
+}
+.pill-list { display: contents; }
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 2px 4px 2px 10px;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.pill-editor[data-pill-reorder] .pill { cursor: grab; }
+.pill.is-dragging { opacity: 0.45; }
+.pill.is-drop-target { border-color: var(--accent); }
+.pill-value {
+  min-width: 0;
+  margin-right: 3px;
+  overflow-wrap: anywhere;
+}
+.pill button {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--fg-3);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1;
+}
+.pill button:hover { background: var(--bg-3); color: var(--fg); }
+.pill button.pill-remove:hover { color: var(--danger); }
+.pill button:disabled { opacity: 0.3; cursor: default; }
+.pill button:disabled:hover { background: transparent; color: var(--fg-3); }
+.pill-entry {
+  flex: 1 1 140px;
+  min-width: 100px;
+  padding: 4px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.pill-feedback {
+  flex-basis: 100%;
+  margin: 0 4px;
+  color: var(--accent-warn-fg);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.pill-feedback:empty { display: none; }
 
 .range-wrap {
   display: inline-flex;
@@ -2174,10 +2245,12 @@ textarea.text-input {
 .search input:focus-visible,
 .num-wrap .num-input:focus-visible,
 .bytes-wrap .bytes-display:focus-visible,
+.pill-entry:focus-visible,
 .toggle input:focus-visible { outline: none; }
 .search:has(input:focus-visible),
 .num-wrap:has(.num-input:focus-visible),
 .bytes-wrap:has(.bytes-display:focus-visible),
+.pill-editor:has(.pill-entry:focus-visible),
 .toggle:has(input:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
