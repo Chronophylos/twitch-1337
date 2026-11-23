@@ -32,6 +32,7 @@ pub(crate) enum AdsbLookup {
     },
     Callsigns {
         candidates: Vec<String>,
+        preferred_hex: Option<String>,
         hex_fallback: Option<String>,
         /// Also try `hex_fallback` when the callsign lookup fails, not only on
         /// a miss. Set for an Aviationstack hex: the flight was hex-polled
@@ -56,10 +57,12 @@ pub(crate) fn plan_adsb_lookup(flight: &TrackedFlight) -> AdsbLookup {
         return AdsbLookup::Hex { hex };
     }
 
-    let aviationstack_hex = flight
-        .hex
-        .clone()
-        .filter(|_| flight.hex_source == Some(HexSource::AviationStack));
+    let (preferred_hex, aviationstack_hex) = if flight.hex_source == Some(HexSource::AviationStack)
+    {
+        (None, flight.hex.clone())
+    } else {
+        (flight.hex.clone(), None)
+    };
     let hex_fallback_on_error = aviationstack_hex.is_some();
     let hex_fallback = aviationstack_hex.or_else(|| match &flight.identifier {
         FlightIdentifier::Callsign(id) if FlightIdentifier::is_valid_icao24_hex(id) => {
@@ -71,6 +74,7 @@ pub(crate) fn plan_adsb_lookup(flight: &TrackedFlight) -> AdsbLookup {
     if !candidates.is_empty() {
         AdsbLookup::Callsigns {
             candidates,
+            preferred_hex,
             hex_fallback,
             hex_fallback_on_error,
         }
@@ -98,10 +102,13 @@ pub(crate) async fn fetch_observation<P: AdsbProvider>(
         }
         AdsbLookup::Callsigns {
             candidates,
+            preferred_hex,
             hex_fallback,
             hex_fallback_on_error,
         } => {
-            let result = poll_aircraft_by_callsign_aliases(provider, &candidates).await;
+            let result =
+                poll_aircraft_by_callsign_aliases(provider, &candidates, preferred_hex.as_deref())
+                    .await;
             let retry_hex = match &result {
                 Ok(Ok(None)) => true,
                 Ok(Ok(Some(_))) => false,
@@ -206,11 +213,15 @@ pub(crate) fn callsign_poll_candidates(flight: &TrackedFlight) -> Vec<String> {
 pub(crate) async fn poll_aircraft_by_callsign_aliases<P: AdsbProvider>(
     provider: &P,
     candidates: &[String],
+    preferred_hex: Option<&str>,
 ) -> Result<Result<Option<NearbyAircraft>, eyre::Report>, tokio::time::error::Elapsed> {
     let mut last = Ok(Ok(None));
     for callsign in candidates {
-        let result =
-            tokio::time::timeout(POLL_TIMEOUT, provider.get_aircraft_by_callsign(callsign)).await;
+        let result = tokio::time::timeout(
+            POLL_TIMEOUT,
+            provider.get_aircraft_by_callsign(callsign, preferred_hex),
+        )
+        .await;
         if matches!(&result, Ok(Ok(Some(_)))) {
             return result;
         }
@@ -251,6 +262,7 @@ mod tests {
         by_hex: HashMap<String, NearbyAircraft>,
         by_callsign: HashMap<String, NearbyAircraft>,
         callsign_err: bool,
+        last_preferred_hex: parking_lot::Mutex<Option<String>>,
     }
 
     #[async_trait]
@@ -261,7 +273,9 @@ mod tests {
         async fn get_aircraft_by_callsign(
             &self,
             callsign: &str,
+            preferred_hex: Option<&str>,
         ) -> eyre::Result<Option<NearbyAircraft>> {
+            *self.last_preferred_hex.lock() = preferred_hex.map(str::to_owned);
             if self.callsign_err {
                 eyre::bail!("callsign lookup failed");
             }
@@ -337,6 +351,7 @@ mod tests {
         match plan_adsb_lookup(&flight) {
             AdsbLookup::Callsigns {
                 candidates,
+                preferred_hex: None,
                 hex_fallback: None,
                 hex_fallback_on_error: false,
             } => {
@@ -366,11 +381,13 @@ mod tests {
         match plan_adsb_lookup(&flight) {
             AdsbLookup::Callsigns {
                 candidates,
+                preferred_hex,
                 hex_fallback,
                 hex_fallback_on_error,
             } => {
                 assert!(!hex_fallback_on_error);
                 assert!(candidates.iter().any(|c| c == "DE1513"));
+                assert_eq!(preferred_hex, None);
                 assert_eq!(hex_fallback.as_deref(), Some("DE1513"));
             }
             other => panic!("expected Callsigns, got {other:?}"),
@@ -425,15 +442,30 @@ mod tests {
             match plan_adsb_lookup(&flight) {
                 AdsbLookup::Callsigns {
                     candidates,
+                    preferred_hex,
                     hex_fallback,
                     hex_fallback_on_error,
                 } => {
                     assert!(hex_fallback_on_error);
                     assert_eq!(candidates, vec!["DLH1234".to_string()]);
+                    assert_eq!(preferred_hex, None);
                     assert_eq!(hex_fallback.as_deref(), Some("44006E"));
                 }
                 other => panic!("expected Callsigns, got {other:?}"),
             }
+        }
+    }
+
+    #[test]
+    fn plan_aviationstack_hex_is_not_a_callsign_preference() {
+        let flight = aviationstack_hex_flight();
+        match plan_adsb_lookup(&flight) {
+            AdsbLookup::Callsigns {
+                preferred_hex: None,
+                hex_fallback: Some(hex),
+                ..
+            } => assert_eq!(hex, "44006E"),
+            other => panic!("expected Callsigns without preferred hex, got {other:?}"),
         }
     }
 
@@ -463,6 +495,7 @@ mod tests {
         };
         let obs = fetch_observation(plan, &provider).await;
         assert!(!obs.used_hex);
+        assert_eq!(provider.last_preferred_hex.lock().as_deref(), None);
         match obs.outcome {
             PollOutcome::Hit(ac) => assert_eq!(ac.hex.as_deref(), Some("3C6589")),
             other => panic!("expected Hit, got {other:?}"),

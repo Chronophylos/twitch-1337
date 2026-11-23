@@ -9,7 +9,11 @@ use super::AviationClient;
 #[async_trait]
 pub trait AdsbProvider: Send + Sync {
     async fn get_aircraft_by_hex(&self, hex: &str) -> Result<Option<NearbyAircraft>>;
-    async fn get_aircraft_by_callsign(&self, callsign: &str) -> Result<Option<NearbyAircraft>>;
+    async fn get_aircraft_by_callsign(
+        &self,
+        callsign: &str,
+        preferred_hex: Option<&str>,
+    ) -> Result<Option<NearbyAircraft>>;
     async fn get_flight_route(&self, callsign: &str) -> Result<Option<FlightRoute>>;
     async fn resolve_callsign(&self, input: &str) -> String;
     fn aviationstack_enabled(&self) -> bool;
@@ -21,8 +25,12 @@ impl AdsbProvider for AviationClient {
         self.get_aircraft_by_hex(hex).await
     }
 
-    async fn get_aircraft_by_callsign(&self, callsign: &str) -> Result<Option<NearbyAircraft>> {
-        self.get_aircraft_by_callsign(callsign).await
+    async fn get_aircraft_by_callsign(
+        &self,
+        callsign: &str,
+        preferred_hex: Option<&str>,
+    ) -> Result<Option<NearbyAircraft>> {
+        self.get_aircraft_by_callsign(callsign, preferred_hex).await
     }
 
     async fn get_flight_route(&self, callsign: &str) -> Result<Option<FlightRoute>> {
