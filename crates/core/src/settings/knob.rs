@@ -345,7 +345,7 @@ pub fn check_range<T: PartialOrd + Display + Copy>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::AiEmotes;
+    use crate::settings::{AiEmotes, AiWeb};
 
     fn form(pairs: &[(&str, &str)]) -> (SettingsOverrides, Vec<FieldError>) {
         let owned: Vec<(String, String)> = pairs
@@ -499,6 +499,33 @@ mod tests {
             restart_required(&before, &after),
             vec!["ai.prefill (enabling requires restart)"]
         );
+    }
+
+    #[test]
+    fn restart_required_reports_web_connection_knob_changes() {
+        let mut before = Settings::compiled_defaults();
+        before.ai.web = Some(AiWeb::default());
+        type Edit = fn(&mut Settings);
+        let cases: [(&str, Edit); 4] = [
+            ("ai.web.base_url", |s| {
+                s.ai.web.as_mut().unwrap().base_url = "https://search.example".into();
+            }),
+            ("ai.web.timeout", |s| {
+                s.ai.web.as_mut().unwrap().timeout += 1;
+            }),
+            ("ai.web.cache_ttl_secs", |s| {
+                s.ai.web.as_mut().unwrap().cache_ttl_secs += 1;
+            }),
+            ("ai.web.cache_capacity", |s| {
+                s.ai.web.as_mut().unwrap().cache_capacity += 1;
+            }),
+        ];
+
+        for (path, edit) in cases {
+            let mut after = before.clone();
+            edit(&mut after);
+            assert_eq!(restart_required(&before, &after), vec![path]);
+        }
     }
 
     #[test]

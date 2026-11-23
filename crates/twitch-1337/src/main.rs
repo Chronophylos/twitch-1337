@@ -342,15 +342,12 @@ async fn prepare(
         .await
         .wrap_err("open memory store")?;
 
-    // Build the v2 memory bundle (store + transcript + knobs) once at
-    // composition; `run_bot` reads it from `Services`. `None` when AI is off.
-    let ai_memory = twitch_1337::ai::command::build_ai_memory_v2(
-        config.ai.is_some(),
-        &settings_handle.load(),
-        memory_store.clone(),
-    )
-    .await
-    .wrap_err("build ai memory v2")?;
+    // Build the v2 memory bundle (store + transcript) once at composition;
+    // `run_bot` reads it from `Services`. `None` when AI is off.
+    let ai_memory =
+        twitch_1337::ai::command::build_ai_memory_v2(config.ai.is_some(), memory_store.clone())
+            .await
+            .wrap_err("build ai memory v2")?;
 
     // Bind before the (opt-in, up to ~20 s) history prefill so /healthz
     // connections queue on the accept backlog instead of being refused
