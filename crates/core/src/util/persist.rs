@@ -1,12 +1,13 @@
 //! Atomic file persistence helpers.
 //!
-//! Helpers serialize to RON, write the destination with extension replaced by
-//! `ron.tmp`, then rename onto the target so concurrent readers see either the
+//! Helpers serialize to RON, write a unique sibling tmp file
+//! (`.<name>.<pid>.<n>.tmp`), then rename onto the target so concurrent readers see either the
 //! old or the new file but never a torn write. Callers should pass a path
 //! ending in `.ron`. "Atomic" here means no torn reads; it does NOT imply
 //! crash-safety (no `fsync` is performed).
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 use thiserror::Error;
@@ -114,48 +115,128 @@ fn file_label(path: &Path) -> &str {
         .unwrap_or_default()
 }
 
+/// Sibling tmp path unique per call, so concurrent saves to one `path` never
+/// share (and tear) a tmp file.
+fn unique_tmp(path: &Path) -> PathBuf {
+    static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let n = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()))
+}
+
+/// Best-effort removal of a tmp file left by a failed write or rename.
+async fn cleanup_tmp(tmp: &Path) {
+    if let Err(e) = tokio::fs::remove_file(tmp).await
+        && e.kind() != std::io::ErrorKind::NotFound
+    {
+        tracing::debug!(error = %e, path = %tmp.display(), "failed to remove tmp file");
+    }
+}
+
+/// Remove orphaned tmp files from `dir` (non-recursive, best-effort).
+///
+/// Call once at startup, before any writer runs. Removes new-scheme tmp files
+/// (`.<name>.<pid>.<n>.tmp`) of other processes, which a crash or cancelled
+/// save leaves behind, and legacy `*.ron.tmp` files from before unique tmp
+/// names. A tmp of the current process is never touched.
+pub fn sweep_stale_tmp(dir: &Path) {
+    sweep(dir, false);
+}
+
+/// [`sweep_stale_tmp`] for a directory written only by
+/// [`atomic_write_bytes_async`] (the memory store's `memories/`, `users/`,
+/// `scratch/`): additionally removes legacy `<stem>.tmp` files. Never use it
+/// on a directory that holds other `*.tmp` files.
+pub fn sweep_stale_tmp_bytes_dir(dir: &Path) {
+    sweep(dir, true);
+}
+
+fn sweep(dir: &Path, legacy_bare: bool) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::debug!(error = %e, dir = %dir.display(), "cannot scan for stale tmp files");
+            }
+            return;
+        }
+    };
+    let me = std::process::id();
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !is_stale_tmp(name, me, legacy_bare) {
+            continue;
+        }
+        match std::fs::remove_file(entry.path()) {
+            Ok(()) => removed += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                tracing::debug!(error = %e, path = %entry.path().display(), "failed to remove stale tmp file");
+            }
+        }
+    }
+    if removed > 0 {
+        tracing::info!(removed, dir = %dir.display(), "removed stale tmp files");
+    }
+}
+
+fn is_stale_tmp(name: &str, me: u32, legacy_bare: bool) -> bool {
+    let Some(stem) = name.strip_suffix(".tmp") else {
+        return false;
+    };
+    if let Some(rest) = stem.strip_prefix('.')
+        && let Some((rest, n)) = rest.rsplit_once('.')
+        && let Some((_, pid)) = rest.rsplit_once('.')
+        && !n.is_empty()
+        && n.bytes().all(|b| b.is_ascii_digit())
+        && let Ok(pid) = pid.parse::<u32>()
+    {
+        return pid != me;
+    }
+    stem.ends_with(".ron") || (legacy_bare && !stem.starts_with('.'))
+}
+
 async fn write_bytes(bytes: &[u8], path: &Path) -> Result<()> {
-    let tmp = path.with_extension("tmp");
+    let tmp = unique_tmp(path);
     #[expect(
         clippy::disallowed_methods,
         reason = "this is the tmp half of tmp + rename"
     )]
-    tokio::fs::write(&tmp, bytes)
-        .await
-        .map_err(|source| AtomicPersistError::WriteTmp {
-            path: tmp.clone(),
-            source,
-        })?;
+    if let Err(source) = tokio::fs::write(&tmp, bytes).await {
+        cleanup_tmp(&tmp).await;
+        return Err(AtomicPersistError::WriteTmp { path: tmp, source });
+    }
     rename(&tmp, path).await
 }
 
 async fn save_ron<T: Serialize>(value: &T, path: &Path) -> Result<()> {
-    let tmp = path.with_extension("ron.tmp");
+    let tmp = unique_tmp(path);
     let data = serialize(value)?;
 
     #[expect(
         clippy::disallowed_methods,
         reason = "this is the tmp half of tmp + rename"
     )]
-    tokio::fs::write(&tmp, data.as_bytes())
-        .await
-        .map_err(|source| AtomicPersistError::WriteTmp {
-            path: tmp.clone(),
-            source,
-        })?;
+    if let Err(source) = tokio::fs::write(&tmp, data.as_bytes()).await {
+        cleanup_tmp(&tmp).await;
+        return Err(AtomicPersistError::WriteTmp { path: tmp, source });
+    }
 
     rename(&tmp, path).await
 }
 
 async fn save_ron_private<T: Serialize>(value: &T, path: &Path) -> Result<()> {
-    let tmp = path.with_extension("ron.tmp");
+    let tmp = unique_tmp(path);
     let data = serialize(value)?;
-    write_private(&tmp, data.as_bytes())
-        .await
-        .map_err(|source| AtomicPersistError::WriteTmp {
-            path: tmp.clone(),
-            source,
-        })?;
+    if let Err(source) = write_private(&tmp, data.as_bytes()).await {
+        cleanup_tmp(&tmp).await;
+        return Err(AtomicPersistError::WriteTmp { path: tmp, source });
+    }
     rename(&tmp, path).await
 }
 
@@ -168,8 +249,7 @@ async fn write_private(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
     #[cfg(unix)]
     options.mode(0o600);
     let mut file = options.open(tmp).await?;
-    // `mode` only applies when the file is created; a tmp left behind by a
-    // crashed save keeps its old mode, so set it explicitly as well.
+    // `mode` only applies when the file is created; set it explicitly as well.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
@@ -181,18 +261,45 @@ async fn write_private(tmp: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 async fn rename(tmp: &Path, path: &Path) -> Result<()> {
-    tokio::fs::rename(tmp, path)
-        .await
-        .map_err(|source| AtomicPersistError::Rename {
+    if let Err(source) = tokio::fs::rename(tmp, path).await {
+        cleanup_tmp(tmp).await;
+        return Err(AtomicPersistError::Rename {
             from: tmp.to_path_buf(),
             to: path.to_path_buf(),
             source,
-        })
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sweep_removes_stale_tmp_and_keeps_live_and_unrelated() {
+        let dir = tempfile::tempdir().unwrap();
+        let me = std::process::id();
+        let foreign_pid = me.wrapping_add(1);
+        let foreign = format!(".token.ron.{foreign_pid}.3.tmp");
+        let current = format!(".token.ron.{me}.4.tmp");
+        for name in [foreign.as_str(), current.as_str(), "x.ron.tmp", "notes.tmp"] {
+            #[expect(clippy::disallowed_methods, reason = "test seeds files")]
+            std::fs::write(dir.path().join(name), "secret").unwrap();
+        }
+
+        sweep_stale_tmp(dir.path());
+
+        assert!(!dir.path().join(&foreign).exists());
+        assert!(!dir.path().join("x.ron.tmp").exists());
+        assert!(dir.path().join(&current).exists());
+        assert!(dir.path().join("notes.tmp").exists());
+
+        // Byte-file dirs additionally drop legacy `<stem>.tmp`.
+        sweep_stale_tmp_bytes_dir(dir.path());
+        assert!(!dir.path().join("notes.tmp").exists());
+        assert!(dir.path().join(&current).exists());
+    }
 
     #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
     struct Sample {
@@ -212,23 +319,20 @@ mod tests {
         let loaded: Sample =
             ron::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
         assert_eq!(loaded, value);
-        assert!(!path.with_extension("ron.tmp").exists());
+        assert_eq!(tmp_files(dir.path()), Vec::<String>::new());
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn private_save_is_owner_only_over_world_readable_leftovers() {
+    async fn private_save_is_owner_only_over_world_readable_target() {
         use std::os::unix::fs::PermissionsExt as _;
 
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("token.ron");
-        let tmp = path.with_extension("ron.tmp");
-        // A target written by an older build and a tmp left by a crashed save.
-        for file in [&path, &tmp] {
-            #[expect(clippy::disallowed_methods, reason = "test seeds 0644 files")]
-            std::fs::write(file, "old").unwrap();
-            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o644)).unwrap();
-        }
+        // A target written by an older build.
+        #[expect(clippy::disallowed_methods, reason = "test seeds a 0644 file")]
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let value = Sample {
             a: 2,
             b: "secret".into(),
@@ -239,6 +343,35 @@ mod tests {
         assert_eq!(mode, 0o600, "got {mode:o}");
         let loaded: Sample = ron::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(loaded, value);
-        assert!(!tmp.exists());
+        assert_eq!(tmp_files(dir.path()), Vec::<String>::new());
+    }
+
+    fn tmp_files(dir: &Path) -> Vec<String> {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn concurrent_saves_to_same_path_do_not_tear() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.ron");
+        let mut handles = Vec::new();
+        for i in 0..16u32 {
+            let path = path.clone();
+            handles.push(tokio::spawn(async move {
+                let value = vec![i; 1000];
+                atomic_save_ron_async(&value, &path).await.unwrap();
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+        let loaded: Vec<u32> = ron::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(loaded.len(), 1000);
+        assert!(loaded.iter().all(|v| *v == loaded[0]) && loaded[0] < 16);
+        assert_eq!(tmp_files(dir.path()), Vec::<String>::new());
     }
 }

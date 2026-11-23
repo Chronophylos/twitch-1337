@@ -150,6 +150,11 @@ impl MemoryStore {
                 .await
                 .wrap_err_with(|| format!("create_dir_all {}", p.display()))?;
         }
+        // Orphaned tmp files (crash/cancel mid-save, or pre-unique-tmp
+        // leftovers) can hold user notes; clear them before any writer runs.
+        for p in [&memories_dir, &memories_dir.join("users"), &scratch_dir] {
+            crate::util::persist::sweep_stale_tmp_bytes_dir(p);
+        }
 
         // v1 disposal.
         let v1 = data_dir.join("ai_memory.ron");
