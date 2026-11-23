@@ -1,6 +1,8 @@
 //! EMSC seismic feed. Bounding box and magnitude filter server-side, so
 //! there is no client-side geo check.
 
+use std::borrow::Cow;
+
 use jiff::Timestamp;
 use serde::Deserialize;
 
@@ -56,6 +58,42 @@ pub(crate) fn url(base: &str, min_mag_tenths: u32) -> String {
     )
 }
 
+const REGION_PHRASES: &[(&str, &str)] = &[
+    ("GERMANY", "in Deutschland"),
+    ("CZECH REPUBLIC", "in Tschechien"),
+    ("SWITZERLAND", "in der Schweiz"),
+    ("FRANCE", "in Frankreich"),
+    (
+        "FRANCE-GERMANY BORDER REGION",
+        "im Grenzgebiet Frankreich–Deutschland",
+    ),
+    ("AUSTRIA", "in Österreich"),
+    ("THE NETHERLANDS", "in den Niederlanden"),
+    ("AUSTRIA REGION", "in der Region Österreich"),
+    ("BELGIUM", "in Belgien"),
+    ("LIECHTENSTEIN", "in Liechtenstein"),
+    ("LUXEMBOURG", "in Luxemburg"),
+    ("BALTIC SEA", "in der Ostsee"),
+    ("POLAND", "in Polen"),
+    ("NORTH SEA", "in der Nordsee"),
+    ("NORTHERN ITALY", "in Norditalien"),
+    ("DENMARK", "in Dänemark"),
+    ("SWEDEN", "in Schweden"),
+];
+
+fn region_phrase(raw: &str) -> Cow<'_, str> {
+    let region = raw.trim();
+    if let Some(&(_, phrase)) = REGION_PHRASES
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(region))
+    {
+        return Cow::Borrowed(phrase);
+    }
+
+    tracing::debug!(region = raw, "unmapped earthquake region");
+    Cow::Owned(format!("in {region}"))
+}
+
 /// Parse a feed body into candidates. Any record missing a field the copy
 /// needs is skipped. A body that does not parse at all is an error — the
 /// handler logs and skips this tick so a 200 HTML page never looks like
@@ -76,7 +114,8 @@ pub(crate) fn parse(body: &str) -> Result<Vec<Candidate>, serde_json::Error> {
                 at,
                 line: format!(
                     "HuggingButTheresAnEarthquake Die Erde hat gewackelt: \
-                     M{mag:.1} bei {region}, {depth:.0} km tief, um {} Uhr",
+                     M{mag:.1} {}, {depth:.0} km tief, um {} Uhr",
+                    region_phrase(&region),
                     crate::util::to_berlin(at).strftime("%H:%M"),
                 ),
             })
@@ -98,8 +137,49 @@ mod tests {
         // 19:03:58 UTC in August is 21:03 Berlin (CEST, UTC+2)
         assert_eq!(
             out[0].line,
-            "HuggingButTheresAnEarthquake Die Erde hat gewackelt: M4.2 bei NORTHERN ITALY, 6 km tief, um 21:03 Uhr"
+            "HuggingButTheresAnEarthquake Die Erde hat gewackelt: M4.2 in Norditalien, 6 km tief, um 21:03 Uhr"
         );
+    }
+
+    #[test]
+    fn mapped_regions_use_grammatical_german_phrases() {
+        let cases = [
+            ("GERMANY", "in Deutschland"),
+            ("CZECH REPUBLIC", "in Tschechien"),
+            ("SWITZERLAND", "in der Schweiz"),
+            ("FRANCE", "in Frankreich"),
+            (
+                "FRANCE-GERMANY BORDER REGION",
+                "im Grenzgebiet Frankreich–Deutschland",
+            ),
+            ("AUSTRIA", "in Österreich"),
+            ("THE NETHERLANDS", "in den Niederlanden"),
+            ("AUSTRIA REGION", "in der Region Österreich"),
+            ("BELGIUM", "in Belgien"),
+            ("LIECHTENSTEIN", "in Liechtenstein"),
+            ("LUXEMBOURG", "in Luxemburg"),
+            ("BALTIC SEA", "in der Ostsee"),
+            ("POLAND", "in Polen"),
+            ("NORTH SEA", "in der Nordsee"),
+            ("NORTHERN ITALY", "in Norditalien"),
+            ("DENMARK", "in Dänemark"),
+            ("SWEDEN", "in Schweden"),
+        ];
+
+        for (raw, expected) in cases {
+            assert_eq!(region_phrase(raw), expected, "region: {raw}");
+        }
+    }
+
+    #[test]
+    fn region_lookup_trims_and_ignores_case() {
+        assert_eq!(region_phrase(" \t germany \n"), "in Deutschland");
+        assert_eq!(region_phrase("france   "), "in Frankreich");
+    }
+
+    #[test]
+    fn unknown_region_uses_trimmed_raw_name() {
+        assert_eq!(region_phrase("  SOMEWHERE NEW  "), "in SOMEWHERE NEW");
     }
 
     #[test]
