@@ -91,24 +91,30 @@ _Avoid_: F1 command, schedule
 
 **Memory**:
 The durable, curated record the bot keeps of itself and its chat — the Soul, the
-Lore, and one Character Sheet per user. Only the Dreamer rewrites it, and it is
-meant to last indefinitely. Scratch and Transcripts are *not* Memory.
+Lore, and one Character Sheet per user. The Dreamer may rewrite all of it; in a
+Turn only Aurora writes it, and only within the speaker's Role (see Soul, Lore,
+Character Sheet). Grok never writes. Memory is meant to last indefinitely. Scratch and Transcripts are *not* Memory.
 _Avoid_: durable memory (redundant), long-term memory, memories.
 
 **Soul**:
 The bot's self-image: who it is, how it speaks, what it cares about. One per bot,
-and the most stable thing in the tree.
+and the most stable thing in the tree. Written only by the Dreamer; no Turn,
+whatever the speaker's Role, can write it.
 _Avoid_: persona, identity, system prompt (the Soul is injected into the prompt;
 it is not the prompt).
 
 **Lore**:
 The durable culture of the chat as a whole — running bits, dynamics, shared
-history. What belongs to no single user.
+history. What belongs to no single user. The Dreamer writes it; in an Aurora
+Turn a Moderator or the broadcaster may too, a regular may not.
 _Avoid_: history, context, chat memory.
 
 **Character Sheet**:
 One user's durable Memory: their interests, bits, and relationships to other
-regulars. What remains after a day's events are drained into it.
+regulars. What remains after a day's events are drained into it. The Dreamer
+writes any sheet; in an Aurora Turn a Moderator or the broadcaster may write any
+sheet, a regular only their own. The id must be the speaker's, in the Turn's
+chat history, or an existing sheet.
 _Avoid_: user file, profile, user memory, user note.
 
 **Forget**:
@@ -119,7 +125,9 @@ _Avoid_: reset, clear, wipe.
 
 **Scratch**:
 A short-lived note the bot writes for itself mid-conversation — a running quiz, a
-reminder, a pinned request. Not Memory: the Dreamer drains whatever is worth
+reminder, a pinned request. Aurora writes it in a Turn (Grok cannot): the
+Dreamer, Moderators and the broadcaster write or delete any note, a regular only notes they
+created. Not Memory: the Dreamer drains whatever is worth
 keeping and deletes the rest.
 _Avoid_: state (reserved for the persisted flight record), volatile state,
 working memory, cache.
