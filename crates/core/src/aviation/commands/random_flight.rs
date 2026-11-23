@@ -15,6 +15,29 @@ use crate::util::parse_flight_duration;
 
 pub struct RandomFlightCommand;
 
+/// Bounds the blocking generator so one pathological request cannot hold an
+/// execution slot.
+pub(crate) const GENERATION_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Outcome of waiting for a blocking generation task under a deadline.
+pub(crate) enum Generation<T> {
+    Done(T),
+    /// The task ended without sending a result (e.g. it panicked).
+    Failed(tokio::sync::oneshot::error::RecvError),
+    TimedOut,
+}
+
+pub(crate) async fn await_generation<T>(
+    receiver: tokio::sync::oneshot::Receiver<T>,
+    deadline: std::time::Duration,
+) -> Generation<T> {
+    match tokio::time::timeout(deadline, receiver).await {
+        Ok(Ok(value)) => Generation::Done(value),
+        Ok(Err(e)) => Generation::Failed(e),
+        Err(_) => Generation::TimedOut,
+    }
+}
+
 #[async_trait]
 impl<T, L> Command<T, L> for RandomFlightCommand
 where
@@ -111,18 +134,36 @@ where
     // the active manager task group, which owns and joins this blocking child.
     let group = CommandTaskGroup::current()
         .ok_or_else(|| eyre::eyre!("flight command has no active command task group"))?;
-    let generated = group
-        .spawn_blocking(move || {
-            random_flight::generate_flight_plan(&random_flight::FlightRequest {
-                aircraft,
-                block_time: duration,
-                departure: None,
-                direction: None,
-            })
-        })?
-        .await
-        .map_err(eyre::Report::new);
-    let result = generated.wrap_err("Flight plan generation task ended unexpectedly")?;
+    let receiver = group.spawn_blocking(move || {
+        random_flight::generate_flight_plan(&random_flight::FlightRequest {
+            aircraft,
+            block_time: duration,
+            departure: None,
+            direction: None,
+        })
+    })?;
+    let result = match await_generation(receiver, GENERATION_DEADLINE).await {
+        Generation::Done(result) => result,
+        Generation::Failed(e) => {
+            return Err(eyre::Report::new(e))
+                .wrap_err("Flight plan generation task ended unexpectedly");
+        }
+        Generation::TimedOut => {
+            debug!("Flight plan generation hit its deadline");
+            cancellation.check()?;
+            sender
+                .reply(
+                    privmsg,
+                    error_reply(
+                        settings,
+                        ReplyEmoteCategory::Invalid,
+                        "Hab in 10 Sekunden keine Route gefunden, versuch's nochmal",
+                    ),
+                )
+                .await;
+            return Ok(());
+        }
+    };
     cancellation.check()?;
 
     let fp = match result {
@@ -176,4 +217,33 @@ where
     sender.reply(privmsg, response).await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test(start_paused = true)]
+    async fn silent_sender_times_out() {
+        let (_tx, rx) = tokio::sync::oneshot::channel::<u8>();
+        let out = await_generation(rx, Duration::from_millis(50)).await;
+        assert!(matches!(out, Generation::TimedOut));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn sent_value_is_returned() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<u8>();
+        tx.send(7).unwrap();
+        let out = await_generation(rx, Duration::from_millis(50)).await;
+        assert!(matches!(out, Generation::Done(7)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropped_sender_is_failed() {
+        let (tx, rx) = tokio::sync::oneshot::channel::<u8>();
+        drop(tx);
+        let out = await_generation(rx, Duration::from_millis(50)).await;
+        assert!(matches!(out, Generation::Failed(_)));
+    }
 }

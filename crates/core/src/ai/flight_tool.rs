@@ -220,7 +220,17 @@ pub async fn execute_plan_flight(
             return err(call, json!({"error": "task_group_closed"}));
         }
     };
-    let result = receiver.await;
+    use crate::aviation::commands::random_flight::{
+        GENERATION_DEADLINE, Generation, await_generation,
+    };
+    let result = match await_generation(receiver, GENERATION_DEADLINE).await {
+        Generation::TimedOut => {
+            tracing::debug!("plan_flight: generation hit its deadline");
+            return err(call, json!({"error": "timeout"}));
+        }
+        Generation::Done(result) => Ok(result),
+        Generation::Failed(e) => Err(e),
+    };
 
     let fp = match result {
         Ok(Ok(fp)) => fp,
