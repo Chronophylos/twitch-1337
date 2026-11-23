@@ -13,8 +13,9 @@ far more of the night than a verbatim dump can.
 
 **Recap** is a shared, German, third-person paraphrase of chat that has
 aged out of **Recent Chat**. Recent Chat shrinks to a short verbatim
-tail. Recap notes live at the end of the system message so Gemini can
-still cache the Memory prefix for a given injected user-set.
+tail. Recap notes live in the user message, fenced, just before Recent
+Chat (#741): they paraphrase viewer chat, so they never reach the
+system message.
 
 ## Non-goals
 
@@ -49,15 +50,12 @@ System message, in order:
 2. Tool appendices (stable per mode)
 3. Durable Memory, or Grok’s paths-only manifest (stable for a given
    injected user-set)
-4. Recap notes, oldest first, invocation channel then the other
-   (`## Recap (#login)`). Only the newest `max_notes` persisted notes.
-   The in-flight batch is not here. Omit a channel's heading when that
-   log is empty.
 
-The cache prefix is (1)–(3). Recap is a suffix: finished notes are
-append-only, so adding a note still lets Gemini cache the prefix and
-every earlier note. Coarsening rewrites the oldest notes and misses
-cache for that suffix only.
+The cache prefix is the whole system message. Recap used to be a
+system suffix after (3); #741 moved it out because viewers steer what
+the tiny model paraphrases, so its notes are untrusted and do not
+belong in the highest-trust slot. The cache loss on the Recap part is
+accepted, and there is no system copy.
 
 Sheet membership lives in (3) and already moves when the chat window
 moves. Recap-stamped identities are a third, capped tier (see Character
@@ -68,22 +66,29 @@ User message, in order:
 1. Relevant-emotes block (scored from the **raw invocation-channel
    buffer**, not the rendered tail — see Consumers)
 2. Scratch fences
-3. Recent Chat, invocation channel then the other (`## Recent chat
+3. Recap notes: a `## Recap` heading, one line framing them as
+   chat-derived data and never instructions (German for Aurora,
+   English for Grok), then the newest `max_notes` persisted notes,
+   oldest first, inside one nonce fence
+   (`<<<FILE kind=recap channel=<login> nonce=…>>>`, the same
+   `fence_block` Memory uses). Fence sentinels in a note body are
+   defused with `neutralize_sentinels` rather than rejected, so one
+   hostile note can neither close the fence nor blank the others. The
+   in-flight batch is not here. Omitted entirely when the log is empty.
+4. Recent Chat, invocation channel then the other (`## Recent chat
    (#login)`): last **N** lines that are not the speaking agent’s own,
    chronological, `[HH:MM] Name: text` as today, plus that agent’s
    **single** latest own reply if it is not already in those N. No
    other own lines.
-4. `ai_instructions.md`
-5. The turn instruction
+5. `ai_instructions.md`
+6. The turn instruction
 
 Grok and Aurora share Recap. They differ only in whose latest own
 reply is kept, and in the system head / manifest, as today.
 
-`build_chat_turn_messages` grows a Recap suffix on `SystemParts`. The
-June 2026 invariant tightens to: volatile tail stays out of the
-**prefix** (head + appendices + Memory). Recap may change turn to turn.
-Tests assert prefix identity given the same Memory blob, not
-full-system identity.
+The preset's System context has no `inject.recap` key, so a template
+that moves the `recap` block back into a System slot fails to render
+instead of leaking chat-derived text into the system message.
 
 The 12 KiB / 3 KiB Recent Chat render caps go away. Prompt size on the
 happy path is N verbatim lines + at most `max_notes` trimmed Recap
@@ -228,7 +233,7 @@ beyond the single latest own reply.
 ### Off and parked
 
 **Off** (no `recap_profile`, or blank): no batcher work, no Recap in the
-system message, prompt is N + one own line, older raw stays in the
+prompt, prompt is N + one own line, older raw stays in the
 buffer for `!news` and emote scoring. No stretch. The batcher issues
 zero completions.
 
@@ -340,7 +345,11 @@ Parked state is visible on the card (not a setting).
 No live-LLM tests for paraphrase quality. Mock the Recap client.
 
 - **Prefix:** same Memory blob, different tails → byte-identical
-  system prefix (head + appendices + Memory). Recap sits after it.
+  system message (head + appendices + Memory). Recap is not in it.
+- **Placement:** for Aurora and Grok, no System message carries Recap
+  text; the User message carries it fenced, framed as data, before
+  Recent Chat. A note forging `<<<ENDFILE`/`<<<FILE` or saying "ignore
+  previous instructions" stays inside the one fence.
 - **Own line:** user message contains at most one `(self)` line for
   the current agent; older own lines are absent. Grok’s tail keeps
   Grok’s last line, not Aurora’s.
@@ -357,7 +366,7 @@ No live-LLM tests for paraphrase quality. Mock the Recap client.
   the front.
 - **Batch format:** a Grok line in the paraphraser input is tagged
   `Grok`, not `(self)` and not a bare viewer name.
-- **Off:** no `recap_profile` → no Recap in system, tail is N + one own
+- **Off:** no `recap_profile` → no Recap in the prompt, tail is N + one own
   line, batcher issues **zero** completions, older raw still in the
   buffer.
 - **Parked:** five failures → no further completions, existing notes
@@ -381,7 +390,7 @@ No live-LLM tests for paraphrase quality. Mock the Recap client.
 - `crates/core/src/ai/recap.rs` — log, persist, eligibility, resume
   cursor, quote strip, coarsen, park
 - Recap batcher task from `spawn.rs` / commands handler
-- `inject.rs` — Recap suffix, tail renderer, sheet packing order
+- `inject.rs` — fenced Recap block, tail renderer, sheet packing order
 - `settings` + History card
 - `crates/data/assets/prompts/recap.md` + `docs/ai-prompts.md`
 - Drop `RECENT_CHAT_PRIMARY_BYTES` / `RECENT_CHAT_AI_CHANNEL_BYTES`

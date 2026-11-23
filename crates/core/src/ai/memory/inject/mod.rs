@@ -2,7 +2,7 @@
 //! split by responsibility:
 //! `fence` (FILE fence rendering + nonce),
 //! `recent_chat` (rolling chat rendering), `aurora` (Aurora turn context),
-//! `grok` (grok paths-only context), `messages` (recap suffix rendering).
+//! `grok` (grok paths-only context), `messages` (fenced recap rendering).
 
 mod aurora;
 mod fence;

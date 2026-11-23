@@ -317,13 +317,16 @@ impl TurnRunner {
         } else {
             BTreeSet::new()
         };
-        let recap_suffix = if recap_profile_is_set(recap_profile) {
-            if let Some(ref handle) = self.recap {
+        // Recap notes paraphrase viewer chat, so they are untrusted: they go
+        // fenced into the user message next to recent chat, never the system
+        // message.
+        let recap_block = if recap_profile_is_set(recap_profile) {
+            if let Some(handle) = &self.recap {
                 let channel_login = cc
                     .map(|c| c.primary_login.as_str())
                     .unwrap_or(input.channel_login.as_str());
                 handle
-                    .render_suffix(channel_login, recap.max_notes as usize)
+                    .render_fenced(channel_login, recap.max_notes as usize, &self.prompt_nonce)
                     .await
             } else {
                 String::new()
@@ -332,7 +335,7 @@ impl TurnRunner {
             String::new()
         };
         // Memory (SOUL/LORE/users) goes in the system message so the
-        // prompt cache survives across turns. Scratch and recent chat
+        // prompt cache survives across turns. Scratch, recap and recent chat
         // go in the user message: any scratch write or chat line would otherwise
         // invalidate the system-message cache every turn.
         let build_opts = inject::BuildOpts {
@@ -444,7 +447,7 @@ impl TurnRunner {
             },
             inject: crate::ai::preset::Inject {
                 memory: &memory,
-                recap: &recap_suffix,
+                recap: &recap_block,
                 scratch: &scratch,
                 recent_chat: &recent_chat,
                 emote_block: "",
@@ -885,7 +888,7 @@ mod recap_wiring_tests {
     }
 
     /// Parking stops new notes from being written; it must not hide the notes
-    /// already on file. The preset injects whatever `render_suffix` returns, so
+    /// already on file. The preset injects whatever `render_fenced` returns, so
     /// that is where the behaviour lives.
     #[tokio::test]
     async fn parked_recap_still_renders_existing_notes() {
@@ -906,9 +909,9 @@ mod recap_wiring_tests {
 
         assert!(!recap_enabled_for_profile(Some("tiny"), true));
         assert!(recap_profile_is_set(Some("tiny")));
-        let suffix = handle.render_suffix("main", 3).await;
-        assert!(suffix.contains("## Recap"));
-        assert!(suffix.contains("existing recap note"));
+        let block = handle.render_fenced("main", 3, "n0nce").await;
+        assert!(block.contains("kind=recap channel=main"));
+        assert!(block.contains("existing recap note"));
     }
 }
 

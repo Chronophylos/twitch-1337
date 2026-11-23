@@ -262,13 +262,19 @@ impl RecapHandle {
         self.inner.lock().await.primary_through_seq
     }
 
-    /// Recap section for `channel_login`, built from the newest `max_notes`
-    /// notes.
-    pub async fn render_suffix(&self, channel_login: &str, max_notes: usize) -> String {
+    /// Fenced Recap block for `channel_login`, built from the newest
+    /// `max_notes` notes. Empty when there are none.
+    pub async fn render_fenced(
+        &self,
+        channel_login: &str,
+        max_notes: usize,
+        nonce: &str,
+    ) -> String {
         let guard = self.inner.lock().await;
         render_recap_section(
             channel_login,
             injected_notes(&guard.file.primary, max_notes),
+            nonce,
         )
     }
 

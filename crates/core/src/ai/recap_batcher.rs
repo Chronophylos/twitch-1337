@@ -829,7 +829,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn render_suffix_while_batcher_on_llm_does_not_block() {
+    async fn render_fenced_while_batcher_on_llm_does_not_block() {
         use crate::ai::recap::RecapHandle;
 
         let dir = tempfile::tempdir().unwrap();
@@ -865,7 +865,7 @@ mod tests {
         });
 
         let started = Instant::now();
-        let suffix = handle.render_suffix("main", 8).await;
+        let suffix = handle.render_fenced("main", 8, "n0nce").await;
         assert!(started.elapsed() < Duration::from_millis(100));
         assert!(suffix.contains("live"));
         tick.await.unwrap();
