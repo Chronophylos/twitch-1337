@@ -10,13 +10,11 @@ use twitch_irc::message::ServerMessage;
 use super::Inbound;
 use crate::ai::memory::transcript::TranscriptWriter;
 use crate::lifecycle::Lifecycle;
-use crate::twitch::echo::EchoGuard;
 
 pub async fn run_transcript_tap(
     mut rx: broadcast::Receiver<Inbound>,
     writer: Arc<TranscriptWriter>,
     channel: String,
-    echo: Arc<EchoGuard>,
     lifecycle: Lifecycle,
 ) {
     loop {
@@ -39,11 +37,7 @@ pub async fn run_transcript_tap(
         let ServerMessage::Privmsg(p) = &inbound.msg else {
             continue;
         };
-        if p.channel_login != channel
-            || echo
-                .is_echo(&p.sender.id, &p.sender.login, &p.message_id)
-                .await
-        {
+        if p.channel_login != channel || !inbound.origin().await.records_transcript() {
             continue;
         }
         async {

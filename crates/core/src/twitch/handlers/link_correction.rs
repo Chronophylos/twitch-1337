@@ -22,7 +22,7 @@ use crate::{
     lifecycle::Lifecycle,
     settings::{LinkCorrectionSettings, SettingsHandle},
     spoiler::url::{REDDIT_HOSTS, reddit_post},
-    twitch::{ChatSender, echo::EchoGuard, handlers::Inbound},
+    twitch::{ChatSender, handlers::Inbound},
     util::http::SendTraced as _,
 };
 
@@ -355,7 +355,6 @@ pub async fn run_link_correction_handler<T, L>(
     mut broadcast_rx: broadcast::Receiver<Inbound>,
     sender: Arc<ChatSender<T, L>>,
     channel: String,
-    echo: Arc<EchoGuard>,
     settings: SettingsHandle,
     lifecycle: Lifecycle,
 ) where
@@ -398,7 +397,7 @@ pub async fn run_link_correction_handler<T, L>(
         let ServerMessage::Privmsg(p) = &inbound.msg else {
             continue;
         };
-        if p.channel_login != channel || echo.is_mouth(p.sender.id.as_str(), &p.sender.login) {
+        if p.channel_login != channel || !inbound.origin().await.triggers_link_correction() {
             continue;
         }
         let snapshot = settings.load();

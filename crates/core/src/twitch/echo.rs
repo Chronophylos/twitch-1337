@@ -41,6 +41,70 @@ impl MouthIdentities {
     }
 }
 
+/// Who an inbound chat message came from, as far as echo suppression is
+/// concerned. Each consumer gets it from `Inbound::origin` at its point of
+/// use ([`EchoGuard::classify`]).
+///
+/// The policy lives in the methods below, one per consumer:
+///
+/// | Consumer | Viewer | PendingEcho | Mouth |
+/// |---|---|---|---|
+/// | chat history, transcript | yes | no | no |
+/// | command dispatch | yes | no | no |
+/// | 1337 tracker, link correction | yes | yes | no |
+/// | emote usage | recorded | recorded | recorded, flagged |
+///
+/// The two "no" kinds differ on purpose. History, transcript and commands
+/// must never re-read our own output, so a pending Helix id also counts.
+/// The tracker, link correction and emote flagging judge the *speaker*, so
+/// they use identity only and a stale pending id can never filter a viewer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChatOrigin {
+    /// Anyone who is not one of the bot's AI mouths, including every
+    /// non-PRIVMSG message.
+    Viewer,
+    /// One of the bot's AI mouth accounts, by login or user id.
+    Mouth,
+    /// Not a known mouth identity, but the message id matches a reply a
+    /// mouth just sent (the identity backstop missed).
+    PendingEcho,
+}
+
+impl ChatOrigin {
+    fn is_own_output(self) -> bool {
+        !matches!(self, Self::Viewer)
+    }
+
+    fn is_mouth(self) -> bool {
+        matches!(self, Self::Mouth)
+    }
+
+    pub fn records_history(self) -> bool {
+        !self.is_own_output()
+    }
+
+    pub fn records_transcript(self) -> bool {
+        !self.is_own_output()
+    }
+
+    pub fn dispatches_commands(self) -> bool {
+        !self.is_own_output()
+    }
+
+    pub fn counts_for_1337(self) -> bool {
+        !self.is_mouth()
+    }
+
+    pub fn triggers_link_correction(self) -> bool {
+        !self.is_mouth()
+    }
+
+    /// Mouth emote usage is stored but flagged, like other bots' usage.
+    pub fn flags_emote_usage(self) -> bool {
+        self.is_mouth()
+    }
+}
+
 struct PendingIds {
     order: VecDeque<(Instant, String)>,
     set: HashSet<String>,
@@ -70,7 +134,7 @@ impl EchoGuard {
         Self::new(MouthIdentities::default())
     }
 
-    /// Records an outgoing message id as pending so a later `is_echo` call
+    /// Records an outgoing message id as pending so a later [`Self::classify`]
     /// recognizes it coming back over the broadcast channel. Prunes
     /// TTL-expired entries and enforces the hard cap before inserting.
     pub async fn register(&self, message_id: &str) {
@@ -87,25 +151,32 @@ impl EchoGuard {
         }
     }
 
-    /// True if `sender_id`/`sender_login` is a known mouth identity, or
-    /// `message_id` is a pending outgoing message. Peeks the pending set —
-    /// does NOT remove on a hit, since two independent broadcast consumers
-    /// (the transcript tap and the command dispatcher) both check the same
-    /// message id and both need to see it. TTL expiry is the only removal
-    /// path.
-    pub async fn is_echo(&self, sender_id: &str, sender_login: &str, message_id: &str) -> bool {
+    /// Classify one inbound chat message. Consumers reach this through
+    /// `Inbound::origin` and ask the result's named eligibilities instead of
+    /// combining identity and pending-id checks themselves.
+    ///
+    /// Identity wins over the pending id. The pending set is peeked, not
+    /// drained: TTL expiry is the only removal path.
+    pub async fn classify(
+        &self,
+        sender_id: &str,
+        sender_login: &str,
+        message_id: &str,
+    ) -> ChatOrigin {
         if self.is_mouth(sender_id, sender_login) {
-            return true;
+            return ChatOrigin::Mouth;
         }
         let mut pending = self.pending.lock().await;
         prune_expired(&mut pending, Instant::now());
-        pending.set.contains(message_id)
+        if pending.set.contains(message_id) {
+            ChatOrigin::PendingEcho
+        } else {
+            ChatOrigin::Viewer
+        }
     }
 
-    /// Identity-only check (no pending-id lookup), for filters that must
-    /// only ever match known mouths — commands, the 1337 tracker, emotes —
-    /// as opposed to `is_echo`'s broader "don't reprocess our own text"
-    /// backstop.
+    /// Identity-only check (no pending-id lookup): is this sender one of the
+    /// bot's AI mouth accounts?
     pub fn is_mouth(&self, sender_id: &str, sender_login: &str) -> bool {
         self.identities.user_ids.contains(sender_id)
             || self
@@ -153,16 +224,26 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn pending_id_is_echo_but_not_removed_on_peek() {
+    async fn pending_id_is_classified_as_echo_and_not_removed_on_peek() {
         let guard = EchoGuard::disabled();
         guard.register("mid1").await;
-        // Two independent consumers both see it (peek, not take):
-        assert!(guard.is_echo("999", "someone", "mid1").await);
-        assert!(guard.is_echo("999", "someone", "mid1").await);
+        // Peek, not take: a second classification still sees it.
+        assert_eq!(
+            guard.classify("999", "someone", "mid1").await,
+            ChatOrigin::PendingEcho
+        );
+        assert_eq!(
+            guard.classify("999", "someone", "mid1").await,
+            ChatOrigin::PendingEcho
+        );
+        assert_eq!(
+            guard.classify("999", "someone", "other").await,
+            ChatOrigin::Viewer
+        );
     }
 
     #[tokio::test]
-    async fn mouth_identity_is_backstop_for_history_and_only_filter_for_commands() {
+    async fn mouth_identity_wins_over_pending_id() {
         let mut ids = MouthIdentities::default();
         ids.register(
             crate::twitch::mouth::Agent::Aurora,
@@ -170,9 +251,44 @@ mod tests {
             Some("42"),
         );
         let guard = EchoGuard::new(ids);
-        assert!(guard.is_echo("42", "aurora_bot", "unknown-id").await); // backstop
-        assert!(guard.is_mouth("42", "whatever"));
-        assert!(!guard.is_mouth("7", "viewer"));
+        guard.register("mid1").await;
+        assert_eq!(
+            guard.classify("42", "whatever", "mid1").await,
+            ChatOrigin::Mouth
+        );
+        assert_eq!(
+            guard.classify("0", "AURORA_BOT", "unknown-id").await,
+            ChatOrigin::Mouth
+        );
+        assert_eq!(
+            guard.classify("7", "viewer", "unknown-id").await,
+            ChatOrigin::Viewer
+        );
+    }
+
+    /// Pins the policy table on [`ChatOrigin`]: own output never reaches
+    /// history, transcript or commands; only a Mouth identity is filtered
+    /// from the 1337 tracker and link correction, and flagged in emote usage.
+    #[test]
+    fn origin_policy_table() {
+        use ChatOrigin::{Mouth, PendingEcho, Viewer};
+        type Row = (ChatOrigin, [bool; 6]);
+        let rows: [Row; 3] = [
+            (Viewer, [true, true, true, true, true, false]),
+            (PendingEcho, [false, false, false, true, true, false]),
+            (Mouth, [false, false, false, false, false, true]),
+        ];
+        for (origin, expected) in rows {
+            let got = [
+                origin.records_history(),
+                origin.records_transcript(),
+                origin.dispatches_commands(),
+                origin.counts_for_1337(),
+                origin.triggers_link_correction(),
+                origin.flags_emote_usage(),
+            ];
+            assert_eq!(got, expected, "{origin:?}");
+        }
     }
 
     #[test]
@@ -201,7 +317,10 @@ mod tests {
     async fn agent_for_does_not_use_pending_message_ids() {
         let guard = EchoGuard::disabled();
         guard.register("mid1").await;
-        assert!(guard.is_echo("999", "someone", "mid1").await);
+        assert_eq!(
+            guard.classify("999", "someone", "mid1").await,
+            ChatOrigin::PendingEcho
+        );
         assert_eq!(guard.agent_for("999", "someone"), None);
     }
 }

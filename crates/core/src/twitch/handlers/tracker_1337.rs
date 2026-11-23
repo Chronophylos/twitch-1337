@@ -33,7 +33,7 @@ use twitch_irc::{
 
 use crate::{
     lifecycle::TaskGroup,
-    twitch::{ChatSender, clanker::is_clanker, echo::EchoGuard, handlers::Inbound},
+    twitch::{ChatSender, clanker::is_clanker, echo::ChatOrigin, handlers::Inbound},
     util::{clock::Clock, resolve_berlin_time, to_berlin},
 };
 
@@ -270,9 +270,8 @@ pub(crate) async fn sleep_until_hms(
 ///
 /// Filters out clanker messages, the bot's own AI mouths, and checks for
 /// keywords "1337" or "DANKIES".
-pub(crate) fn is_valid_1337_message(message: &PrivmsgMessage, echo: &EchoGuard) -> bool {
-    if is_clanker(&message.sender.login) || echo.is_mouth(&message.sender.id, &message.sender.login)
-    {
+pub(crate) fn is_valid_1337_message(message: &PrivmsgMessage, origin: ChatOrigin) -> bool {
+    if is_clanker(&message.sender.login) || !origin.counts_for_1337() {
         return false;
     }
     message.message_text.contains("DANKIES") || message.message_text.contains("1337")
@@ -509,7 +508,6 @@ async fn monitor_1337_messages(
     mut broadcast_rx: broadcast::Receiver<Inbound>,
     total_users: Arc<Mutex<HashMap<String, u64>>>,
     channel: String,
-    echo: Arc<EchoGuard>,
     cancellation: CancellationToken,
 ) -> MonitorCompletion {
     loop {
@@ -537,7 +535,7 @@ async fn monitor_1337_messages(
                     continue;
                 }
 
-                if !is_valid_1337_message(privmsg, &echo) {
+                if !is_valid_1337_message(privmsg, inbound.origin().await) {
                     continue;
                 }
                 async {
@@ -589,7 +587,6 @@ pub async fn run_1337_handler<T, L>(
     hall_of_shame: Arc<tokio::sync::RwLock<HashMap<String, PersonalWorst>>>,
     clock: Arc<dyn Clock>,
     data_dir: std::path::PathBuf,
-    echo: Arc<EchoGuard>,
     lifecycle: crate::lifecycle::Lifecycle,
 ) -> eyre::Result<()>
 where
@@ -626,14 +623,12 @@ where
                     // Subscribe fresh when we wake up - only see messages from now on.
                     let broadcast_rx = broadcast_tx.subscribe();
                     let monitor_channel = channel.clone();
-                    let echo = echo.clone();
 
                     async move {
                         let completion = AssertUnwindSafe(monitor_1337_messages(
                             broadcast_rx,
                             total_users,
                             monitor_channel,
-                            echo,
                             child_cancellation,
                         ))
                         .catch_unwind()
@@ -1021,14 +1016,8 @@ mod tests {
         let child_cancellation = tasks.cancellation_token();
         tasks
             .spawn("message monitor", async move {
-                monitor_1337_messages(
-                    broadcast_rx,
-                    users,
-                    "main".to_owned(),
-                    Arc::new(EchoGuard::disabled()),
-                    child_cancellation,
-                )
-                .await
+                monitor_1337_messages(broadcast_rx, users, "main".to_owned(), child_cancellation)
+                    .await
             })
             .await;
         tokio::task::yield_now().await;
