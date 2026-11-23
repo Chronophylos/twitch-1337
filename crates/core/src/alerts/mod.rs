@@ -371,10 +371,14 @@ async fn poll_feed<E: std::fmt::Display + std::fmt::Debug>(
     max_age: SignedDuration,
     lifecycle: &Lifecycle,
 ) -> PollStep {
-    if lifecycle.is_cancelled() {
-        return PollStep::Cancelled;
-    }
-    let Some(body) = fetch(http, feed, url, max_bytes).await else {
+    // A hung feed must not hold shutdown past the drain window: the request
+    // timeout (15 s) is longer than the supervisor's 5 s cooperative drain.
+    let fetched = tokio::select! {
+        biased;
+        _ = lifecycle.wait_for_cancellation() => return PollStep::Cancelled,
+        fetched = fetch(http, feed, url, max_bytes) => fetched,
+    };
+    let Some(body) = fetched else {
         return PollStep::Complete {
             lines: Vec::new(),
             dirty: false,
@@ -734,5 +738,47 @@ mod tests {
             );
             assert_eq!(seen, VecDeque::from(["kept".to_owned()]));
         }
+    }
+
+    /// A hung upstream must not hold shutdown for the 15 s request timeout,
+    /// which outlasts the supervisor's 5 s drain and Faults the runtime.
+    #[tokio::test]
+    async fn cancellation_interrupts_a_hung_feed_request() {
+        use wiremock::matchers::method;
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        crate::install_crypto_provider();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(30)))
+            .mount(&server)
+            .await;
+        let lifecycle = Lifecycle::new();
+        let stopper = lifecycle.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            stopper.request_graceful_stop();
+        });
+
+        let mut seen = VecDeque::new();
+        let at = "2026-11-16T17:30:00Z".parse::<Timestamp>().unwrap();
+        let step = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            poll_feed(
+                &http_client().expect("client builds"),
+                "f1",
+                &server.uri(),
+                f1::MAX_BODY_BYTES,
+                |body| f1::parse(body, at),
+                &mut seen,
+                at,
+                SignedDuration::from_hours(2),
+                &lifecycle,
+            ),
+        )
+        .await
+        .expect("cancellation must end the in-flight request well inside the drain window");
+        assert_eq!(step, PollStep::Cancelled);
+        assert!(seen.is_empty());
     }
 }
