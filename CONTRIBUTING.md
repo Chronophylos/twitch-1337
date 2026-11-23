@@ -16,9 +16,20 @@ PRs are welcome, from forks or otherwise. For larger changes, opening an issue f
 
 ## Labels
 
-Labels use namespaced prefixes. Every issue and PR should carry at least one `type:` label and, when applicable, one or more `system:` labels. `topic:`, `deps:`, and `status:` stack on top as needed.
+Issues are classified by a GitHub **issue type**, PRs by a `type:` label. Both carry `system:` labels when applicable; `topic:`, `deps:`, and `status:` stack on top as needed.
 
-### `type:` — what kind of change
+### Issue types — what kind of issue
+
+| Type | Use when |
+|---|---|
+| Bug | Functional defect — something is broken |
+| Feature | New feature or capability |
+| Security | Security vulnerability or hardening (supersedes Bug) |
+| Task | Refactor, docs, debt, or any other work; add `topic:refactor`, `topic:docs`, or `topic:debt` to say which |
+
+Pick exactly one type per issue (`gh issue edit <n> --type Bug`). Issues carry no `type:` label.
+
+### `type:` — what kind of change (PRs only)
 
 | Label | Use when |
 |---|---|
@@ -27,8 +38,9 @@ Labels use namespaced prefixes. Every issue and PR should carry at least one `ty
 | `type:refactor` | Structural refactor or code-quality cleanup (no user-visible change) |
 | `type:security` | Security vulnerability or hardening (supersedes `type:bug`) |
 | `type:docs` | Docs-only change |
+| `type:debt` | Accumulated technical debt — cleanup, coverage gaps, sunset |
 
-Pick exactly one `type:` per issue. `type:security` takes precedence over `type:bug` when both apply.
+Pick exactly one `type:` per PR. `type:security` takes precedence over `type:bug` when both apply.
 
 ### `system:` — which subsystem
 
@@ -52,6 +64,9 @@ Stack multiple when a change crosses subsystems.
 | `topic:reliability` | Error handling, fallbacks, timeouts, retries |
 | `topic:perf` | Performance, latency, throughput |
 | `topic:no-deploy` | CI/workflow-only; merge does not rebuild or redeploy the bot |
+| `topic:refactor` | Issue (type Task): structural refactor or code-quality cleanup |
+| `topic:docs` | Issue (type Task): docs-only change |
+| `topic:debt` | Issue (type Task): accumulated technical debt — cleanup, coverage gaps, sunset |
 
 ### `deps:` — Dependabot buckets
 
