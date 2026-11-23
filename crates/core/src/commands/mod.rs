@@ -24,6 +24,7 @@ pub mod ping_trigger;
 pub mod pw;
 pub mod registry;
 pub mod reply_emotes;
+pub mod reupload;
 pub mod servers;
 pub mod spoiler;
 pub mod suspend;
@@ -60,6 +61,11 @@ pub fn aktien_cooldown_duration(s: &crate::settings::Settings) -> Duration {
 /// Per-user cooldown duration for `!bash`.
 pub fn bash_cooldown_duration(s: &crate::settings::Settings) -> Duration {
     Duration::from_secs(s.cooldowns.bash)
+}
+
+/// Per-user cooldown duration for `!reupload`.
+pub fn reupload_cooldown_duration(s: &crate::settings::Settings) -> Duration {
+    Duration::from_secs(s.cooldowns.reupload)
 }
 
 /// Per-user cooldown duration for `!news`, `!tldr`, and `!haiku` (shared bucket).
@@ -124,6 +130,7 @@ pub const RESERVED_PING_NAMES: &[&str] = &[
     "!p",
     "!pb",
     "!pw",
+    "!reupload",
     "!servers",
     "!sb",
     "!sp",

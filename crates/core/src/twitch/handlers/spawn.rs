@@ -110,6 +110,9 @@ where
             services.llm.clone(),
             services.settings.clone(),
         )?),
+        Arc::new(commands::reupload::ReuploadCommand::new(
+            services.settings.clone(),
+        )?),
         Arc::new(commands::bash::BashCommand::new(
             services.settings.clone(),
             services.bash_permits.clone(),

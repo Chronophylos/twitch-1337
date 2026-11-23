@@ -1,0 +1,38 @@
+{# crates/web/templates/settings/cards/reupload.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-reupload" class="settings-card" data-section="reupload">
+  <header class="settings-card-head">
+    <div>
+      <h2>Reupload</h2>
+      <p><code>!reupload &lt;link&gt;</code> rehosts a file some viewers can't open. Images go to imgdrip (max 20 MiB), videos and other files to Litterbox (kept 72 h).</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% call m::bytesize_row("reupload", self.knob("reupload.max_bytes"),
+       "Largest source file the bot downloads. Images are additionally capped at imgdrip's 20 MiB.",
+       current.reupload.max_bytes.as_u64(), defaults.reupload.max_bytes.as_u64()) %}{% endcall %}
+    <div class="settings-row" data-section="reupload">
+      {% call m::row_head(self.knob("reupload.expires_days").label(), "How long imgdrip keeps an uploaded image.", "reupload.expires_days") %}{% endcall %}
+      <div class="row-control-cell">
+        <select id="reupload.expires_days" name="reupload.expires_days" data-key="reupload.expires_days" data-default="{{ defaults.reupload.expires_days }}">
+          <option value="1"{% if current.reupload.expires_days == 1 %} selected{% endif %}>1 day</option>
+          <option value="7"{% if current.reupload.expires_days == 7 %} selected{% endif %}>7 days</option>
+          <option value="30"{% if current.reupload.expires_days == 30 %} selected{% endif %}>30 days</option>
+          <option value="90"{% if current.reupload.expires_days == 90 %} selected{% endif %}>90 days</option>
+          <option value="180"{% if current.reupload.expires_days == 180 %} selected{% endif %}>180 days</option>
+          <option value="365"{% if current.reupload.expires_days == 365 %} selected{% endif %}>365 days</option>
+          <option value="0"{% if current.reupload.expires_days == 0 %} selected{% endif %}>never</option>
+        </select>
+      </div>
+      <div class="row-right">
+        {% call m::restart_badge(self.knob("reupload.expires_days")) %}{% endcall %}
+        {% call m::row_reset("reupload.expires_days") %}{% endcall %}
+        <span class="row-default">default <span class="mono">{{ defaults.reupload.expires_days }} days</span></span>
+      </div>
+    </div>
+  </div>
+</section>

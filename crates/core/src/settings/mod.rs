@@ -27,6 +27,7 @@ pub mod observability;
 pub mod provider;
 pub mod reply_emotes;
 mod resolve;
+pub mod reupload;
 pub mod schedules;
 pub mod spoiler;
 pub mod store;
@@ -66,6 +67,7 @@ pub use observability::{
 };
 pub use provider::{AiProvider, Efforts, ModelListing, ProviderCaps};
 pub use reply_emotes::{ReplyEmotesOverrides, ReplyEmotesSettings};
+pub use reupload::{ReuploadOverrides, ReuploadSettings};
 pub use schedules::Schedule;
 pub use spoiler::{SpoilerOverrides, SpoilerSettings};
 pub use store::{Actor, SettingsStore};
@@ -169,7 +171,7 @@ impl Subscription {
     }
 }
 
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 11;
 
 pub(crate) fn default_schema_version() -> u32 {
     SCHEMA_VERSION
@@ -201,6 +203,8 @@ pub struct Settings {
     pub suspend: SuspendSettings,
     #[knob(nested)]
     pub spoiler: SpoilerSettings,
+    #[knob(nested)]
+    pub reupload: ReuploadSettings,
     #[knob(nested)]
     pub emote_tracker: EmoteTrackerSettings,
     #[knob(nested)]
@@ -250,6 +254,9 @@ pub struct Cooldowns {
     /// Per-user cooldown for `!bash` (`!bash` starts a sandboxed interpreter).
     #[knob(min = 1, max = 3600)]
     pub bash: u64,
+    /// Per-user cooldown for `!reupload` (fetch + upload to a file host).
+    #[knob(min = 1, max = 3600)]
+    pub reupload: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
@@ -307,6 +314,7 @@ impl Settings {
                 ping_membership: 10,
                 help: 10,
                 bash: 20,
+                reupload: 60,
             },
             link_correction: LinkCorrectionSettings::default(),
             reply_emotes: ReplyEmotesSettings::default(),
@@ -321,6 +329,7 @@ impl Settings {
             commands: CommandsSettings::default(),
             suspend: SuspendSettings::default(),
             spoiler: SpoilerSettings::default(),
+            reupload: ReuploadSettings::default(),
             emote_tracker: EmoteTrackerSettings::default(),
             alerts: AlertsSettings::default(),
             web: WebRuntime::default(),

@@ -22,6 +22,7 @@ pub mod ping;
 pub mod pronouns;
 pub mod rdap;
 pub mod repology;
+pub mod reupload;
 pub mod schedule;
 pub mod settings;
 pub mod spoiler;
