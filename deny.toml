@@ -13,6 +13,12 @@ ignore = [
     # unmaintained-only (no CVE) and no upgrade path exists. The bot's own time
     # handling stays on jiff. Drop once bashkit stops pulling chrono.
     { id = "RUSTSEC-2026-0543", reason = "mandatory transitive dep of bashkit" },
+    # cookie private-jar nonce reuse after fork(). 0.18 is bumped to the fixed
+    # 0.18.3; the remaining 0.16.2 comes only from webdriver (fantoccini, an
+    # e2e dev-dependency, latest 0.54 still pins it) and has no patched
+    # release. Test binaries never fork or use PrivateJar. Drop once webdriver
+    # moves to cookie 0.18.
+    { id = "RUSTSEC-2026-0594", reason = "cookie 0.16 via e2e-only webdriver; no fork, no PrivateJar" },
 ]
 
 [licenses]
