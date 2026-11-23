@@ -73,3 +73,9 @@ never carries its meaning.
   calls tools that no longer exist.
 - **n/a** `Role::Dreamer` is unaffected. The Dreamer is the actor; the Ritual is
   the nightly pass it runs in.
+
+Note 2026-11-23: "Only the Dreamer rewrites it" is not what the code enforces.
+Only SOUL.md is Dreamer-only. In an Aurora Turn, Moderators and the broadcaster
+may also write LORE.md and any `users/<id>.md`, and regulars their own sheet
+(`deny_reason_for_write_path` in `crates/core/src/ai/memory/tools.rs`). Grok has
+no write tools. See CONTEXT.md for the current per-file rules.
