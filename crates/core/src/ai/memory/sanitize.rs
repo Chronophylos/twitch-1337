@@ -57,6 +57,14 @@ pub enum SlugError {
 #[error("invalid_body")]
 pub struct BodyError;
 
+/// A Twitch user id as used in `users/<id>.md`: 1–32 ASCII digits. The one
+/// rule for every caller (tools, Dreamer, store, transcript, dashboard), and
+/// the barrier that keeps dot-segments, slashes and percent-encoded bytes out
+/// of memory paths.
+pub fn is_valid_user_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_digit())
+}
+
 pub fn parse_write_path(path: &str) -> Result<WritePath, PathError> {
     if path == "SOUL.md" {
         return Ok(WritePath::Soul);
@@ -66,8 +74,7 @@ pub fn parse_write_path(path: &str) -> Result<WritePath, PathError> {
     }
     if let Some(rest) = path.strip_prefix("users/")
         && let Some(id) = rest.strip_suffix(".md")
-        && !id.is_empty()
-        && id.bytes().all(|b| b.is_ascii_digit())
+        && is_valid_user_id(id)
     {
         return Ok(WritePath::User {
             user_id: id.to_string(),
@@ -263,6 +270,16 @@ pub fn write_path_to_kind(p: WritePath) -> FileKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_id_is_one_to_32_ascii_digits() {
+        assert!(is_valid_user_id("1"));
+        assert!(is_valid_user_id(&"9".repeat(32)));
+        for bad in ["", "abc", "12a", "..", "1/2", "%2e", "١٢", &"9".repeat(33)] {
+            assert!(!is_valid_user_id(bad), "{bad:?}");
+        }
+        assert!(parse_write_path(&format!("users/{}.md", "9".repeat(33))).is_err());
+    }
 
     #[test]
     fn write_path_accepts_canonical() {

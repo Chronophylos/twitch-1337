@@ -20,7 +20,7 @@ use axum::routing::{get, post};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tower_cookies::Cookies;
-use twitch_1337_core::ai::memory::sanitize::parse_links_form;
+use twitch_1337_core::ai::memory::sanitize::{is_valid_user_id, parse_links_form};
 use twitch_1337_core::ai::memory::store::{
     FrontmatterOverride, Mtime, WriteOutcome, validate_scratch_slug,
 };
@@ -299,13 +299,6 @@ fn note_excerpt(body: &str) -> String {
         .unwrap_or("");
     let line = line.strip_prefix("# ").unwrap_or(line);
     line.chars().take(140).collect()
-}
-
-/// `^[0-9]{1,32}$` without a regex crate. Sole barrier between an attacker URL
-/// and `read_kind`, so it must reject dot-segments, slashes, and percent-encoded
-/// byte sequences alike.
-fn is_valid_user_id(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_digit())
 }
 
 const SLUG_VALIDATION_MSG: &str = "must be 1-64 chars, [a-zA-Z0-9._-], not `new`/`delete`, no `..`";
@@ -607,7 +600,7 @@ async fn list_scratch(
             mf.frontmatter
                 .created_by
                 .as_deref()
-                .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                .filter(|s| is_valid_user_id(s))
         })
         .collect();
     let avatars = fetch_avatars(&state, &creator_ids).await;

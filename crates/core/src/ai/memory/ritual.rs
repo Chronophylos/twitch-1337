@@ -213,7 +213,7 @@ fn transcript_user_ids(text: &str) -> BTreeSet<String> {
             // login/message separator.
             let (head, _) = line.get(11..)?.split_once(": ")?;
             let (_, id) = head.rsplit_once('#')?;
-            (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then(|| id.to_string())
+            crate::ai::memory::sanitize::is_valid_user_id(id).then(|| id.to_string())
         })
         .collect()
 }

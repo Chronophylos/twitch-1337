@@ -686,7 +686,7 @@ impl MemoryStore {
     /// Returns `Ok(false)` when no sheet existed. A non-numeric id is
     /// rejected before any filesystem access, so it can't escape `users/`.
     pub async fn forget_user(&self, user_id: &str) -> Result<bool, WriteError> {
-        if user_id.is_empty() || !user_id.bytes().all(|b| b.is_ascii_digit()) {
+        if !crate::ai::memory::sanitize::is_valid_user_id(user_id) {
             return Err(WriteError::Io(eyre!("invalid user id")));
         }
         let rel = FileKind::User {

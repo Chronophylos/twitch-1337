@@ -56,9 +56,10 @@ impl TranscriptWriter {
         let safe_text = text.replace(['\n', '\r'], " ");
         // Ids come from Twitch tags and are numeric, but a transport that ever
         // hands us something else must not be able to break the line format.
-        let id_suffix = match user_id.filter(|id| id.bytes().all(|b| b.is_ascii_digit())) {
-            Some(id) if !id.is_empty() => format!("#{id}"),
-            _ => String::new(),
+        let id_suffix = match user_id.filter(|id| crate::ai::memory::sanitize::is_valid_user_id(id))
+        {
+            Some(id) => format!("#{id}"),
+            None => String::new(),
         };
         let line = format!(
             "{}  {}{}: {}\n",

@@ -139,6 +139,7 @@ async fn invalid_path_params_400() {
     for uri in [
         "/memory/users/..%2Fevil",
         "/memory/users/abc",
+        "/memory/users/123456789012345678901234567890123",
         "/memory/scratch/..",
     ] {
         let res = build_router(state.clone())
