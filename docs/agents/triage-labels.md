@@ -2,7 +2,7 @@
 
 The skills speak in terms of five canonical triage roles. This file maps those roles to the actual label strings used in this repo's issue tracker.
 
-This repo uses a `prefix:value` label taxonomy (`status:`, `type:`, `system:`, `topic:`, `deps:`), so the triage roles live under the existing `status:` prefix.
+This repo uses a `prefix:value` label taxonomy (`status:`, `system:`, `topic:`, `deps:`, plus `type:` on PRs only), so the triage roles live under the existing `status:` prefix. An issue's category is its GitHub issue type (Bug, Feature, Task, Security), set with `gh issue edit <n> --type <Type>` — see `CONTRIBUTING.md` § Labels for the mapping.
 
 | Canonical role    | Label in our tracker     | Meaning                                  |
 | ----------------- | ------------------------ | ---------------------------------------- |

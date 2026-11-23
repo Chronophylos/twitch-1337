@@ -9,6 +9,7 @@ Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all op
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
 - **Comment on an issue**: `gh issue comment <number> --body "..."`
 - **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
+- **Set the issue type**: `gh issue edit <number> --type Bug` (one of Bug, Feature, Task, Security). Issues get a type, never a `type:` label; Task issues add `topic:refactor` / `topic:docs` / `topic:debt` when one applies. PRs keep `type:` labels. See `CONTRIBUTING.md` § Labels.
 - **Close**: `gh issue close <number> --comment "..."`
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone. `origin` is `Chronophylos/twitch-1337`; a `fork` remote (`derLesh/twitch-1337`) also exists, so pass `--repo Chronophylos/twitch-1337` if `gh` ever resolves the wrong one.

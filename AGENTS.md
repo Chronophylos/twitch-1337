@@ -522,7 +522,7 @@ Verify static: `ldd target/x86_64-unknown-linux-musl/release/twitch-1337` → "s
 
 ### Issue tracker
 
-Issues live in GitHub Issues (`Chronophylos/twitch-1337`), managed via the `gh` CLI. External PRs are **not** a triage request surface. See `docs/agents/issue-tracker.md`.
+Issues live in GitHub Issues (`Chronophylos/twitch-1337`), managed via the `gh` CLI. External PRs are **not** a triage request surface. An issue's category is its GitHub issue type (Bug, Feature, Task, Security; `gh issue edit <n> --type …`), not a `type:` label — `type:` labels are for PRs only. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
