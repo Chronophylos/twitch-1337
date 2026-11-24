@@ -138,6 +138,10 @@ pub struct FlightEvent {
     /// Knots.
     #[serde(default)]
     pub wind_speed: Option<f64>,
+    /// Volanta hides the ground contact it records when the aircraft spawns
+    /// at the gate (~0 fpm, ~0 G); it is no landing.
+    #[serde(default)]
+    pub is_hidden: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -232,12 +236,14 @@ impl VolantaClient {
         Ok(profile.id.filter(|id| !id.is_empty()))
     }
 
-    /// One flight's detail, `None` when Volanta no longer has it.
+    /// One flight's detail, `None` when Volanta no longer has it. The
+    /// position track is left out: it grows with flight time (1.4 MB
+    /// uncompressed for a 4 h flight) and the bot reads none of it.
     pub async fn flight(&self, flight_id: &str) -> Result<Option<FlightDetail>, VolantaError> {
-        let Some(body) = self
-            .get(self.url(&["Flights", flight_id]), SMALL_MAX_BYTES)
-            .await?
-        else {
+        let mut url = self.url(&["Flights", flight_id]);
+        url.query_pairs_mut()
+            .append_pair("includePositions", "false");
+        let Some(body) = self.get(url, SMALL_MAX_BYTES).await? else {
             return Ok(None);
         };
         serde_json::from_slice(&body)
