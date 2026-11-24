@@ -113,6 +113,11 @@ where
         Arc::new(commands::reupload::ReuploadCommand::new(
             services.settings.clone(),
         )?),
+        Arc::new(aviation::commands::vol::VolCommand::new(
+            services.volanta.clone(),
+            services.settings.clone(),
+            services.clock.clone(),
+        )),
         Arc::new(commands::bash::BashCommand::new(
             services.settings.clone(),
             services.bash_permits.clone(),
@@ -616,6 +621,43 @@ pub(crate) fn spawn_handlers<T, L>(
                     channel,
                     settings,
                     dir,
+                    clk,
+                    task_lifecycle,
+                )
+                .await;
+            },
+        );
+    }
+
+    {
+        let sender = chat_sender.clone();
+        let channel = services.channel.clone();
+        let settings = services.settings.clone();
+        let hub = services.volanta.clone();
+        // Built in the task, like alerts: a build failure ends the task and
+        // the supervisor faults the runtime.
+        let clk = services.clock.clone();
+        let task_lifecycle = lifecycle.clone();
+        register_lifecycle_loop(
+            supervisor,
+            lifecycle.clone(),
+            "volanta handler",
+            async move {
+                let client = match aviation::volanta::client::VolantaClient::new(
+                    aviation::volanta::client::DEFAULT_BASE_URL,
+                ) {
+                    Ok(client) => client,
+                    Err(error) => {
+                        tracing::error!(?error, "Failed to build Volanta client; handler exiting");
+                        return;
+                    }
+                };
+                aviation::volanta::run_volanta_handler(
+                    sender,
+                    channel,
+                    settings,
+                    hub,
+                    client,
                     clk,
                     task_lifecycle,
                 )

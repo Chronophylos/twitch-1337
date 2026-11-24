@@ -118,7 +118,10 @@ const NAV: &[NavGroup] = &[
     NavGroup {
         id: "flight_tracking",
         label: "Flight Tracking",
-        items: &[item("aviationstack", "aviationstack", "Aviationstack")],
+        items: &[
+            item("aviationstack", "aviationstack", "Aviationstack"),
+            item("volanta", "volanta", "Volanta"),
+        ],
     },
     NavGroup {
         id: "alerts",

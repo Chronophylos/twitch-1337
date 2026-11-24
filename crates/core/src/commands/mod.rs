@@ -145,6 +145,7 @@ pub const RESERVED_PING_NAMES: &[&str] = &[
     "!untrack",
     "!up",
     "!v",
+    "!vol",
 ];
 
 /// True if `name` — an already-lowercased ping name, no `!` — is a built-in

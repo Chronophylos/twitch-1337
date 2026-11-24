@@ -46,6 +46,26 @@ impl Settings {
                 message: "must be one of 1, 7, 30, 90, 180, 365 or 0 (never)".into(),
             });
         }
+        if self.volanta.pilots.len() > super::volanta::MAX_PILOTS {
+            errs.push(FieldError {
+                field: "volanta.pilots".into(),
+                message: format!("at most {} pilots", super::volanta::MAX_PILOTS),
+            });
+        }
+        let mut seen_pilots = std::collections::HashSet::new();
+        for (idx, name) in self.volanta.pilots.iter().enumerate() {
+            if !super::volanta::is_valid_username(name) {
+                errs.push(FieldError {
+                    field: format!("volanta.pilots[{idx}]"),
+                    message: "Volanta username: 1-32 letters, digits, _ - .".into(),
+                });
+            } else if !seen_pilots.insert(name.to_ascii_lowercase()) {
+                errs.push(FieldError {
+                    field: format!("volanta.pilots[{idx}]"),
+                    message: "duplicate pilot".into(),
+                });
+            }
+        }
         if let Some(v) = self.twitch.admin_channel.as_deref() {
             let t = v.trim();
             if t.is_empty() {

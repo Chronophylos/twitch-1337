@@ -1,0 +1,30 @@
+{# crates/web/templates/settings/cards/volanta.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-volanta" class="settings-card" data-section="volanta">
+  {# Sentinel: the card was rendered, so an absent checkbox means "off". #}
+  <input type="hidden" name="volanta.__shown" value="1">
+  <header class="settings-card-head">
+    <div>
+      <h2>Volanta</h2>
+      <p>Pilots <code>!vol</code> can show and track. Nothing is posted for a pilot until a viewer runs <code>!vol track &lt;user&gt;</code>. Uses Volanta's undocumented live feed (~500 KB per poll). Changes apply immediately.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% call m::toggle_row("volanta", self.knob("volanta.enabled"),
+       "Poll the Volanta live feed. Off, or an empty watchlist, means no requests at all.",
+       current.volanta.enabled, defaults.volanta.enabled) %}{% endcall %}
+    {% call m::pill_row("volanta", self.knob("volanta.pilots"),
+       "Volanta usernames, at most 20. A pilot who renames keeps matching by user id until the name here is updated.",
+       current.volanta.pilots, defaults.volanta.pilots) %}{% endcall %}
+    {% call m::num_row("volanta", self.knob("volanta.poll_active_secs"),
+       "Poll interval while a watchlisted pilot is flying.",
+       current.volanta.poll_active_secs, defaults.volanta.poll_active_secs, "s") %}{% endcall %}
+    {% call m::num_row("volanta", self.knob("volanta.poll_idle_secs"),
+       "Poll interval while no watchlisted pilot is flying.",
+       current.volanta.poll_idle_secs, defaults.volanta.poll_idle_secs, "s") %}{% endcall %}
+  </div>
+</section>

@@ -227,6 +227,9 @@ pub struct Services {
     /// at once when none is free, and Aurora's `run_bash` tool, which waits
     /// up to `bash.timeout_ms`.
     pub bash_permits: Arc<tokio::sync::Semaphore>,
+    /// Volanta tracks and the last live-feed snapshot, shared by the
+    /// Volanta handler task and `!vol`.
+    pub volanta: Arc<crate::aviation::volanta::VolantaHub>,
 
     /// Recent INFO+ tracing events, filled by the layer `install_tracing`
     /// installs. Read by the dashboard `/logs` page. Tests pass an empty ring.

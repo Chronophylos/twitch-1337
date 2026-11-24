@@ -473,6 +473,9 @@ async fn prepare(
         suspension,
         recap: recap_handle,
         bash_permits,
+        volanta: Arc::new(twitch_1337_core::aviation::volanta::VolantaHub::load(
+            &get_data_dir(),
+        )),
         log_ring,
     };
     // `web_listener` is `Some` exactly when the web server is enabled.

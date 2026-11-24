@@ -27,7 +27,7 @@ use helpers::{
 
 const OWNER_ID: &str = "123";
 
-const PILL_EDITOR_PATHS: [&str; 11] = [
+const PILL_EDITOR_PATHS: [&str; 12] = [
     "twitch.hidden_admins",
     "twitch.viewer_allowlist",
     "twitch.emote_usage_deny_list",
@@ -39,6 +39,7 @@ const PILL_EDITOR_PATHS: [&str; 11] = [
     "reply_emotes.limit",
     "reply_emotes.failure",
     "reply_emotes.unavailable",
+    "volanta.pilots",
 ];
 
 /// Fresh state owned by [`OWNER_ID`]; keep the tempdirs alive for the test.

@@ -673,6 +673,9 @@ impl TestBotBuilder {
                 suspension,
                 recap: recap_handle.clone(),
                 bash_permits: bash_permits.clone(),
+                volanta: Arc::new(twitch_1337::aviation::volanta::VolantaHub::load(
+                    data_dir.path(),
+                )),
                 log_ring: Default::default(),
             };
             let mut web_addr = None;

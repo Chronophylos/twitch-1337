@@ -155,7 +155,18 @@ impl SettingsStore {
     /// exactly as `apply` does — but the snapshot the closure sees cannot be
     /// stale (PR #227 review F4: prevents lost-update races on concurrent
     /// /schedules CRUD POSTs).
+    ///
+    /// The body is boxed here, once: `Settings` is large and lives across
+    /// several awaits, so an unboxed future would trip `large_futures` at
+    /// every caller.
     pub async fn apply_with<F>(&self, mutate: F, actor: Actor) -> Result<Settings, SettingsError>
+    where
+        F: FnOnce(&mut SettingsOverrides),
+    {
+        Box::pin(self.apply_with_inner(mutate, actor)).await
+    }
+
+    async fn apply_with_inner<F>(&self, mutate: F, actor: Actor) -> Result<Settings, SettingsError>
     where
         F: FnOnce(&mut SettingsOverrides),
     {
