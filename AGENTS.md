@@ -306,9 +306,16 @@ the only anonymous source of an active flight). Usernames resolve to Volanta
 user ids from the feed or `Profiles/{name}` (at most hourly per unknown name)
 and the ids are cached in `$DATA_DIR/volanta.ron`, so a renamed pilot keeps
 matching. Nothing is posted for a watchlisted pilot until `!vol track <user>`
-tracks their current flight or arms their next one (24 h); tracking ends at
-completion (landing posted with rate, distance and block time from
-`Flights/{id}`), on `TimedOut`/`Cancelled`, or after 30 min out of the feed
+tracks their current flight or arms their next one (24 h). A full-stop
+touchdown (two on-ground polls under 40 kt, so a touch-and-go never counts)
+is announced right away, graded from the newest touchdown cluster in
+`Flights/{id}` events (`volanta/rating.rs`: the worse of the sink-rate and
+G-force bands, one step worse per bounce within 15 s; crosswind, pitch and
+roll shown but ungraded). No landing event yet means one retry after 60 s,
+then the landing goes out unrated. Completion posts the arrival (distance,
+block time), or the rated landing plus arrival if the feed missed the
+touchdown. Lines carry the flight number, else the callsign. Tracking ends
+at completion, on `TimedOut`/`Cancelled`, or after 30 min out of the feed
 while still active. A 429 pauses all requests for `Retry-After`. Volanta has
 resisted scraping before; expect breakage and keep it fail-soft.
 

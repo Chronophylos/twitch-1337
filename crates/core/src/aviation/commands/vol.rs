@@ -9,6 +9,7 @@ use eyre::Result;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use crate::aviation::volanta::client::LiveFlight;
+use crate::aviation::volanta::state::flight_number;
 use crate::aviation::volanta::{PilotStatus, TrackOutcome, UntrackOutcome, VolantaHub};
 use crate::commands::{
     Command, CommandContext, ExecutionClass,
@@ -93,7 +94,15 @@ fn phase(f: &LiveFlight) -> Option<&'static str> {
     })
 }
 
-/// `EDLP → EDDG, in der Luft, 12300 ft, 210 kt, A320 D-AIZA`.
+/// `name (VY1179)`, or just `name` without a flight number or callsign.
+fn who(name: &str, f: &LiveFlight) -> String {
+    match flight_number(f) {
+        Some(n) => format!("{name} ({n})"),
+        None => name.to_owned(),
+    }
+}
+
+/// `Chris (VY1179): EDLP → EDDG, in der Luft, 12300 ft, 210 kt, A320 D-AIZA`.
 fn live_line(name: &str, f: &LiveFlight) -> String {
     let mut parts = vec![route(f)];
     parts.extend(phase(f).map(str::to_owned));
@@ -112,7 +121,7 @@ fn live_line(name: &str, f: &LiveFlight) -> String {
     if !aircraft.is_empty() {
         parts.push(aircraft.join(" "));
     }
-    format!("{name}: {}", parts.join(", "))
+    format!("{}: {}", who(name, f), parts.join(", "))
 }
 
 #[async_trait]
@@ -174,8 +183,8 @@ where
                         let list: Vec<String> = flying
                             .iter()
                             .map(|(name, f)| match phase(f) {
-                                Some(p) => format!("{name} ({}, {p})", route(f)),
-                                None => format!("{name} ({})", route(f)),
+                                Some(p) => format!("{} ({}, {p})", who(name, f), route(f)),
+                                None => format!("{} ({})", who(name, f), route(f)),
                             })
                             .collect();
                         format!("Unterwegs in Volanta: {}", list.join(" · "))
@@ -294,5 +303,21 @@ mod tests {
             live_line("Chris", &flight),
             "Chris: EDLP → EDDG, am Boden, 700 ft, 12 kt, C172 D-EABC"
         );
+    }
+
+    #[test]
+    fn status_line_names_the_flight_number_else_the_callsign() {
+        let mut flight: LiveFlight = serde_json::from_value(serde_json::json!({
+            "id": "f1", "originIcao": "EDLP", "destinationIcao": "EDDG",
+            "callsign": "VLG8VJ", "flightNumber": "VY1179",
+            "position": {"altitude": 32000, "groundSpeed": 450, "onGround": false}
+        }))
+        .unwrap();
+        assert_eq!(
+            live_line("Chris", &flight),
+            "Chris (VY1179): EDLP → EDDG, in der Luft, 32000 ft, 450 kt"
+        );
+        flight.flight_number = None;
+        assert!(live_line("Chris", &flight).starts_with("Chris (VLG8VJ): "));
     }
 }
