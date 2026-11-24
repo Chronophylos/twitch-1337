@@ -35,6 +35,7 @@ pub mod suspend;
 mod tree;
 pub mod twitch;
 mod validation;
+pub mod volanta;
 pub mod web;
 
 pub use ai::{
@@ -74,6 +75,7 @@ pub use store::{Actor, SettingsStore};
 pub use suspend::{SuspendOverrides, SuspendSettings};
 pub use twitch::{TwitchOverrides, TwitchRuntime};
 pub use validation::ValidationContext;
+pub use volanta::{VolantaOverrides, VolantaSettings};
 pub use web::{WebRuntime, WebRuntimeOverrides};
 
 use std::pin::Pin;
@@ -171,7 +173,7 @@ impl Subscription {
     }
 }
 
-pub const SCHEMA_VERSION: u32 = 11;
+pub const SCHEMA_VERSION: u32 = 12;
 
 pub(crate) fn default_schema_version() -> u32 {
     SCHEMA_VERSION
@@ -205,6 +207,8 @@ pub struct Settings {
     pub spoiler: SpoilerSettings,
     #[knob(nested)]
     pub reupload: ReuploadSettings,
+    #[knob(nested)]
+    pub volanta: VolantaSettings,
     #[knob(nested)]
     pub emote_tracker: EmoteTrackerSettings,
     #[knob(nested)]
@@ -257,6 +261,9 @@ pub struct Cooldowns {
     /// Per-user cooldown for `!reupload` (fetch + upload to a file host).
     #[knob(min = 1, max = 3600)]
     pub reupload: u64,
+    /// Per-user cooldown for `!vol` and its subcommands.
+    #[knob(min = 1, max = 3600)]
+    pub vol: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Knobs)]
@@ -315,6 +322,7 @@ impl Settings {
                 help: 10,
                 bash: 20,
                 reupload: 60,
+                vol: 10,
             },
             link_correction: LinkCorrectionSettings::default(),
             reply_emotes: ReplyEmotesSettings::default(),
@@ -330,6 +338,7 @@ impl Settings {
             suspend: SuspendSettings::default(),
             spoiler: SpoilerSettings::default(),
             reupload: ReuploadSettings::default(),
+            volanta: VolantaSettings::default(),
             emote_tracker: EmoteTrackerSettings::default(),
             alerts: AlertsSettings::default(),
             web: WebRuntime::default(),

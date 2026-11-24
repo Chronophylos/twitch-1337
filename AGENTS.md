@@ -4,7 +4,7 @@ Guide for coding agents working in this repo. Claude Code loads it through `CLAU
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), network lookups (AI tool, RDAP + optional ipinfo), game servers (`!servers [name]`, AMP), a public script sandbox (`!bash <script>`, Bashkit, limits at `/settings → Bash`), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb`), spoiler check (`!spoiler`, decision model), file reupload (`!reupload`, imgdrip + Litterbox), alerts (earthquake + solar flare + Earth-directed CME monitors and F1 Race-Week Reminders, passive, configured at `/settings → Alerts`), version (`!v`), help (`!help [befehl]`, aliases `!commands`/`!hilfe`; one catalog entry, or a link to the public `/commands` page when the dashboard is on; cooldown `cooldowns.help`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`; the catalog's `lookup` is the one trigger/alias resolver). `/commands` additionally documents enabled Aurora Viewer-Facing Tools from the shared availability catalog in `crates/core/src/ai/viewer_tools.rs`; this HTML-only section never changes `/commands.json`, autocomplete, or `!help`.
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), network lookups (AI tool, RDAP + optional ipinfo), game servers (`!servers [name]`, AMP), a public script sandbox (`!bash <script>`, Bashkit, limits at `/settings → Bash`), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb`), spoiler check (`!spoiler`, decision model), file reupload (`!reupload`, imgdrip + Litterbox), Volanta pilot tracking (`!vol`, `!vol track/untrack`, undocumented Volanta feed), alerts (earthquake + solar flare + Earth-directed CME monitors and F1 Race-Week Reminders, passive, configured at `/settings → Alerts`), version (`!v`), help (`!help [befehl]`, aliases `!commands`/`!hilfe`; one catalog entry, or a link to the public `/commands` page when the dashboard is on; cooldown `cooldowns.help`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`; the catalog's `lookup` is the one trigger/alias resolver). `/commands` additionally documents enabled Aurora Viewer-Facing Tools from the shared availability catalog in `crates/core/src/ai/viewer_tools.rs`; this HTML-only section never changes `/commands.json`, autocomplete, or `!help`.
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
@@ -294,6 +294,24 @@ Litterbox. Per-user cooldown `cooldowns.reupload` (default 60 s). All live,
 `/settings → Commands · Reupload`. Host error text is logged, never sent to
 chat.
 
+Volanta pilot tracking (`crates/core/src/aviation/volanta/`) uses Volanta's
+undocumented, keyless web API (`api.volanta.app`), so there is no config.toml
+section. The owner-only `/settings → Flight Tracking · Volanta` card holds
+`volanta.enabled` (default off), the watchlist `volanta.pilots` (Volanta
+usernames, max 20), `volanta.poll_active_secs` (60, while a watchlisted pilot
+is flying) and `volanta.poll_idle_secs` (180); `cooldowns.vol` (10 s) covers
+every `!vol` use. All apply live; disabled or an empty list means no requests.
+One poll fetches the whole live feed (`Flights/Volanta/Slim`, ~500 KB gzipped,
+the only anonymous source of an active flight). Usernames resolve to Volanta
+user ids from the feed or `Profiles/{name}` (at most hourly per unknown name)
+and the ids are cached in `$DATA_DIR/volanta.ron`, so a renamed pilot keeps
+matching. Nothing is posted for a watchlisted pilot until `!vol track <user>`
+tracks their current flight or arms their next one (24 h); tracking ends at
+completion (landing posted with rate, distance and block time from
+`Flights/{id}`), on `TimedOut`/`Cancelled`, or after 30 min out of the feed
+while still active. A 429 pauses all requests for `Retry-After`. Volanta has
+resisted scraping before; expect breakage and keep it fail-soft.
+
 Alert monitors live entirely in `settings.ron` — there is no config.toml
 section and no API key, because all four feeds (EMSC seismicportal.eu, NOAA
 SWPC, CCMC DONKI WSA-ENLIL, and the Jolpica F1 season calendar) are free and
@@ -433,7 +451,7 @@ OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config
 
 ## Data dir
 
-All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `token-aurora.ron`, `token-grok.ron` (per-mouth, only when that mouth is configured), `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `alerts.ron`, `feedback.txt`, `emotes.db` (+ `-wal`/`-shm` when WAL mode) — emote tracker catalog, set audit, usage events, and sibling `emote_meanings` for AI grounding (see ADR-0008). Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/data/assets/prompts/` (`include_str!` via `twitch-1337-data`, single source of truth). The chat turn is assembled from `preset.ron`: an ordered list of named blocks, each with a slot (System/User/Assistant) and a minijinja body that decides its own inclusion. See `docs/ai-prompts.md`.
+All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `token-aurora.ron`, `token-grok.ron` (per-mouth, only when that mouth is configured), `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `volanta.ron` (Volanta username→id cache and tracks), `alerts.ron`, `feedback.txt`, `emotes.db` (+ `-wal`/`-shm` when WAL mode) — emote tracker catalog, set audit, usage events, and sibling `emote_meanings` for AI grounding (see ADR-0008). Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/data/assets/prompts/` (`include_str!` via `twitch-1337-data`, single source of truth). The chat turn is assembled from `preset.ron`: an ordered list of named blocks, each with a slot (System/User/Assistant) and a minijinja body that decides its own inclusion. See `docs/ai-prompts.md`.
 
 Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `flight_tracker.rs`. Files holding credentials (`token*.ron`, `sessions.ron`) use `util::persist::atomic_save_ron_private_async`, which writes them `0600` on unix.
 

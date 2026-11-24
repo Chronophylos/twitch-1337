@@ -26,5 +26,6 @@
     {% call m::num_row("cooldowns", self.knob("cooldowns.help"), "Per-user cooldown for !help (!commands, !hilfe).", current.cooldowns.help, defaults.cooldowns.help, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.bash"), "Per-user cooldown for !bash.", current.cooldowns.bash, defaults.cooldowns.bash, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.reupload"), "Per-user cooldown for !reupload.", current.cooldowns.reupload, defaults.cooldowns.reupload, "s") %}{% endcall %}
+    {% call m::num_row("cooldowns", self.knob("cooldowns.vol"), "Per-user cooldown for !vol and its subcommands.", current.cooldowns.vol, defaults.cooldowns.vol, "s") %}{% endcall %}
   </div>
 </section>

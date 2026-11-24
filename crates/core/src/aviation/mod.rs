@@ -15,6 +15,7 @@ mod formatting;
 mod location;
 pub mod tracker;
 mod types;
+pub mod volanta;
 
 pub use client::{AdsbProvider, AviationClient};
 pub use commands::up::up_command;
