@@ -7,6 +7,7 @@
 //! `!vol` answers from memory and never calls Volanta itself.
 
 pub mod client;
+pub mod rating;
 pub mod state;
 
 use std::collections::{HashMap, HashSet};
@@ -182,7 +183,7 @@ impl VolantaHub {
                 pilot,
                 requested_by: requested_by.to_owned(),
                 tracked_at: now,
-                flight: live.as_ref().map(Progress::from_sample),
+                flight: live.as_ref().map(|f| Progress::from_sample(f, now)),
             },
         );
         self.save(&inner.state).await;
@@ -318,6 +319,15 @@ struct Poller {
     renamed: HashSet<String>,
 }
 
+/// Why a poll fetches `Flights/{id}`.
+#[derive(Debug, Clone, Copy)]
+enum Fetch {
+    /// The flight left the feed: completed, ended, or silent.
+    Settle,
+    /// A touchdown in the feed is due to be rated.
+    Landing,
+}
+
 /// Await `fut` unless the lifecycle is cancelled first.
 async fn or_cancel<F: Future>(lifecycle: &Lifecycle, fut: F) -> Option<F::Output> {
     tokio::select! {
@@ -416,15 +426,25 @@ impl Poller {
 
         let mut events = step.events;
         let mut dirty = step.dirty;
-        for (user_id, flight_id) in step.need_detail {
-            // A 429 anywhere in this poll stops every further request.
+        // Flights that left the feed settle; touchdowns get rated. Both need
+        // `Flights/{id}`, and a 429 anywhere stops every further request.
+        let fetches = step
+            .need_detail
+            .into_iter()
+            .map(|(u, f)| (Fetch::Settle, u, f))
+            .chain(
+                step.need_landing
+                    .into_iter()
+                    .map(|(u, f)| (Fetch::Landing, u, f)),
+            );
+        for (purpose, user_id, flight_id) in fetches {
             if self.blocked(now) {
                 break;
             }
-            let detail = match or_cancel(lifecycle, client.flight(&flight_id)).await? {
+            let fetched = match or_cancel(lifecycle, client.flight(&flight_id)).await? {
                 Ok(detail) => {
                     self.succeeded(Endpoint::Detail);
-                    detail
+                    Some(detail)
                 }
                 Err(error) => {
                     let limited = matches!(error, VolantaError::RateLimited(_));
@@ -432,24 +452,19 @@ impl Poller {
                     if limited {
                         break;
                     }
-                    let (event, changed) = hub.inner.lock().await.state.apply_detail(
-                        &user_id,
-                        &flight_id,
-                        Detail::Unavailable,
-                        now,
-                    );
-                    events.extend(event);
-                    dirty |= changed;
-                    continue;
+                    None
                 }
             };
-            let detail = detail.as_ref().map_or(Detail::Gone, Detail::Found);
-            let (event, changed) = hub
-                .inner
-                .lock()
-                .await
-                .state
-                .apply_detail(&user_id, &flight_id, detail, now);
+            let detail = match &fetched {
+                Some(Some(d)) => Detail::Found(d),
+                Some(None) => Detail::Gone,
+                None => Detail::Unavailable,
+            };
+            let mut inner = hub.inner.lock().await;
+            let (event, changed) = match purpose {
+                Fetch::Settle => inner.state.apply_detail(&user_id, &flight_id, detail, now),
+                Fetch::Landing => inner.state.apply_landing(&user_id, &flight_id, detail, now),
+            };
             events.extend(event);
             dirty |= changed;
         }
@@ -632,15 +647,43 @@ mod tests {
         }
     }
 
+    /// A feed entry; on the ground means taxi speed.
     fn flight_json(id: &str, user_id: &str, name: &str, on_ground: bool) -> serde_json::Value {
+        let ground_speed = if on_ground { 10 } else { 100 };
         json!({
             "id": id, "networkUserId": user_id, "networkUserName": name,
+            "callsign": "VLG8VJ", "flightNumber": "VY1179",
             "originIcao": "EDLP", "destinationIcao": "EDDG",
             "aircraftIcao": "C172", "aircraftRegistration": "D-EABC",
             "unknownField": 1,
-            "position": {"altitude": 3000, "groundSpeed": 100, "onGround": on_ground,
-                         "time": "2026-11-24T12:00:00Z"}
+            "position": {"altitude": 3000, "groundSpeed": ground_speed,
+                         "onGround": on_ground, "time": "2026-11-24T12:00:00Z"}
         })
+    }
+
+    /// `Flights/f1` as Volanta returns it: state, arrival data, and an event
+    /// list mixing sim-rate toggles, state changes and touchdowns.
+    async fn flight_detail(server: &MockServer, state: &str) {
+        Mock::given(method("GET"))
+            .and(path("/api/v1/Flights/f1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "state": state, "destinationIcao": "EDDG", "landingRate": -98.0,
+                "distanceFlownInNauticalMiles": 60.2,
+                "actualRealTimeOffBlocksTime": "2026-11-24T12:00:00",
+                "actualRealTimeOnBlocksTime": "2026-11-24T13:05:00",
+                "events": [
+                    {"rate": 1, "time": "2026-11-24T12:00:01", "id": "e1"},
+                    {"state": false, "pitch": 14.8, "roll": 1.7, "groundSpeed": 141.0,
+                     "heading": 235.3, "altitudeAgl": 358.0, "altitudeAmsl": 1010,
+                     "time": "2026-11-24T12:05:00", "id": "e2"},
+                    {"landingRate": -98.2, "gForce": 1.08, "pitch": 2.7, "roll": -0.3,
+                     "groundSpeed": 89.8, "heading": 251.3, "windHeading": 236.5,
+                     "windSpeed": 12.0, "isHidden": false,
+                     "time": "2026-11-24T13:00:00.4", "id": "e3"}
+                ]
+            })))
+            .mount(server)
+            .await;
     }
 
     async fn feed(server: &MockServer, flights: serde_json::Value) {
@@ -748,27 +791,43 @@ mod tests {
             .unwrap();
         assert_eq!(
             lines,
-            vec!["✈️ EChris ist abgehoben EDLP → EDDG".to_owned()]
+            vec!["✈️ EChris (VY1179) ist abgehoben EDLP → EDDG".to_owned()]
         );
 
-        feed(&server, json!([])).await;
-        Mock::given(method("GET"))
-            .and(path("/api/v1/Flights/f1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "state": "Completed", "destinationIcao": "EDDG", "landingRate": -98.0,
-                "distanceFlownInNauticalMiles": 60.2,
-                "actualRealTimeOffBlocksTime": "2026-11-24T12:00:00",
-                "actualRealTimeOnBlocksTime": "2026-11-24T13:05:00"
-            })))
-            .mount(&server)
+        // Touchdown, slowed to taxi speed over two polls: rated from the
+        // flight's landing event and announced right away.
+        feed(
+            &server,
+            json!([flight_json("f1", "id-chris", "EChris", true)]),
+        )
+        .await;
+        flight_detail(&server, "Active").await;
+        poller
+            .poll(&client, &hub, &cfg, at(60), &Lifecycle::new())
             .await;
+        let lines = poller
+            .poll(&client, &hub, &cfg, at(61), &Lifecycle::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            lines,
+            vec![
+                "🛬 EChris (VY1179) ist gelandet in EDDG: ✨ Sanft (98 fpm, 1.08 G, \
+                 3 kt Seitenwind, Pitch 2.7°, Roll -0.3°)"
+                    .to_owned()
+            ]
+        );
+
+        // Completion only adds the arrival.
+        feed(&server, json!([])).await;
+        flight_detail(&server, "Completed").await;
         let lines = poller
             .poll(&client, &hub, &cfg, at(70), &Lifecycle::new())
             .await
             .unwrap();
         assert_eq!(
             lines,
-            vec!["🛬 EChris ist gelandet in EDDG (98 fpm, 60 NM, Blockzeit 1:05 h)".to_owned()]
+            vec!["🅿️ EChris (VY1179) ist angekommen in EDDG (60 NM, Blockzeit 1:05 h)".to_owned()]
         );
         assert_eq!(
             hub.untrack("echris", "viewer", false).await,

@@ -54,6 +54,9 @@ pub struct LiveFlight {
     pub network_user_name: Option<String>,
     #[serde(default)]
     pub callsign: Option<String>,
+    /// Airline flight number (`VY1179`); `callsign` is the ATC callsign.
+    #[serde(default)]
+    pub flight_number: Option<String>,
     #[serde(default)]
     pub origin_icao: Option<String>,
     #[serde(default)]
@@ -103,6 +106,38 @@ pub struct FlightDetail {
     pub actual_real_time_off_blocks_time: Option<String>,
     #[serde(default)]
     pub actual_real_time_on_blocks_time: Option<String>,
+    /// Recorded events; touchdowns are the ones with a `landingRate`.
+    #[serde(default)]
+    pub events: Vec<FlightEvent>,
+}
+
+/// One entry of a flight's event list. Volanta mixes touchdowns, state
+/// changes and sim-rate toggles without a type field, so every field is
+/// optional and a touchdown is recognised by its `landingRate`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlightEvent {
+    /// UTC wall time without an offset.
+    #[serde(default)]
+    pub time: Option<String>,
+    /// Feet per minute, negative for a descent.
+    #[serde(default)]
+    pub landing_rate: Option<f64>,
+    #[serde(default)]
+    pub g_force: Option<f64>,
+    #[serde(default)]
+    pub pitch: Option<f64>,
+    #[serde(default)]
+    pub roll: Option<f64>,
+    /// Aircraft heading at touchdown, degrees.
+    #[serde(default)]
+    pub heading: Option<f64>,
+    /// Direction the wind blows from, degrees.
+    #[serde(default)]
+    pub wind_heading: Option<f64>,
+    /// Knots.
+    #[serde(default)]
+    pub wind_speed: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
