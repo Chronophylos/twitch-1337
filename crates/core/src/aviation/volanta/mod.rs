@@ -615,7 +615,7 @@ impl Poller {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -662,10 +662,13 @@ mod tests {
     }
 
     /// `Flights/f1` as Volanta returns it: state, arrival data, and an event
-    /// list mixing sim-rate toggles, state changes and touchdowns.
+    /// list mixing sim-rate toggles, state changes and touchdowns. Only
+    /// answers without the position track, which outgrows the body cap on
+    /// long flights.
     async fn flight_detail(server: &MockServer, state: &str) {
         Mock::given(method("GET"))
             .and(path("/api/v1/Flights/f1"))
+            .and(query_param("includePositions", "false"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "state": state, "destinationIcao": "EDDG", "landingRate": -98.0,
                 "distanceFlownInNauticalMiles": 60.2,

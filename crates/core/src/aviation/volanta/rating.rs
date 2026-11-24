@@ -94,7 +94,7 @@ pub fn rate_latest(events: &[FlightEvent], after: Option<jiff::Timestamp>) -> Op
     let after = after.map(|t| jiff::tz::Offset::UTC.to_datetime(t));
     let mut touchdowns: Vec<(DateTime, &FlightEvent)> = events
         .iter()
-        .filter(|e| e.landing_rate.is_some_and(f64::is_finite))
+        .filter(|e| !e.is_hidden && e.landing_rate.is_some_and(f64::is_finite))
         .filter_map(|e| Some((e.time.as_deref()?.parse::<DateTime>().ok()?, e)))
         .filter(|(t, _)| after.is_none_or(|after| *t > after))
         .collect();
@@ -171,6 +171,7 @@ mod tests {
             heading: Some(251.3),
             wind_heading: Some(236.5),
             wind_speed: Some(12.0),
+            is_hidden: false,
         }
     }
 
@@ -224,6 +225,20 @@ mod tests {
         assert_eq!(rate_latest(&events, Some(takeoff)), None);
         let earlier: jiff::Timestamp = "2026-11-23T19:50:00Z".parse().unwrap();
         assert!(rate_latest(&events, Some(earlier)).is_some());
+    }
+
+    /// The gate-spawn ground contact Volanta hides is never a landing.
+    #[test]
+    fn hidden_spawn_contact_is_not_a_landing() {
+        // As recorded at BIKF for flight 01a20dda-6e22-76a1-89f5-0130addbad96.
+        let spawn = FlightEvent {
+            is_hidden: true,
+            ..touchdown("2026-11-24T14:08:30.906628", 0.1297, 0.0002)
+        };
+        assert_eq!(rate_latest(std::slice::from_ref(&spawn), None), None);
+        let landing = touchdown("2026-11-24T18:01:00", -528.0, 1.187);
+        let r = rate_latest(&[spawn, landing], None).unwrap();
+        assert_eq!((r.rate_fpm, r.grade), (528, Grade::Hard));
     }
 
     #[test]
