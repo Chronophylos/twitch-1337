@@ -1,0 +1,6 @@
+{# htmx answer to an entry action: the card in its new state plus the out-of-band tab strip. #}
+{% if let Some(card) = card %}
+{% include "feedback/_card.html" %}
+{% endif %}
+{% let oob = true %}
+{% include "feedback/_tabs.html" %}

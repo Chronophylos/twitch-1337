@@ -1947,6 +1947,49 @@ textarea.text-input {
 }
 .ai-profile-card .profile-actions form { margin-left: auto; }
 
+/* /feedback reuses the schedule card shell, one card per row, with the
+   schedule form's rows and chip inputs inside collapsible actions. */
+.feedback-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 18px;
+}
+.feedback-card { min-width: 0; }
+.feedback-card .card-head { flex-wrap: wrap; }
+.feedback-text {
+  margin: 0;
+  padding: 8px 12px;
+  border-left: 2px solid var(--line-2);
+  background: var(--bg-0);
+  color: var(--fg);
+  font-size: 13.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.feedback-card .flash { margin: 0; }
+.feedback-card .feedback-hint { margin: 0; }
+.feedback-card .feedback-form { padding: 4px 0 0; }
+.feedback-form .feedback-fields {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.feedback-form :is(input, textarea)[aria-invalid="true"] { border-color: var(--danger); }
+.feedback-form [role="group"][aria-invalid="true"],
+.feedback-form [role="radiogroup"][aria-invalid="true"] {
+  outline: 1px solid var(--danger);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+.feedback-form .field-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12px;
+}
+
 /* ─── Variant-picker form ────────────────────────────────────────────────
    The form lives inside `.settings-card`. `.schedule-form` adds the
    per-row label/input layout and styles the fieldset that scopes each

@@ -16,6 +16,7 @@ pub const MEMORY_LORE: &str = "memory_lore";
 pub const MEMORY_USERS: &str = "memory_users";
 pub const MEMORY_SCRATCH: &str = "memory_scratch";
 pub const SCHEDULES: &str = "schedules";
+pub const FEEDBACK: &str = "feedback";
 pub const AI_PROFILES: &str = "ai_profiles";
 pub const FLIGHTS: &str = "flights";
 pub const EMOTES: &str = "emotes";
@@ -48,6 +49,7 @@ pub fn crumbs(page: &str) -> &'static [Crumb] {
         PINGS => const { &[crumb("Pings", "/pings")] },
         FLIGHTS => const { &[crumb("Flights", "/flights")] },
         SCHEDULES => const { &[crumb("Schedules", "/schedules")] },
+        FEEDBACK => const { &[crumb("Feedback", "/feedback")] },
         MEMORY_TREE => &[MEMORY],
         MEMORY_SOUL => const { &[MEMORY, crumb("SOUL", "/memory/soul")] },
         MEMORY_LORE => const { &[MEMORY, crumb("LORE", "/memory/lore")] },

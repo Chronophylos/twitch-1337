@@ -1,0 +1,6 @@
+{# Inbox tab strip. `tab: &str`, `counts: TabCounts` and `oob: bool` must be in scope. #}
+<nav class="filters" id="feedback-tabs" aria-label="Feedback tabs"{% if oob %} hx-swap-oob="true"{% endif %}>
+  <a class="chip{% if tab == "new" %} active{% endif %}" href="/feedback?tab=new"{% if tab == "new" %} aria-current="page"{% endif %}>New <span class="chip-n" id="feedback-count-new">{{ counts.new }}</span></a>
+  <a class="chip{% if tab == "linked" %} active{% endif %}" href="/feedback?tab=linked"{% if tab == "linked" %} aria-current="page"{% endif %}>Linked <span class="chip-n">{{ counts.linked }}</span></a>
+  <a class="chip{% if tab == "dismissed" %} active{% endif %}" href="/feedback?tab=dismissed"{% if tab == "dismissed" %} aria-current="page"{% endif %}>Dismissed <span class="chip-n">{{ counts.dismissed }}</span></a>
+</nav>

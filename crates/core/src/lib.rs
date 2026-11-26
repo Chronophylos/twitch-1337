@@ -14,7 +14,9 @@ pub mod cooldown;
 pub mod dhl;
 pub mod doener;
 pub mod emote_tracker;
+pub mod feedback;
 pub mod finnhub;
+pub mod github;
 pub mod ipinfo;
 pub mod lifecycle;
 pub mod llm_factory;
@@ -230,6 +232,13 @@ pub struct Services {
     /// Volanta tracks and the last live-feed snapshot, shared by the
     /// Volanta handler task and `!vol`.
     pub volanta: Arc<crate::aviation::volanta::VolantaHub>,
+    /// GitHub App client for the feedback pipeline. `None` when `[github]`
+    /// is absent from config.toml (or failed to build), which disables
+    /// promote/attach and the close poll.
+    pub github: Option<Arc<crate::github::GithubClient>>,
+    /// Feedback Inbox shared by `!fb`, the feedback handler task, and the
+    /// dashboard `/feedback` page.
+    pub feedback: Arc<crate::feedback::FeedbackHub>,
 
     /// Recent INFO+ tracing events, filled by the layer `install_tracing`
     /// installs. Read by the dashboard `/logs` page. Tests pass an empty ring.

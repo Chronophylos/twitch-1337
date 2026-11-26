@@ -21,6 +21,7 @@ pub mod aviationstack;
 pub mod bash;
 pub mod commands;
 pub mod emote_tracker;
+pub mod feedback;
 pub mod knob;
 pub mod link_correction;
 pub mod observability;
@@ -61,6 +62,7 @@ pub use emote_tracker::{
     EmoteTrackerOverrides, EmoteTrackerSettings, PotatAttributionOverrides,
     PotatAttributionSettings,
 };
+pub use feedback::{FeedbackOverrides, FeedbackSettings};
 pub use knob::{KnobMeta, knob, knobs, overrides_from_form, restart_required};
 pub use link_correction::{LinkCorrectionOverrides, LinkCorrectionSettings};
 pub use observability::{
@@ -173,7 +175,7 @@ impl Subscription {
     }
 }
 
-pub const SCHEMA_VERSION: u32 = 12;
+pub const SCHEMA_VERSION: u32 = 13;
 
 pub(crate) fn default_schema_version() -> u32 {
     SCHEMA_VERSION
@@ -205,6 +207,8 @@ pub struct Settings {
     pub suspend: SuspendSettings,
     #[knob(nested)]
     pub spoiler: SpoilerSettings,
+    #[knob(nested)]
+    pub feedback: FeedbackSettings,
     #[knob(nested)]
     pub reupload: ReuploadSettings,
     #[knob(nested)]
@@ -311,7 +315,7 @@ impl Settings {
                 ai: 30,
                 news: 60,
                 up: 30,
-                feedback: 300,
+                feedback: 60,
                 doener: 30,
                 spoiler: 30,
                 servers: 30,
@@ -337,6 +341,7 @@ impl Settings {
             commands: CommandsSettings::default(),
             suspend: SuspendSettings::default(),
             spoiler: SpoilerSettings::default(),
+            feedback: FeedbackSettings::default(),
             reupload: ReuploadSettings::default(),
             volanta: VolantaSettings::default(),
             emote_tracker: EmoteTrackerSettings::default(),

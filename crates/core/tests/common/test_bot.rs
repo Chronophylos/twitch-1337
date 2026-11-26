@@ -101,6 +101,8 @@ pub struct TestBot {
     /// Interpreter permits shared by `!bash` and Aurora's `run_bash`
     /// (`Services::bash_permits`). Tests hold one to occupy the sandbox.
     pub bash_permits: Arc<tokio::sync::Semaphore>,
+    /// The Feedback Inbox `!fb` files into (`Services::feedback`).
+    pub feedback: Arc<twitch_1337::feedback::FeedbackHub>,
     /// Address the dashboard listener actually bound (`with_web`), so a test
     /// can bind port 0 and still reach it.
     web_addr: Option<std::net::SocketAddr>,
@@ -588,6 +590,13 @@ impl TestBotBuilder {
                 settings_handle.load().twitch.expected_latency,
             ));
             let bash_permits = twitch_1337::commands::bash::shared_permits(&settings_handle);
+            let feedback_hub = twitch_1337::feedback::FeedbackHub::open(
+                data_dir.path(),
+                None,
+                settings_handle.clone(),
+            )
+            .await
+            .expect("open feedback inbox");
             let services = Services {
                 clock: clock.clone(),
                 llm: Arc::new(
@@ -676,6 +685,8 @@ impl TestBotBuilder {
                 volanta: Arc::new(twitch_1337::aviation::volanta::VolantaHub::load(
                     data_dir.path(),
                 )),
+                github: None,
+                feedback: feedback_hub.clone(),
                 log_ring: Default::default(),
             };
             let mut web_addr = None;
@@ -795,6 +806,7 @@ impl TestBotBuilder {
                 settings_store: settings_store.clone(),
                 latency_value,
                 bash_permits,
+                feedback: feedback_hub,
                 web_addr,
                 shutdown: Some(shutdown_tx),
                 bot_task: Some(bot_task),

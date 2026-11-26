@@ -40,6 +40,7 @@ impl Settings {
         validate_reply_emotes(&self.reply_emotes, &mut errs);
         validate_ai(&self.ai, validate_agent_profile_targets, &mut errs);
         validate_spoiler(self, validate_agent_profile_targets, &mut errs);
+        validate_feedback(self, validate_agent_profile_targets, &mut errs);
         if !super::reupload::EXPIRES_DAYS_CHOICES.contains(&self.reupload.expires_days) {
             errs.push(FieldError {
                 field: "reupload.expires_days".into(),
@@ -509,23 +510,35 @@ fn validate_spoiler(s: &Settings, validate_profile_target: bool, errs: &mut Vec<
             message: "must be 1-40 chars: letters, digits, spaces, : - '".into(),
         });
     }
-    // Empty means the command is off. Like the agent pointers, the target
-    // check only gates saves; boot load stays lenient.
-    if validate_profile_target && !sp.profile.is_empty() {
-        match s.ai.by_name(&sp.profile) {
-            None => errs.push(FieldError {
-                field: "spoiler.profile".into(),
-                message: format!("no profile named {:?}", sp.profile),
-            }),
-            Some(p) if p.kind != ProfileKind::Decision => errs.push(FieldError {
-                field: "spoiler.profile".into(),
-                message: format!(
-                    "{:?} is a chat profile; pick a decision profile",
-                    sp.profile
-                ),
-            }),
-            Some(_) => {}
-        }
+    if validate_profile_target {
+        validate_decision_pointer(s, "spoiler.profile", &sp.profile, errs);
+    }
+}
+
+/// `feedback.profile` is an optional Decision-profile pointer, like
+/// `spoiler.profile` (ADR-0010).
+fn validate_feedback(s: &Settings, validate_profile_target: bool, errs: &mut Vec<FieldError>) {
+    if validate_profile_target {
+        validate_decision_pointer(s, "feedback.profile", &s.feedback.profile, errs);
+    }
+}
+
+/// Empty means the feature is off. Like the agent pointers, the target check
+/// only gates saves; boot load stays lenient.
+fn validate_decision_pointer(s: &Settings, field: &str, name: &str, errs: &mut Vec<FieldError>) {
+    if name.is_empty() {
+        return;
+    }
+    match s.ai.by_name(name) {
+        None => errs.push(FieldError {
+            field: field.into(),
+            message: format!("no profile named {name:?}"),
+        }),
+        Some(p) if p.kind != ProfileKind::Decision => errs.push(FieldError {
+            field: field.into(),
+            message: format!("{name:?} is a chat profile; pick a decision profile"),
+        }),
+        Some(_) => {}
     }
 }
 
@@ -1151,6 +1164,42 @@ mod tests {
                 .iter()
                 .any(|e| e.field == "spoiler.profile")
         );
+    }
+
+    #[test]
+    fn feedback_profile_must_be_decision_profile() {
+        let mut s = with_profiles(
+            vec![profile(AiProvider::OpenRouter), decision_profile()],
+            "p",
+        );
+        let field_errs = |s: &Settings| {
+            spoiler_errs(s)
+                .iter()
+                .any(|e| e.field == "feedback.profile")
+        };
+        s.feedback.profile = "p".into();
+        assert!(field_errs(&s));
+        s.feedback.profile = "d".into();
+        assert!(spoiler_errs(&s).is_empty());
+        s.feedback.profile = String::new();
+        assert!(spoiler_errs(&s).is_empty());
+        s.feedback.profile = "ghost".into();
+        assert!(field_errs(&s));
+        // Boot load stays lenient for pointer targets.
+        assert!(s.validate_for_load(&ctx()).is_ok());
+    }
+
+    #[test]
+    fn feedback_knob_ranges() {
+        let mut s = Settings::compiled_defaults();
+        s.feedback.noise_floor = 101;
+        s.feedback.close_poll_secs = 59;
+        let errs = spoiler_errs(&s);
+        assert!(errs.iter().any(|e| e.field == "feedback.noise_floor"));
+        assert!(errs.iter().any(|e| e.field == "feedback.close_poll_secs"));
+        s.feedback.noise_floor = 100;
+        s.feedback.close_poll_secs = 60;
+        assert!(spoiler_errs(&s).is_empty());
     }
 
     #[test]

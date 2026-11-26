@@ -78,6 +78,22 @@ client_secret = "your_client_secret"
 # [finnhub]
 # api_key = "your_finnhub_api_key_here"
 
+# Optional: GitHub App that files reviewed `!fb` feedback as issues. Presence
+# enables Promote/Attach on the dashboard's /feedback page and the poll that
+# announces completed issues in chat; without it the inbox still works.
+# Create an App with Issues: read & write and Metadata: read only, install it
+# on the repo alone, and paste its private key (PKCS#1 or PKCS#8 PEM). The
+# installation id is looked up at runtime. A key that fails to parse aborts
+# startup. Restart to apply.
+# [github]
+# repo = "Chronophylos/twitch-1337"
+# app_id = 1234567
+# private_key = """
+# -----BEGIN RSA PRIVATE KEY-----
+# ...
+# -----END RSA PRIVATE KEY-----
+# """
+
 # Optional: first-party LLM traces (every Turn, its LLM calls and tools) to
 # Langfuse Cloud over OTLP. Presence enables export, with or without [otel];
 # init/export failures never abort the bot. No dashboard card — keys stay

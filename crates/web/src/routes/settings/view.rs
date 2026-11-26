@@ -104,6 +104,7 @@ const NAV: &[NavGroup] = &[
             item("suspend", "suspend", "Suspend"),
             item("spoiler", "spoiler", "Spoiler check"),
             item("reupload", "reupload", "Reupload"),
+            item("feedback", "feedback", "Feedback"),
         ],
     },
     NavGroup {

@@ -4,7 +4,7 @@ Guide for coding agents working in this repo. Claude Code loads it through `CLAU
 
 ## Project
 
-Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), network lookups (AI tool, RDAP + optional ipinfo), game servers (`!servers [name]`, AMP), a public script sandbox (`!bash <script>`, Bashkit, limits at `/settings → Bash`), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb`), spoiler check (`!spoiler`, decision model), file reupload (`!reupload`, imgdrip + Litterbox), Volanta pilot tracking (`!vol`, `!vol track/untrack`, undocumented Volanta feed), alerts (earthquake + solar flare + Earth-directed CME monitors and F1 Race-Week Reminders, passive, configured at `/settings → Alerts`), version (`!v`), help (`!help [befehl]`, aliases `!commands`/`!hilfe`; one catalog entry, or a link to the public `/commands` page when the dashboard is on; cooldown `cooldowns.help`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`; the catalog's `lookup` is the one trigger/alias resolver). `/commands` additionally documents enabled Aurora Viewer-Facing Tools from the shared availability catalog in `crates/core/src/ai/viewer_tools.rs`; this HTML-only section never changes `/commands.json`, autocomplete, or `!help`.
+Rust Twitch IRC bot. Features: 1337 tracker (13:37 Berlin), leaderboard (`!lb`), hall of shame (`!sb`, `!pw`), ping system (`!p`, `!<ping>`), scheduled messages (config.toml), latency monitor, AI (`!ai`, provider profiles managed at `/ai-profiles`), flight tracker (`!track`, `!untrack`, `!flight`, `!flights`), aviation lookups (`!up`, `!fl`), shipment tracking (AI tool, DHL), network lookups (AI tool, RDAP + optional ipinfo), game servers (`!servers [name]`, AMP), a public script sandbox (`!bash <script>`, Bashkit, limits at `/settings → Bash`), joke stock picks (`!aktien`/`!stocks`, Finnhub), feedback (`!fb` into the Feedback Inbox, reviewed at `/feedback` and promoted to GitHub issues through a GitHub App, ADR-0016), spoiler check (`!spoiler`, decision model), file reupload (`!reupload`, imgdrip + Litterbox), Volanta pilot tracking (`!vol`, `!vol track/untrack`, undocumented Volanta feed), alerts (earthquake + solar flare + Earth-directed CME monitors and F1 Race-Week Reminders, passive, configured at `/settings → Alerts`), version (`!v`), help (`!help [befehl]`, aliases `!commands`/`!hilfe`; one catalog entry, or a link to the public `/commands` page when the dashboard is on; cooldown `cooldowns.help`), public command list for chat-client autocomplete (`/commands.json`, see `docs/commands-json.md`, and the AI `list_commands` tool; every `Command` must supply `description`/`usage`/`permission`, aliases go in `aliases()`; the catalog's `lookup` is the one trigger/alias resolver). `/commands` additionally documents enabled Aurora Viewer-Facing Tools from the shared availability catalog in `crates/core/src/ai/viewer_tools.rs`; this HTML-only section never changes `/commands.json`, autocomplete, or `!help`.
 
 Single persistent IRC connection, broadcast channel routes to independent handler tasks.
 
@@ -205,7 +205,7 @@ preserve the `GIT_SHA` / build-number injection (Justfile `build` recipe).
 
 ## Config
 
-`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[dhl]` (api_key only, optional), `[ipinfo]` (token only, optional), `[amp]` (url/username/password, optional), `[finnhub]` (api_key only, optional), `[langfuse]` (public/secret keys, optional), `[otel]` (collector endpoint + optional auth header, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
+`config.toml` (copy `config.toml.example`). Bootstrap sections only: `[twitch]` (secrets + channel/username), `[ai]` (`[ai.keys]` named credentials only, optional), `[aviationstack]` (api_key only, optional), `[dhl]` (api_key only, optional), `[ipinfo]` (token only, optional), `[amp]` (url/username/password, optional), `[finnhub]` (api_key only, optional), `[github]` (App id + private key + repo, optional), `[langfuse]` (public/secret keys, optional), `[otel]` (collector endpoint + optional auth header, optional), `[web]` (bootstrap fields only). Schema + defaults in `config.toml.example` — treat as source of truth. Everything else lives in `settings.ron` managed via the dashboard.
 
 Adding a knob: a secret, or something that must exist before the dashboard, goes in `config.toml.example` + loader; anything runtime-tunable goes in the settings schema + a dashboard card. Never both. Legacy hoisted keys were migrated once via sentinels (`.ai_migrated_v2`, `.config_migrated_v3`, `.schedules_migrated_v3`); edits to migrated legacy keys are ignored.
 
@@ -378,6 +378,21 @@ for 5 minutes (an error reply for 45 seconds), keeping it far below the 60 calls
 cooldown is `cooldowns.aktien` in `settings.ron` (default 60s,
 `/settings → Cooldowns`). Adding or removing the section needs a bot restart.
 
+`[github]` holds `repo` (`owner/name`), `app_id` and `private_key`
+(`SecretString`, inline PKCS#1 or PKCS#8 PEM) for the GitHub App that files
+reviewed `!fb` feedback (ADR-0016). The App needs Issues read/write and
+Metadata read, installed on this repo only. The App JWT is signed with `ring`
+(no `jsonwebtoken`: its backends are aws-lc or the advisory-flagged `rsa`
+crate); the installation id is looked up and the installation token cached
+in memory until 5 minutes before expiry. A key that fails to parse aborts
+startup. Absent, the Feedback Inbox and its classifier still work, and
+Promote/Attach on `/feedback` and the close poll are off. Runtime knobs live
+in `settings.ron` under `feedback` (`enabled`, `per_user_daily`, `profile` (a
+Decision profile, empty = no classifier), `noise_floor`, `close_poll_secs`,
+`announce_promote`, `announce_close`), managed via `/settings → Commands ·
+Feedback`, all live; the per-user cooldown is `cooldowns.feedback` (60 s).
+Adding or removing the section needs a bot restart.
+
 `[langfuse]` holds `public_key` + `secret_key` and an optional `host`
 (default `https://cloud.langfuse.com`, EU). Presence adds Langfuse as a
 second span sink on the OTel pipeline (ADR-0013 decision 5), with or without
@@ -458,7 +473,7 @@ OAuth credentials + AI API key wrapped in `SecretString` (secrecy crate). Config
 
 ## Data dir
 
-All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `token-aurora.ron`, `token-grok.ron` (per-mouth, only when that mouth is configured), `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `volanta.ron` (Volanta username→id cache and tracks), `alerts.ron`, `feedback.txt`, `emotes.db` (+ `-wal`/`-shm` when WAL mode) — emote tracker catalog, set audit, usage events, and sibling `emote_meanings` for AI grounding (see ADR-0008). Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/data/assets/prompts/` (`include_str!` via `twitch-1337-data`, single source of truth). The chat turn is assembled from `preset.ron`: an ordered list of named blocks, each with a slot (System/User/Assistant) and a minijinja body that decides its own inclusion. See `docs/ai-prompts.md`.
+All runtime-persistent files live under `$DATA_DIR` (default `/var/lib/twitch-1337`, Docker sets `/data`). Use `get_data_dir().join(...)` — never hardcode relative paths. Files: `token.ron`, `token-aurora.ron`, `token-grok.ron` (per-mouth, only when that mouth is configured), `pings.ron`, `leaderboard.ron`, `hall_of_shame.ron`, `flights.ron`, `volanta.ron` (Volanta username→id cache and tracks), `alerts.ron`, `feedback.ron` (Feedback Inbox, entry→issue links, close-poll cursor; a leftover `feedback.txt` from before ADR-0016 is ignored and can be deleted), `emotes.db` (+ `-wal`/`-shm` when WAL mode) — emote tracker catalog, set audit, usage events, and sibling `emote_meanings` for AI grounding (see ADR-0008). Memory tree: `memories/SOUL.md`, `memories/LORE.md`, `memories/users/<id>.md`, `memories/scratch/<slug>.md`, `memories/transcripts/today.md` (line-buffered, rotated nightly), `transcripts/<YYYY-MM-DD>.md`. Prompt templates are *not* here — they're baked into the binary from `crates/data/assets/prompts/` (`include_str!` via `twitch-1337-data`, single source of truth). The chat turn is assembled from `preset.ron`: an ordered list of named blocks, each with a slot (System/User/Assistant) and a minijinja body that decides its own inclusion. See `docs/ai-prompts.md`.
 
 Atomic persistence pattern: write tmp + rename. See `ping.rs`, `memory.rs`, `flight_tracker.rs`. Files holding credentials (`token*.ron`, `sessions.ron`) use `util::persist::atomic_save_ron_private_async`, which writes them `0600` on unix.
 
@@ -484,6 +499,7 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - Fault is fail-fast (ADR-0012): any unexpected task exit or panic — one command task's included — ends the whole runtime and the bot restarts. Operational failures (I/O, upstream APIs) are handled inside their task and never panic; `bail!` aborts only at startup.
 - Task ownership and shutdown (ADR-0015, `lifecycle.rs`): every long-running task is spawned or adopted by `TaskSupervisor`, or by a `TaskGroup` under a registered parent; never a detached `tokio::spawn`. On stop: cooperative drain of 5 s (`DRAIN_TIMEOUT`), then abort-and-join as a Fault, then finalizers. Any await on external I/O must race `wait_for_cancellation`, or every shutdown becomes a `DrainTimeout` fault.
 - Ping templates: reject control chars on create/edit (CR/LF would split PRIVMSG).
+- Feedback to GitHub (ADR-0016): viewer text reaches GitHub only through a Mod's Promote/Attach on `/feedback`, always inside a code fence longer than any backtick run it contains, never as title or editable body. Issues from this path carry `status:needs-triage` + `source:chat` and are never `ready-for-agent`. Every body/comment embeds `<!-- twitch-1337-feedback:F<id> -->`; after an ambiguous failure the marker is searched before retrying, so an entry never files two issues.
 - Aviation client init failure: log + disable `!up`/`!fl`/flight tracker + track commands. Don't abort.
 - DHL tracking: coarse tier only — `recipientPostalCode` is never sent, so DHL
   withholds address, sender/recipient and transit cities. Tracking numbers are

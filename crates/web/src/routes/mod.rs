@@ -8,6 +8,7 @@ pub mod ai_profiles;
 pub mod assets;
 pub mod commands;
 pub mod emotes;
+pub mod feedback;
 pub mod flights;
 pub mod health;
 pub mod leaderboard;

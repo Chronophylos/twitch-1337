@@ -127,6 +127,7 @@ fn reference_label(field: &str) -> Option<&'static str> {
         "ai.media.profile" => "Media",
         "ai.recap.profile" => "Recap",
         "spoiler.profile" => "Spoiler check",
+        "feedback.profile" => "Feedback classifier",
         _ => return None,
     })
 }
@@ -558,6 +559,11 @@ fn assignments(name: &str, settings: &Settings) -> Vec<AssignmentView> {
             "sec-spoiler",
             settings.spoiler.profile.as_str(),
         ),
+        (
+            "Feedback classifier",
+            "sec-feedback",
+            settings.feedback.profile.as_str(),
+        ),
     ] {
         if selected == name {
             assignments.push(AssignmentView {
@@ -905,6 +911,7 @@ async fn update(
             let rewrite_media = current.ai.media.profile == target;
             let rewrite_recap = current.ai.recap.profile.as_deref() == Some(target.as_str());
             let rewrite_spoiler = current.spoiler.profile == target;
+            let rewrite_feedback = current.feedback.profile == target;
             let mut next = current.ai.profiles;
             if let Some(slot) = next.iter_mut().find(|p| p.name == target) {
                 *slot = edited_for_mutate.clone();
@@ -929,7 +936,10 @@ async fn update(
                 o.ai.recap.profile = Some(Some(renamed.clone()));
             }
             if rewrite_spoiler {
-                o.spoiler.profile = Some(renamed);
+                o.spoiler.profile = Some(renamed.clone());
+            }
+            if rewrite_feedback {
+                o.feedback.profile = Some(renamed);
             }
             o.ai.profiles = Some(next);
         }),

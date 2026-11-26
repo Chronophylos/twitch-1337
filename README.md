@@ -23,7 +23,8 @@ to type `1337`, and the bot keeps score.
   It keeps a character sheet on the regulars and a sense of the channel's lore,
   then rewrites those memories each night from the day's transcript.
 - **Chat plumbing.** Community ping groups people can join (`!p`), scheduled
-  messages, and feedback (`!fb`).
+  messages, and feedback (`!fb`) that mods review on the dashboard and turn
+  into GitHub issues; reporters hear back in chat when theirs is done.
 
 ## How it's built
 

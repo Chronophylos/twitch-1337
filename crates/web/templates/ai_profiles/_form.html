@@ -46,7 +46,7 @@
         {% endfor %}
       </select>
       <small class="muted" data-kind-help="chat" {% if form.kind == "decision" %}hidden{% endif %}>For Aurora, Grok, Dreamer, Media, and Recap.</small>
-      <small class="muted" data-kind-help="decision" {% if form.kind != "decision" %}hidden{% endif %}>For the spoiler check. OpenRouter only; no reasoning effort or service tier.</small>
+      <small class="muted" data-kind-help="decision" {% if form.kind != "decision" %}hidden{% endif %}>For the spoiler check and the feedback classifier. OpenRouter only; no reasoning effort or service tier.</small>
     </label>
     {% if let Some(msg) = form_errors.kind %}<p class="field-error" id="{{ form_id }}-kind-error">{{ msg }}</p>{% endif %}
   </div>

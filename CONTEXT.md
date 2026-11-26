@@ -294,6 +294,22 @@ _Avoid_: banned, ignored (1337 ignore is separate unless shared via `is_clanker`
 A passive chat reply that rewrites a recognized URL into a canonical or login-free HTTPS form. It is not a link preview, embed, or spoiler check.
 _Avoid_: embed, preview, spoiler check
 
+## Feedback
+
+**Feedback Entry**:
+One `!fb` message as stored by the bot, addressed as `F<n>` (e.g. `F42`).
+Carries the viewer's login, the unedited text, an optional classification,
+and its review state: new, dismissed, or linked to a GitHub issue. Its text
+is never edited and reaches GitHub only quoted.
+_Avoid_: ticket, report, issue (reserve for the GitHub issue).
+
+**Feedback Inbox**:
+The set of Feedback Entries awaiting or past review, kept in
+`$DATA_DIR/feedback.ron` and reviewed by Mods on `/feedback`. Promote turns an
+entry into a new GitHub issue; Attach adds it to an existing one as a `+1`
+comment; Dismiss hides it (deleted after 30 days).
+_Avoid_: queue (the command execution queue), backlog.
+
 ## Dashboard access
 
 **Dashboard Tier**:

@@ -12,6 +12,7 @@ mod assets_smoke;
 mod commands_json;
 mod commands_page;
 mod emotes_routes;
+mod feedback_route;
 mod flights_route;
 mod healthz;
 mod leaderboard_route;

@@ -5,6 +5,7 @@
 
 pub mod commands;
 pub mod emote_usage;
+pub mod feedback;
 pub mod latency;
 pub mod link_correction;
 pub mod router;

@@ -844,6 +844,80 @@ async fn delete_refuses_the_spoiler_profile() {
     assert_eq!(state.settings.load().ai.profiles.len(), 2);
 }
 
+async fn point_feedback_at(state: &twitch_1337_web::WebState, name: &str) {
+    let mut o = SettingsOverrides::default();
+    o.feedback.profile = Some(name.to_owned());
+    state
+        .settings_store
+        .apply(
+            o,
+            Actor {
+                user_id: "test".into(),
+                user_login: "test".into(),
+            },
+        )
+        .await
+        .expect("point feedback");
+}
+
+#[tokio::test]
+async fn renaming_the_feedback_profile_rewrites_feedback_pointer() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    Box::pin(seed_profiles(
+        &state,
+        vec![profile("a"), decision("dec")],
+        "a",
+    ))
+    .await;
+    Box::pin(point_feedback_at(&state, "dec")).await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!(
+        "_csrf={}&name=dec2&kind=decision&provider=open_router&model=m&timeout=30&key=k",
+        urlencoding::encode(&csrf)
+    );
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/dec/edit",
+        body,
+    )
+    .await;
+    let status = res.status();
+    assert_eq!(status, StatusCode::SEE_OTHER, "{}", body_string(res).await);
+    assert_eq!(state.settings.load().feedback.profile, "dec2");
+}
+
+#[tokio::test]
+async fn delete_refuses_the_feedback_profile() {
+    install_crypto();
+    let (state, _td_p, _td_m, _td_s) = build_state_with_all_dirs(empty_helix()).await;
+    Box::pin(seed_profiles(
+        &state,
+        vec![profile("a"), decision("dec")],
+        "a",
+    ))
+    .await;
+    Box::pin(point_feedback_at(&state, "dec")).await;
+    let (sid, cc, csrf) =
+        insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
+    let body = format!("_csrf={}", urlencoding::encode(&csrf));
+    let res = post_form(
+        build_router(state.clone()),
+        &sid,
+        &cc,
+        "/ai-profiles/dec/delete",
+        body,
+    )
+    .await;
+    assert_ne!(res.status(), StatusCode::SEE_OTHER);
+    let html = body_string(res).await;
+    assert!(html.contains("Feedback classifier"), "{html}");
+    assert_eq!(state.settings.load().ai.profiles.len(), 2);
+}
+
 #[tokio::test]
 async fn test_connection_uses_unsaved_values_without_persisting_the_profile() {
     install_crypto();
@@ -1284,6 +1358,7 @@ async fn cards_show_assignment_links_and_name_delete_blockers() {
         .await
         .expect("assign recap");
     Box::pin(point_spoiler_at(&state, "classifier")).await;
+    Box::pin(point_feedback_at(&state, "classifier")).await;
     let (sid, cc, _csrf) =
         insert_session_as(&state, "999", "owner", twitch_1337_web::auth::Role::Owner);
     let req = Request::builder()
@@ -1301,6 +1376,7 @@ async fn cards_show_assignment_links_and_name_delete_blockers() {
         ("Media", "sec-ai-media"),
         ("Recap", "sec-ai-recap"),
         ("Spoiler check", "sec-spoiler"),
+        ("Feedback classifier", "sec-feedback"),
     ] {
         assert!(
             html.contains(&format!("href=\"/settings#{anchor}\"")) && html.contains(label),
