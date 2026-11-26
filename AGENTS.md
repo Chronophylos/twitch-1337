@@ -109,7 +109,7 @@ Linear history required, force-push + delete blocked, squash-only, conversations
 | Check | Workflow | Purpose |
 |---|---|---|
 | `fmt` | ci.yml | cargo fmt --check |
-| `clippy` | ci.yml | cargo clippy --workspace --all-targets -- -D warnings, then `cargo doc` (broken intra-doc links) and `cargo machete` (unused deps) |
+| `clippy` | ci.yml | cargo clippy --workspace --all-targets -- -D warnings (also enforces Cargo's `unused_dependencies` lint, denied via `[workspace.lints.cargo]`, for normal/build deps), then `cargo doc` (broken intra-doc links) and `cargo machete` (unused deps incl. dev-deps) |
 | `test` | ci.yml | cargo llvm-cov nextest --workspace (lcov artifact; no threshold gate) |
 | `e2e` | ci.yml | web crate WebDriver tests (`--features e2e`, setup-chrome) |
 | `cargo deny` | ci.yml | `deny.toml`: RustSec advisories, banned crates (aws-lc-sys), license allow list, allowed sources; also weekly on schedule |
@@ -524,6 +524,8 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - `twitch_irc::irc!` macro needs standalone `use twitch_irc::irc;` — cannot be in braced `use twitch_irc::{...}`.
 - Request/response on broadcast (e.g. PING/PONG): subscribe BEFORE send to avoid race.
 - Clippy strict (`-D warnings`) + extra lints in `Cargo.toml [workspace.lints.clippy]`. Suppress with `#[expect(lint, reason = "...")]` (lint-enforced; stale ones fail). Item only dead outside tests: `#[cfg_attr(not(test), expect(...))]`. Plain `#![allow]` only in test helpers shared across test binaries.
+- Unused normal/build deps fail the build (`[workspace.lints.cargo] unused_dependencies = "deny"`); `cargo machete` in CI still covers dev-deps.
+- `.cargo/config.toml` sets `[registry] global-min-publish-age = "7 days"`: manual `cargo update`/`cargo add` only pick versions published ≥7 days ago. Full-debuginfo builds use the built-in profile: `cargo build --profile debug`.
 - Panics are lint-denied outside tests (ADR-0012 rules 9–10): `unwrap_used`, `expect_used`, `panic`, `map_err_ignore`, `let_underscore_must_use`, `let_underscore_future`. A surviving site needs `#[expect(clippy::…, reason = "<invariant>")]`, and only for an invariant the surrounding code proves or baked/compile-time data — never external input, I/O, or settings values. Sends to a receiver that may have hung up use `tx.send(x).ok();`. Sync mutexes are `parking_lot` (no poisoning), so `.lock()` needs no `expect`. `clippy.toml`'s `allow-*-in-tests` only exempts `#[test]` fns, not helper fns in `tests/`, so each integration-test crate root keeps a `#![expect(clippy::unwrap_used, …)]` listing just the lints its helpers trip.
 - Errors follow ADR-0012. Rejection / operational failure / Bug; typed `thiserror` enum when a caller branches on the cause, `eyre` + `wrap_err` otherwise. `Display` is for logs — Chat, Dashboard, and Model words come from per-Surface `match`es, never from `to_string()` or string matching. Keep `#[source]` chains; no `map_err(|_| …)` on operational causes.
 - Log an error once, where it is handled, with `?error` not `%error` (full chain + backtrace). Deliberate ignores match the benign case (`ErrorKind::NotFound`); a bare `.ok()` only on sends to a receiver that may have hung up.
