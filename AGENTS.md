@@ -565,6 +565,7 @@ pub async fn run_my_handler<T, L>(
 - Web: route tests in `crates/web/tests/{auth,routes}/`, helpers in `tests/helpers/mod.rs`; `dev-login` feature bypasses auth.
 - E2e: `cargo nextest run -p twitch-1337-web --features e2e` (or `just e2e`); needs chromedriver + version-matched Chrome.
 - CI `test` runs `cargo llvm-cov nextest --workspace`; locally plain `cargo nextest run --workspace` unless you need coverage.
+- `ci` nextest profile (`.config/nextest.toml`): `fail-fast = false`; only `package(twitch-1337-web) and binary(e2e)` retries (2×, fixed 1s), flaky passes stay marked flaky in JUnit.
 
 ## Key constants
 
