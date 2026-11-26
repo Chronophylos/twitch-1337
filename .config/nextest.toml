@@ -1,2 +1,12 @@
+[profile.ci]
+# Report every failure, not just the first.
+fail-fast = false
+
 [profile.ci.junit]
 path = "junit.xml"
+
+# WebDriver e2e tests are timing-sensitive; retry them (only them) in CI.
+# Passes after a retry are still reported as flaky in JUnit.
+[[profile.ci.overrides]]
+filter = "package(twitch-1337-web) and binary(e2e)"
+retries = { backoff = "fixed", count = 2, delay = "1s" }
