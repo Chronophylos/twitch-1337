@@ -18,6 +18,8 @@ members = [
 # bump this field.
 version = "0.0.0"
 edition = "2024"
+# Keep in step with rust-toolchain.toml and the Dockerfile base image.
+rust-version = "1.100"
 license = "MIT OR Apache-2.0"
 publish = false
 
