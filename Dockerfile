@@ -20,6 +20,14 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/* \
   && rustup target add x86_64-unknown-linux-musl
 
+# cargo-auditable embeds the resolved dependency tree in a `.dep-v0` section
+# of the binary so Trivy/Grype can scan the FROM scratch image. Installed in
+# the base stage (before any source COPY) so its layer stays cached.
+# Bump CARGO_AUDITABLE_VERSION deliberately; --locked pins its own deps.
+ARG CARGO_AUDITABLE_VERSION=0.7.8
+RUN cargo install --locked cargo-auditable --version "${CARGO_AUDITABLE_VERSION}" \
+  && rm -rf /usr/local/cargo/registry
+
 # 1. Planner stage - generates dependency recipe
 FROM base AS planner
 WORKDIR /app
@@ -60,8 +68,9 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY .cargo .cargo
 COPY crates crates
 
-# Build the application with musl target (produces fully static binary)
-RUN cargo build --locked -p twitch-1337 --release --target x86_64-unknown-linux-musl
+# Build the application with musl target (fully static binary,
+# dependency tree embedded by cargo-auditable)
+RUN cargo auditable build --locked -p twitch-1337 --release --target x86_64-unknown-linux-musl
 
 # 4. Runtime stage - minimal FROM scratch image
 FROM scratch
