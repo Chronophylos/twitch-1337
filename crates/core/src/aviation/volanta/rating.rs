@@ -38,10 +38,10 @@ impl Grade {
         match self {
             Self::Butter => "🧈 Butter",
             Self::Smooth => "✨ Sanft",
-            Self::Solid => "👍 Solide",
-            Self::Firm => "😬 Fest",
-            Self::Hard => "💥 Hart",
-            Self::Workshop => "🔧 Fall für die Werkstatt",
+            Self::Solid => "BroBalt Solide",
+            Self::Firm => "monkaLaugh Fest",
+            Self::Hard => "peepoExplosion Hart",
+            Self::Workshop => "KratosFall Fall für die Werkstatt",
         }
     }
 
@@ -253,7 +253,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             render(&r),
-            "😬 Fest (163 fpm, 1.10 G, 2× aufgesetzt, 3 kt Seitenwind, Pitch 2.7°, Roll -0.3°)"
+            "monkaLaugh Fest (163 fpm, 1.10 G, 2× aufgesetzt, 3 kt Seitenwind, Pitch 2.7°, Roll -0.3°)"
         );
     }
 }
