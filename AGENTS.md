@@ -122,7 +122,14 @@ Linear history required, force-push + delete blocked, squash-only, conversations
 
 `Docker` (build + push `ghcr.io/chronophylos/twitch-1337:latest` and
 `:b<run_number>`) triggers on push to `main` with paths-ignore for
-docs. Not a required check.
+docs. Not a required check. Its `trivy image` job scans the just-pushed
+digest after every successful build, and `:latest` on its own Sundays
+05:00 UTC schedule (separate concurrency group, so it never displaces a
+queued build). Vulnerability scanner only, fixable HIGH/CRITICAL, SARIF →
+Security tab (category `trivy-image`), job fails on findings. The image is
+`FROM scratch`, so Trivy sees only Rust crates, and only when the binary
+embeds cargo-auditable dependency data. Not a required check (does not run
+on PRs).
 `GHCR retention` runs Sundays 04:00 UTC; prunes old image versions
 keeping the last 30 plus `:latest`. Not a required check.
 `Data refresh` runs Sundays 03:00 UTC; opens a `chore/data-refresh` PR.
