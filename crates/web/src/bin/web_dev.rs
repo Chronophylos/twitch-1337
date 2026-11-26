@@ -27,11 +27,12 @@
 //! redirects to the fixed `https://test.invalid` base (dev-login bypasses
 //! OAuth), while `state.config.public_url` reports the real bind addr.
 
+use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use axum::http::{HeaderValue, header};
 use eyre::{Result, WrapErr as _};
@@ -151,14 +152,30 @@ async fn dev_csp() -> Result<String> {
 /// change. The debouncer owns its internal worker thread; we `Box::leak`
 /// it because dropping the debouncer stops the watch — leaking is the
 /// honest signal that this lives for the program lifetime.
+///
+/// notify's inotify backend also reports `OPEN`, and debug-build rust-embed
+/// reads every asset from disk per request, so a bare "any event" reload
+/// would reload the page each time it loads. Only an mtime change (or a
+/// file appearing/disappearing) counts as a change.
 fn install_asset_watcher(reloader: tower_livereload::Reloader) {
     use notify_debouncer_mini::{DebounceEventResult, new_debouncer, notify::RecursiveMode};
 
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dirs = ["assets", "templates"].map(|sub| crate_dir.join(sub));
+    let mut mtimes = HashMap::new();
+    for dir in &dirs {
+        record_mtimes(dir, &mut mtimes);
+    }
     let mut debouncer = match new_debouncer(
         Duration::from_millis(200),
         move |res: DebounceEventResult| {
-            if res.is_ok() {
+            let Ok(events) = res else { return };
+            let mut changed = false;
+            for event in events {
+                let mtime = mtime_of(&event.path);
+                changed |= mtimes.insert(event.path, mtime) != Some(mtime);
+            }
+            if changed {
                 reloader.reload();
             }
         },
@@ -169,11 +186,29 @@ fn install_asset_watcher(reloader: tower_livereload::Reloader) {
             return;
         }
     };
-    for sub in ["assets", "templates"] {
-        let path = crate_dir.join(sub);
+    for path in dirs {
         if let Err(e) = debouncer.watcher().watch(&path, RecursiveMode::Recursive) {
             tracing::warn!(target: "twitch_1337_web", ?path, error = ?e, "livereload watch failed");
         }
     }
     Box::leak(Box::new(debouncer));
+}
+
+fn mtime_of(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// Baseline for the watcher, so the first read of each file is not a change.
+fn record_mtimes(dir: &Path, out: &mut HashMap<PathBuf, Option<SystemTime>>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            record_mtimes(&path, out);
+        } else {
+            out.insert(path.clone(), mtime_of(&path));
+        }
+    }
 }
