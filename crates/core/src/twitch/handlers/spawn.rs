@@ -95,7 +95,7 @@ where
         Arc::new(commands::pw::PwCommand::new(services.hall_of_shame.clone())),
         Arc::new(commands::pb::PbCommand::new(services.leaderboard.clone())),
         Arc::new(commands::feedback::FeedbackCommand::new(
-            services.data_dir.clone(),
+            services.feedback.clone(),
             services.settings.clone(),
         )),
         Arc::new(commands::doener::DoenerCommand::new(
@@ -622,6 +622,31 @@ pub(crate) fn spawn_handlers<T, L>(
                     settings,
                     dir,
                     clk,
+                    task_lifecycle,
+                )
+                .await;
+            },
+        );
+    }
+
+    {
+        let sender = chat_sender.clone();
+        let channel = services.channel.clone();
+        let settings = services.settings.clone();
+        let hub = services.feedback.clone();
+        let registry = services.llm.clone();
+        let task_lifecycle = lifecycle.clone();
+        register_lifecycle_loop(
+            supervisor,
+            lifecycle.clone(),
+            "feedback handler",
+            async move {
+                crate::twitch::handlers::feedback::run_feedback_handler(
+                    sender,
+                    channel,
+                    settings,
+                    hub,
+                    registry,
                     task_lifecycle,
                 )
                 .await;

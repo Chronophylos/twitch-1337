@@ -51,7 +51,7 @@ pub const BOT_SCHEDULE_NAME: &str = "bot.schedule.name";
 pub const PING_NAME: &str = "ping.name";
 
 /// Agent, or the feature calling the LLM outside one: `aurora`, `grok`,
-/// `dreamer`, `recap`, `haiku`, `news`, `tldr`, `spoiler`, `profile_test`;
+/// `dreamer`, `recap`, `haiku`, `news`, `tldr`, `spoiler`, `feedback`, `profile_test`;
 /// `unknown` outside `metrics::with_llm_scope`. Label.
 pub const AI_AGENT: &str = "ai.agent";
 /// AI profile name; `unknown` outside `metrics::with_llm_scope`. Label.

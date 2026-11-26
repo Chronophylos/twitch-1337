@@ -1183,6 +1183,22 @@ async fn profile_pickers_list_only_eligible_profiles() {
             "chat profile {n} leaked into spoiler dropdown"
         );
     }
+    assert!(
+        html.contains("id=\"sec-feedback\""),
+        "feedback card missing"
+    );
+    let feedback = select_inner(&html, "feedback.profile");
+    assert!(
+        feedback.contains("value=\"\""),
+        "feedback classifier is optional: {feedback}"
+    );
+    assert!(feedback.contains("value=\"dec\""), "{feedback}");
+    for n in &chat_names {
+        assert!(
+            !feedback.contains(&format!("value=\"{n}\"")),
+            "chat profile {n} leaked into feedback dropdown"
+        );
+    }
     for agent in [
         "ai.aurora.profile",
         "ai.grok.profile",

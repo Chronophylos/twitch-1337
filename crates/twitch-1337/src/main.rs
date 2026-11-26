@@ -290,6 +290,29 @@ async fn prepare(
         None => None,
     };
 
+    // GitHub App for the feedback pipeline: log and disable promote/attach
+    // and the close poll on a build failure, never abort startup.
+    let github_client = match config.github.as_ref() {
+        Some(g) => match twitch_1337_core::github::GithubClient::new(g) {
+            Ok(c) => Some(Arc::new(c)),
+            Err(error) => {
+                tracing::error!(
+                    ?error,
+                    "failed to build GitHub client, feedback promote disabled"
+                );
+                None
+            }
+        },
+        None => None,
+    };
+    let feedback = twitch_1337_core::feedback::FeedbackHub::open(
+        &get_data_dir(),
+        github_client.clone(),
+        settings_handle.clone(),
+    )
+    .await
+    .wrap_err("open feedback inbox")?;
+
     // DHL needs no settings lookup, only the config key. Match the aviation
     // invariant: log and disable on failure, never abort startup.
     let dhl_client = match config.dhl.as_ref() {
@@ -476,6 +499,8 @@ async fn prepare(
         volanta: Arc::new(twitch_1337_core::aviation::volanta::VolantaHub::load(
             &get_data_dir(),
         )),
+        github: github_client,
+        feedback,
         log_ring,
     };
     // `web_listener` is `Some` exactly when the web server is enabled.

@@ -111,6 +111,10 @@ pub struct WebState {
     /// Recent INFO+ tracing events (same ring the bin's subscriber fills).
     /// Read by the owner-only `/logs` page.
     pub log_ring: Arc<twitch_1337_core::util::log_ring::LogRing>,
+    /// Shared feedback inbox (same hub the `!fb` command and the feedback
+    /// handler write through). Read and mutated by the mod-only `/feedback`
+    /// page.
+    pub feedback: Arc<twitch_1337_core::feedback::FeedbackHub>,
 }
 
 /// Web-owned construction inputs for [`WebState::new`]: everything the
@@ -173,6 +177,7 @@ impl WebState {
             schedule_runtime: core.schedule_runtime.clone(),
             recap: core.recap.clone(),
             log_ring: core.log_ring.clone(),
+            feedback: core.feedback.clone(),
         }
     }
     /// Stub-backed dashboard state for tests and the dev-login bin: owns its
@@ -231,6 +236,12 @@ impl WebState {
         // and ping_dir is owned by the caller so it stays alive for the test.
         let schedule_runtime =
             twitch_1337_core::schedule::ScheduleRuntimeStore::open(&cfg.ping_dir);
+        // Same reasoning for the feedback inbox (`feedback.ron`); no GitHub,
+        // so Promote/Attach answer `GithubUnconfigured`.
+        let feedback =
+            twitch_1337_core::feedback::FeedbackHub::open(&cfg.ping_dir, None, settings.clone())
+                .await
+                .wrap_err("open feedback hub")?;
 
         Ok(WebState {
             sessions,
@@ -265,6 +276,7 @@ impl WebState {
             schedule_runtime,
             recap: None,
             log_ring: Arc::default(),
+            feedback,
         })
     }
 }

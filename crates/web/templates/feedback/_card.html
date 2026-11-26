@@ -1,0 +1,165 @@
+{# One inbox entry. `card: &EntryView` and `csrf: &str` must be in scope.
+   Every action posts via htmx and swaps this card (see `SwapTpl`); plain
+   posts redirect back to the tab. A field error marks its control
+   `aria-invalid`, points `aria-describedby` at the `.field-error` beside it
+   and autofocuses it (only one field error is ever reported at a time).
+   The viewer's text is escaped like everything else: never `|safe`. #}
+<article class="schedule-card feedback-card{% if card.state == "dismissed" %} paused{% endif %}" id="feedback-{{ card.id }}">
+  <header class="card-head">
+    <span class="card-title">F{{ card.id }}</span>
+    <div class="card-badges">
+      <span class="chip">{{ card.login }}</span>
+      <span class="chip last">{{ card.created }}</span>
+    </div>
+  </header>
+
+  <blockquote class="feedback-text">{{ card.text }}</blockquote>
+
+  <div class="card-badges">
+    {% if let Some(c) = card.classification %}
+      <span class="chip trigger" title="Classifier kind and confidence">{{ c.kind }} · {{ c.kind_pct }}%</span>
+      <span class="chip window" title="Classifier system and confidence">system:{{ c.system }} · {{ c.system_pct }}%</span>
+    {% else %}
+      <span class="chip last">Not classified</span>
+      {% if card.can_classify() %}
+      <form method="post" action="/feedback/{{ card.id }}/classify" class="card-toggle"
+            hx-post="/feedback/{{ card.id }}/classify" hx-target="closest .feedback-card" hx-swap="outerHTML">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <button class="chip edit-link" type="submit">Classify</button>
+      </form>
+      {% endif %}
+    {% endif %}
+  </div>
+
+  {% if let Some(status) = card.status %}
+  <div class="card-badges">
+    <span class="card-message">{{ status }}</span>
+    {% if card.state == "linked" %}
+      {% if let Some(n) = card.issue %}
+        {% if let Some(url) = card.issue_url %}
+          <a class="chip edit-link" href="{{ url }}" target="_blank" rel="noopener noreferrer">#{{ n }} ↗</a>
+        {% else %}
+          <span class="chip">#{{ n }}</span>
+        {% endif %}
+      {% endif %}
+      {% if let Some(close) = card.close %}<span class="chip next">{{ close }}</span>{% endif %}
+    {% endif %}
+    {% if let Some(left) = card.deletion_label() %}<span class="chip warning">{{ left }}</span>{% endif %}
+  </div>
+  {% endif %}
+
+  {% if let Some(msg) = card.notice %}<div class="flash" role="status">{{ msg }}</div>{% endif %}
+  {% if let Some(msg) = card.error %}<div class="flash error" role="alert">{{ msg }}</div>{% endif %}
+
+  {% if card.actionable() %}
+    {% if !card.github_configured %}<p class="muted feedback-hint">GitHub is not configured.</p>{% endif %}
+
+    <details class="profile-advanced"{% if card.form.open == "promote" %} open{% endif %}>
+      <summary>Promote to issue</summary>
+      <form method="post" action="/feedback/{{ card.id }}/promote" class="schedule-form feedback-form"
+            hx-post="/feedback/{{ card.id }}/promote" hx-target="closest .feedback-card" hx-swap="outerHTML">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <fieldset class="feedback-fields"{% if !card.github_configured %} disabled{% endif %}>
+          <div class="row">
+            <label>Title
+              <input type="text" name="title" value="{{ card.form.title }}" maxlength="{{ card.max_title() }}" required
+                {%- if card.errors.title.is_some() %} aria-invalid="true" aria-describedby="fb-{{ card.id }}-title-error" autofocus{% endif %}>
+            </label>
+            {% if let Some(msg) = card.errors.title %}<p class="field-error" id="fb-{{ card.id }}-title-error">{{ msg }}</p>{% endif %}
+          </div>
+
+          <div class="row">
+            <span class="row-caption" id="fb-{{ card.id }}-type-label">Type</span>
+            <div class="row weekday-row" role="radiogroup" aria-labelledby="fb-{{ card.id }}-type-label"
+              {%- if card.errors.issue_type.is_some() %} aria-invalid="true" aria-describedby="fb-{{ card.id }}-issue_type-error"{% endif %}>
+              {% for (label, checked) in card.type_options() %}
+              <label class="weekday-chip"><input type="radio" name="issue_type" value="{{ label }}"{% if checked %} checked{% endif %}{% if loop.first && card.errors.issue_type.is_some() %} autofocus{% endif %}> {{ label }}</label>
+              {% endfor %}
+            </div>
+            {% if let Some(msg) = card.errors.issue_type %}<p class="field-error" id="fb-{{ card.id }}-issue_type-error">{{ msg }}</p>{% endif %}
+          </div>
+
+          <div class="row">
+            <span class="row-caption" id="fb-{{ card.id }}-systems-label">Systems (labels <code>system:…</code>)</span>
+            <div class="row weekday-row" role="group" aria-labelledby="fb-{{ card.id }}-systems-label"
+              {%- if card.errors.systems.is_some() %} aria-invalid="true" aria-describedby="fb-{{ card.id }}-systems-error"{% endif %}>
+              {% for (label, checked) in card.system_options() %}
+              <label class="weekday-chip"><input type="checkbox" name="systems" value="{{ label }}"{% if checked %} checked{% endif %}{% if loop.first && card.errors.systems.is_some() %} autofocus{% endif %}> {{ label }}</label>
+              {% endfor %}
+            </div>
+            {% if let Some(msg) = card.errors.systems %}<p class="field-error" id="fb-{{ card.id }}-systems-error">{{ msg }}</p>{% endif %}
+          </div>
+
+          <div class="row">
+            <label>Mod note (optional, added to the issue body)
+              <textarea name="note" rows="2" maxlength="{{ card.max_note() }}"
+                {%- if card.errors.note.is_some() %} aria-invalid="true" aria-describedby="fb-{{ card.id }}-note-error" autofocus{% endif %}>{{ card.form.note }}</textarea>
+            </label>
+            {% if let Some(msg) = card.errors.note %}<p class="field-error" id="fb-{{ card.id }}-note-error">{{ msg }}</p>{% endif %}
+          </div>
+
+          <div class="row form-actions">
+            <button type="submit" class="btn primary">{% if card.state == "promote_unknown" %}Promote again{% else %}Promote{% endif %}</button>
+          </div>
+        </fieldset>
+      </form>
+    </details>
+
+    <details class="profile-advanced"{% if card.form.open == "attach" %} open{% endif %}>
+      <summary>Attach to an existing issue</summary>
+      <form method="post" action="/feedback/{{ card.id }}/attach" class="schedule-form feedback-form"
+            hx-post="/feedback/{{ card.id }}/attach" hx-target="closest .feedback-card" hx-swap="outerHTML">
+        <input type="hidden" name="_csrf" value="{{ csrf }}">
+        <fieldset class="feedback-fields"{% if !card.github_configured %} disabled{% endif %}>
+          <div class="row">
+            <label>Issue number
+              <input type="text" name="issue" value="{{ card.form.attach_issue }}" inputmode="numeric" placeholder="123" required
+                {%- if card.errors.attach_issue.is_some() %} aria-invalid="true" aria-describedby="fb-{{ card.id }}-attach_issue-error" autofocus{% endif %}>
+            </label>
+            {% if let Some(msg) = card.errors.attach_issue %}<p class="field-error" id="fb-{{ card.id }}-attach_issue-error">{{ msg }}</p>{% endif %}
+          </div>
+          <div class="row form-actions">
+            <button type="submit" class="btn">Attach</button>
+          </div>
+        </fieldset>
+      </form>
+    </details>
+
+    {% if card.unknown() %}
+    <form method="post" action="/feedback/{{ card.id }}/link" class="schedule-form feedback-form"
+          hx-post="/feedback/{{ card.id }}/link" hx-target="closest .feedback-card" hx-swap="outerHTML">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <fieldset class="feedback-fields"{% if !card.github_configured %} disabled{% endif %}>
+        <div class="row">
+          <label>Already on GitHub? Link the issue without writing to it
+            <input type="text" name="issue" value="{{ card.form.link_issue }}" inputmode="numeric" placeholder="123" required
+              {%- if card.errors.link_issue.is_some() %} aria-invalid="true" aria-describedby="fb-{{ card.id }}-link_issue-error" autofocus{% endif %}>
+          </label>
+          {% if let Some(msg) = card.errors.link_issue %}<p class="field-error" id="fb-{{ card.id }}-link_issue-error">{{ msg }}</p>{% endif %}
+        </div>
+        <div class="row form-actions">
+          <button type="submit" class="btn">{% if card.form.link_issue.is_empty() %}Link to issue{% else %}Link to #{{ card.form.link_issue }}{% endif %}</button>
+        </div>
+      </fieldset>
+    </form>
+    {% endif %}
+  {% endif %}
+
+  {% if card.actionable() || card.state == "dismissed" %}
+  <footer class="card-footer">
+    {% if card.state == "dismissed" %}
+    <form method="post" action="/feedback/{{ card.id }}/restore"
+          hx-post="/feedback/{{ card.id }}/restore" hx-target="closest .feedback-card" hx-swap="outerHTML">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <button class="chip edit-link" type="submit">Restore</button>
+    </form>
+    {% else %}
+    <form method="post" action="/feedback/{{ card.id }}/dismiss"
+          hx-post="/feedback/{{ card.id }}/dismiss" hx-target="closest .feedback-card" hx-swap="outerHTML">
+      <input type="hidden" name="_csrf" value="{{ csrf }}">
+      <button class="chip danger" type="submit">Dismiss</button>
+    </form>
+    {% endif %}
+  </footer>
+  {% endif %}
+</article>

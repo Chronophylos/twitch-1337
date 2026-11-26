@@ -1,11 +1,12 @@
-use std::path::PathBuf;
+//! `!fb <text>`: file a Feedback Entry into the Feedback Inbox. Mods review
+//! it at `/feedback`; nothing reaches GitHub from here.
+
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use eyre::Result;
-use tokio::fs::OpenOptions;
-use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;
-use tracing::info;
+use tracing::debug;
 use twitch_irc::{login::LoginCredentials, transport::Transport};
 
 use super::{
@@ -13,24 +14,30 @@ use super::{
     reply_emotes::{ReplyEmoteCategory, cooldown_reply, error_reply},
 };
 use crate::cooldown::PerUserCooldown;
+use crate::feedback::{FeedbackHub, SubmitError};
 use crate::settings::{Settings, SettingsHandle};
 
-const FEEDBACK_FILENAME: &str = "feedback.txt";
+const USAGE: &str = "Benutzung: !fb <nachricht>";
+const DISABLED: &str = "Feedback ist gerade aus";
+const CAPPED: &str = "Heute schon genug Feedback, morgen wieder";
+const FAILED: &str = "Da ist was schiefgelaufen";
 
 fn feedback_cooldown_duration(s: &Settings) -> Duration {
     Duration::from_secs(s.cooldowns.feedback)
 }
 
 pub struct FeedbackCommand {
-    data_dir: PathBuf,
+    hub: Arc<FeedbackHub>,
+    settings: SettingsHandle,
     cooldown: PerUserCooldown,
 }
 
 impl FeedbackCommand {
-    pub fn new(data_dir: PathBuf, settings: SettingsHandle) -> Self {
+    pub fn new(hub: Arc<FeedbackHub>, settings: SettingsHandle) -> Self {
         Self {
-            data_dir,
-            cooldown: PerUserCooldown::live(settings, feedback_cooldown_duration),
+            hub,
+            cooldown: PerUserCooldown::live(settings.clone(), feedback_cooldown_duration),
+            settings,
         }
     }
 }
@@ -50,7 +57,7 @@ where
     }
 
     fn description(&self) -> &str {
-        "Feedback an den Bot-Owner"
+        "Feedback an die Mods, wird ggf. ein GitHub-Issue"
     }
 
     fn usage(&self) -> &str {
@@ -62,80 +69,58 @@ where
     }
 
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
-        let user = &ctx.privmsg.sender.login;
-        let message: String = ctx.args.join(" ");
+        let reply_error = |category, text| error_reply(&self.settings, category, text);
 
-        // Check for empty message
-        if message.trim().is_empty() {
+        if !self.settings.load().feedback.enabled {
             ctx.sender
                 .reply(
                     &ctx.privmsg,
-                    error_reply(
-                        &ctx.settings,
-                        ReplyEmoteCategory::Invalid,
-                        "Benutzung: !fb <nachricht>",
-                    ),
+                    reply_error(ReplyEmoteCategory::Unavailable, DISABLED),
                 )
                 .await;
             return Ok(());
         }
 
-        if let Err(remaining) = self.cooldown.try_acquire(user).await {
+        let text = ctx.args.join(" ");
+        let text = text.trim();
+        if text.is_empty() {
             ctx.sender
-                .reply(&ctx.privmsg, cooldown_reply(&ctx.settings, remaining))
+                .reply(
+                    &ctx.privmsg,
+                    reply_error(ReplyEmoteCategory::Invalid, USAGE),
+                )
                 .await;
             return Ok(());
         }
 
-        // Write feedback to file
-        let now = crate::util::to_berlin(jiff::Timestamp::now()).strftime("%Y-%m-%dT%H:%M:%S");
-        let line = format!("{now} {user}: {message}\n");
-
-        let path = self.data_dir.join(FEEDBACK_FILENAME);
-        match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .await
-        {
-            Ok(mut file) => {
-                if let Err(e) = file.write_all(line.as_bytes()).await {
-                    crate::log_handled!(error, e, "Failed to write feedback to file");
-                    ctx.sender
-                        .reply(
-                            &ctx.privmsg,
-                            error_reply(
-                                &ctx.settings,
-                                ReplyEmoteCategory::Failure,
-                                "Da ist was schiefgelaufen",
-                            ),
-                        )
-                        .await;
-                    return Ok(());
-                }
-            }
-            Err(e) => {
-                crate::log_handled!(error, e, "Failed to open feedback file");
+        let sender = &ctx.privmsg.sender;
+        let stamp = match self.cooldown.try_acquire(&sender.login).await {
+            Ok(stamp) => stamp,
+            Err(remaining) => {
                 ctx.sender
-                    .reply(
-                        &ctx.privmsg,
-                        error_reply(
-                            &ctx.settings,
-                            ReplyEmoteCategory::Failure,
-                            "Da ist was schiefgelaufen",
-                        ),
-                    )
+                    .reply(&ctx.privmsg, cooldown_reply(&self.settings, remaining))
                     .await;
                 return Ok(());
             }
-        }
+        };
 
-        info!(user = %user, "Feedback saved");
-
-        ctx.sender
-            .reply(&ctx.privmsg, "Feedback gespeichert Okayge")
-            .await;
-
+        let line = match self.hub.submit(&sender.id, &sender.login, text).await {
+            Ok(id) => {
+                debug!(entry = id, user = %sender.login, "Feedback entry filed");
+                format!("Danke, notiert (#F{id})")
+            }
+            Err(SubmitError::DailyCap) => {
+                // Nothing was filed, so the cooldown is not charged.
+                self.cooldown.refund(&sender.login, stamp).await;
+                reply_error(ReplyEmoteCategory::Limit, CAPPED)
+            }
+            Err(SubmitError::Persist(error)) => {
+                crate::log_handled!(error, error, "Failed to save feedback entry");
+                self.cooldown.refund(&sender.login, stamp).await;
+                reply_error(ReplyEmoteCategory::Failure, FAILED)
+            }
+        };
+        ctx.sender.reply(&ctx.privmsg, line).await;
         Ok(())
     }
 }

@@ -1,0 +1,53 @@
+{# crates/web/templates/settings/cards/feedback.html #}
+{% import "settings/_macros.html" as m %}
+
+<section id="sec-feedback" class="settings-card" data-section="feedback">
+  {# Sentinel: the card was rendered, so an absent checkbox means "off". #}
+  <input type="hidden" name="feedback.__shown" value="1">
+  <header class="settings-card-head">
+    <div>
+      <h2>Feedback</h2>
+      <p><code>!fb &lt;text&gt;</code> files a Feedback Entry into the inbox at <a href="/feedback">/feedback</a>, where mods dismiss it or turn it into a GitHub issue. Changes apply immediately.</p>
+    </div>
+    <div class="settings-card-tag">
+      <span class="card-dirty" hidden>0 modified</span>
+    </div>
+  </header>
+  <div class="settings-rows">
+    {% call m::toggle_row("feedback", self.knob("feedback.enabled"),
+       "Accept new entries. Off answers that feedback is switched off; the inbox stays usable.",
+       current.feedback.enabled, defaults.feedback.enabled) %}{% endcall %}
+    {% call m::num_row("feedback", self.knob("feedback.per_user_daily"),
+       "Entries one viewer may file per Berlin day. 0 means unlimited.",
+       current.feedback.per_user_daily, defaults.feedback.per_user_daily, "/day") %}{% endcall %}
+    {% let feedback_profile = current.feedback.profile.as_str() %}
+    <div class="settings-row" data-section="feedback">
+      {% call m::row_head(self.knob("feedback.profile").label(), "Decision profile that classifies each entry (kind and system). Only decision-kind profiles are listed; empty turns the classifier off.", "feedback.profile") %}{% endcall %}
+      <div class="row-control-cell">
+        <select id="feedback.profile" name="feedback.profile" data-key="feedback.profile" data-default="{{ defaults.feedback.profile }}">
+          <option value="">(off)</option>
+          {% for p in current.ai.profiles %}
+          {% if p.kind.as_str() == "decision" %}<option value="{{ p.name }}"{% if feedback_profile == p.name %} selected{% endif %}>{{ p.name }}</option>{% endif %}
+          {% endfor %}
+        </select>
+      </div>
+      <div class="row-right">
+        {% call m::restart_badge(self.knob("feedback.profile")) %}{% endcall %}
+        {% call m::row_reset("feedback.profile") %}{% endcall %}
+        <span class="row-default">default <span class="mono">(off)</span></span>
+      </div>
+    </div>
+    {% call m::num_row("feedback", self.knob("feedback.noise_floor"),
+       "Minimum classifier confidence (percent) for a noise verdict to auto-dismiss the entry. Dismissed entries stay restorable for 30 days.",
+       current.feedback.noise_floor, defaults.feedback.noise_floor, "%") %}{% endcall %}
+    {% call m::num_row("feedback", self.knob("feedback.close_poll_secs"),
+       "How often closed GitHub issues are checked for linked entries. Needs the [github] section in config.toml.",
+       current.feedback.close_poll_secs, defaults.feedback.close_poll_secs, "s") %}{% endcall %}
+    {% call m::toggle_row("feedback", self.knob("feedback.announce_promote"),
+       "Tell the reporter in chat when their entry becomes or joins a GitHub issue.",
+       current.feedback.announce_promote, defaults.feedback.announce_promote) %}{% endcall %}
+    {% call m::toggle_row("feedback", self.knob("feedback.announce_close"),
+       "Tell every reporter in chat when their issue is closed as completed.",
+       current.feedback.announce_close, defaults.feedback.announce_close) %}{% endcall %}
+  </div>
+</section>

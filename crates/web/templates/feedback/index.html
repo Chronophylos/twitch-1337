@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Feedback — twitch-1337{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Feedback <span class="count">({{ entries.len() }})</span></h1>
+    <p class="page-sub">Viewer feedback from <code>!fb</code>. Nothing reaches GitHub until a mod promotes or attaches it.</p>
+  </div>
+</div>
+
+{% if let Some(msg) = flash %}<div class="flash">{{ msg }}</div>{% endif %}
+{% if let Some(msg) = error %}<div class="flash error" role="alert">{{ msg }}</div>{% endif %}
+{% if !github_configured %}<p class="muted">GitHub is not configured: Promote, Attach and Link are disabled.</p>{% endif %}
+
+{% let oob = false %}
+{% include "feedback/_tabs.html" %}
+
+{% if !entries.is_empty() %}
+<section class="feedback-list">
+  {% for card in entries %}
+    {% include "feedback/_card.html" %}
+  {% endfor %}
+</section>
+{% else if tab == "linked" %}
+<p class="empty">No feedback linked to an issue yet.</p>
+{% else if tab == "dismissed" %}
+<p class="empty">Nothing dismissed. Dismissed feedback is deleted after 30 days.</p>
+{% else %}
+<p class="empty">Inbox empty. New <code>!fb</code> feedback shows up here.</p>
+{% endif %}
+{% endblock %}
