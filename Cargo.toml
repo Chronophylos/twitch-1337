@@ -44,6 +44,9 @@ infer = { version = "0.22", default-features = false }
 # Bundled IANA DB: the musl FROM-scratch image has no /usr/share/zoneinfo, and
 # Aviationstack airport timezones must resolve.
 jiff = { version = "1.0.1", default-features = false, features = ["std", "serde", "tzdb-bundle-always"] }
+# Global allocator for the binary crate only: musl's malloc serializes under
+# multithreaded load. Default features (no `secure` hardening overhead).
+mimalloc = "0.1.52"
 tokio-util = "0.7"
 # OTLP/HTTP export of logs, traces and metrics (ADR-0013). Defaults off: no
 # `internal-logs` (the SDK would print export errors to stdout on every failed
