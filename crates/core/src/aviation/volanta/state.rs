@@ -446,7 +446,7 @@ fn advance(
     };
     if progress.streak >= CONFIRM_SAMPLES {
         progress.streak = 0;
-        progress.airborne = !progress.airborne;
+        progress.airborne.toggle();
         if progress.airborne {
             // A new takeoff re-arms the landing announcement, so pattern
             // work gets every full-stop landing rated.

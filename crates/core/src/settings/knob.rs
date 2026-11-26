@@ -246,7 +246,7 @@ pub fn restart_required(before: &Settings, after: &Settings) -> Vec<String> {
     let mut out = Vec::new();
     for k in knobs().iter().filter(|k| k.restart) {
         if k.presence {
-            let section = k.path.strip_suffix(".enabled").unwrap_or(&k.path);
+            let section = k.path.trim_suffix(".enabled");
             let ptr = pointer(section);
             match (at(&b, &ptr) == null, at(&a, &ptr) == null) {
                 (true, false) => out.push(format!("{section} (enabling requires restart)")),

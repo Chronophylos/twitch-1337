@@ -1515,7 +1515,7 @@ mod tests {
                 let line = self.next_output().await;
                 if line.contains(" PRIVMSG #test :") {
                     let body = line.rsplit_once(" :").expect("PRIVMSG body").1;
-                    return body.strip_prefix(". ").unwrap_or(body).to_owned();
+                    return body.trim_prefix(". ").to_owned();
                 }
             }
         }
@@ -1846,10 +1846,7 @@ mod tests {
             }
         };
         let body = line.rsplit_once(" :").expect("PRIVMSG body").1;
-        assert_eq!(
-            body.strip_prefix(". ").unwrap_or(body),
-            CAPACITY_REJECTION_MESSAGE
-        );
+        assert_eq!(body.trim_prefix(". "), CAPACITY_REJECTION_MESSAGE);
     }
 
     #[tokio::test]
@@ -1943,7 +1940,7 @@ mod tests {
             }
         };
         let body = line.rsplit_once(" :").expect("PRIVMSG body").1;
-        assert_eq!(body.strip_prefix(". ").unwrap_or(body), "zu viel zu tun");
+        assert_eq!(body.trim_prefix(". "), "zu viel zu tun");
         manager.task_group.abort_and_join().await.unwrap();
     }
 

@@ -446,7 +446,7 @@ impl SearchClient {
                 .unwrap_or("")
                 .trim()
                 .to_ascii_lowercase();
-            let body = String::from_utf8_lossy(&buf).to_string();
+            let body = String::from_utf8_lossy_owned(buf);
             let text = if matches!(
                 media_type.as_str(),
                 "text/html" | "application/xhtml+xml" | "application/xml" | "text/xml"

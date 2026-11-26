@@ -130,7 +130,7 @@ fn classify_domain(q: &str) -> Result<Target, Rejection> {
     if q.contains(['/', ':', '@', '?', '#', ' ', '\\']) {
         return Err(Rejection::Invalid(SHAPE));
     }
-    let name = q.strip_suffix('.').unwrap_or(q);
+    let name = q.trim_suffix('.');
     // WHATWG host parsing lowercases and converts IDNs to punycode. A
     // numeric shape it reads as IPv4 (`0x7f.1`) is not a canonical address
     // and not a domain either.

@@ -69,7 +69,7 @@ fn parse_arrival(s: &str) -> Option<Timestamp> {
     if let Ok(ts) = s.parse::<Timestamp>() {
         return Some(ts);
     }
-    let stripped = s.strip_suffix('Z').unwrap_or(s);
+    let stripped = s.trim_suffix('Z');
     civil::DateTime::strptime("%Y-%m-%dT%H:%M", stripped)
         .or_else(|_| civil::DateTime::strptime("%Y-%m-%dT%H:%M:%S", stripped))
         .ok()

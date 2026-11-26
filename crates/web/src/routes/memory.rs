@@ -297,7 +297,7 @@ fn note_excerpt(body: &str) -> String {
         .map(str::trim)
         .find(|l| !l.is_empty())
         .unwrap_or("");
-    let line = line.strip_prefix("# ").unwrap_or(line);
+    let line = line.trim_prefix("# ");
     line.chars().take(140).collect()
 }
 

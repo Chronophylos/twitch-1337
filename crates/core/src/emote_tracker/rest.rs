@@ -97,7 +97,7 @@ pub async fn fetch_global_set(
         let status = response.status();
         let body = read_capped(response, MAX_BODY_BYTES)
             .await
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .map(String::from_utf8_lossy_owned)
             .unwrap_or_default();
         bail!("7TV request failed with status {status}: {body}");
     }
@@ -134,7 +134,7 @@ pub async fn fetch_channel_set(
         let status = response.status();
         let body = read_capped(response, MAX_BODY_BYTES)
             .await
-            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .map(String::from_utf8_lossy_owned)
             .unwrap_or_default();
         bail!("7TV request failed with status {status}: {body}");
     }

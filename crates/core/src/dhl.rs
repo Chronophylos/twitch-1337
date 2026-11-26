@@ -155,7 +155,7 @@ impl DhlClient {
             // verified DHL preserves; the generic arm covers a rewrap.
             let body = read_capped(resp, MAX_BODY_BYTES)
                 .await
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .map(String::from_utf8_lossy_owned)
                 .unwrap_or_default();
             return Err(if body.contains("SpikeArrestViolation") {
                 DhlError::RateLimitedSpike

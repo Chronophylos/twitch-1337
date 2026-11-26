@@ -19,7 +19,7 @@ async fn startup_announce_posts_to_admin_channel() {
         "startup announce went to wrong channel"
     );
     // TwitchIRCClient::say() prepends ". " to defeat command injection.
-    let stripped = body.strip_prefix(". ").unwrap_or(&body);
+    let stripped = body.trim_prefix(". ");
     assert!(
         stripped.starts_with("I'm up KOK · "),
         "unexpected startup body: {body}"

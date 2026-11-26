@@ -425,7 +425,7 @@ async fn fetch(
         return None;
     }
     match crate::util::http::read_capped(resp, max_bytes).await {
-        Ok(b) => Some(String::from_utf8_lossy(&b).into_owned()),
+        Ok(b) => Some(String::from_utf8_lossy_owned(b)),
         Err(error) => {
             let error = error.without_url();
             crate::log_handled!(
