@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% import "_crumbs.html" as cr %}
-{% block title %}{% if is_new %}New ping{% else %}Edit !{{ name }}{% endif %} — twitch-1337{% endblock %}
+{% block title %}{% if is_new %}New ping{% else %}Edit !{{ name }}{% endif %} — Ɛ:3{% endblock %}
 {% block crumbs %}{% call cr::parents(current_page) %}{% endcall %}{% if is_new %}{% call cr::here("New ping") %}{% endcall %}{% else %}{% call cr::here("Edit !" ~ name) %}{% endcall %}{% endif %}{% endblock %}
 {% block content %}
 <div class="page-head">

@@ -8,7 +8,7 @@
 
 <aside class="sidebar" id="sidebar">
   <div class="brand">
-    <div class="brand-mark"><span class="brand-glyph">⌬</span></div>
+    <div class="brand-mark">{% include "_mark.html" %}</div>
     <div class="brand-text">
       <span class="brand-name">twitch-1337</span>
       <span class="brand-meta">{{ env!("BUILD_NUM") }} · <a class="brand-sha" href="https://github.com/Chronophylos/twitch-1337/commit/{{ env!("GIT_SHA_SHORT") }}" target="_blank" rel="noopener noreferrer" title="commit {{ env!("GIT_SHA_SHORT") }}">{{ env!("GIT_SHA_SHORT") }}</a></span>

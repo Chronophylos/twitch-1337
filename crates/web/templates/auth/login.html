@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Sign in — twitch-1337{% endblock %}
+{% block title %}Sign in — Ɛ:3{% endblock %}
 {% block layout %}
 <div class="shell-solo">
   <div class="auth-card">
-    <div class="auth-mark" aria-hidden="true">⌬</div>
+    <div class="auth-mark" aria-hidden="true">{% include "_mark.html" %}</div>
     <h1>twitch-1337</h1>
     <p>Dashboard for {{ channel }}. Sign in with Twitch.</p>
     <a href="{{ login_href }}" class="btn primary">Sign in with Twitch</a>

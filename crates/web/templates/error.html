@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ heading }} — twitch-1337{% endblock %}
+{% block title %}{{ heading }} — Ɛ:3{% endblock %}
 {% block layout %}
 <div class="shell-solo">
   <div class="auth-card">
-    <div class="auth-mark" aria-hidden="true">⌬</div>
+    <div class="auth-mark" aria-hidden="true">{% include "_mark.html" %}</div>
     <h1>{{ heading }}</h1>
     <p>{{ message }}</p>
     <div class="error-actions">
