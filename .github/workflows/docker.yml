@@ -4,9 +4,16 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # Weekly re-scan of the deployed :latest: advisories land against an
+  # unchanged image too. Only the `scan` job runs on schedule.
+  schedule:
+    - cron: '0 5 * * 0'  # Sundays 05:00 UTC, after ghcr-retention at 04:00
 
 concurrency:
-  group: docker-${{ github.ref }}
+  # Scheduled scans get their own group. GitHub keeps one pending run per
+  # group, so a queued scan would otherwise replace a queued build and that
+  # push would never deploy.
+  group: docker-${{ github.event_name == 'schedule' && 'scheduled-scan' || github.ref }}
   # Queue, never cancel: a docs-only push cancelling an in-flight code build
   # would skip its own build too, and that code would never deploy.
   cancel-in-progress: false
@@ -40,6 +47,8 @@ jobs:
     # :latest (the dockhand webhook would deploy it past all required checks).
     if: always() && github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.code == 'true')
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
     permissions:
       contents: read
       packages: write
@@ -70,7 +79,8 @@ jobs:
       - name: Set image created timestamp
         run: echo "CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
 
-      - uses: docker/build-push-action@v7.4.0
+      - id: push
+        uses: docker/build-push-action@v7.4.0
         env:
           GIT_SHA: ${{ github.sha }}
           BUILD_NUM: b${{ github.run_number }}
@@ -108,3 +118,49 @@ jobs:
             "$DOCKHAND_WEBHOOK_URL")
           echo "$resp"
           jq -e '.success != false and .skipped != true' <<<"$resp" >/dev/null
+
+  scan:
+    name: trivy image
+    needs: build
+    # After a push: scan the exact digest `build` just published, so a later
+    # :latest cannot race it. On schedule `build` is skipped; re-scan the
+    # deployed :latest against the current advisory DB.
+    if: always() && (github.event_name == 'schedule' || needs.build.result == 'success')
+    runs-on: ubuntu-latest
+    # Same set as sast.yml trivy-config: upload-sarif polls the run
+    # (actions: read) and writes the Security tab (security-events: write).
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      # Locked at v0.36.0, same as sast.yml trivy-config (Mar 2026 supply-chain
+      # incident). The GHCR package is public, so Trivy pulls anonymously.
+      - uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: ghcr.io/chronophylos/twitch-1337${{ github.event_name == 'schedule' && ':latest' || format('@{0}', needs.build.outputs.digest) }}
+          scanners: vuln
+          format: sarif
+          output: trivy-image.sarif
+          severity: HIGH,CRITICAL
+          # The action drops `severity` for SARIF unless this is set, and
+          # exit-code would then trip on LOW/MEDIUM findings too.
+          limit-severities-for-sarif: true
+          # Fixable findings only: an advisory without a patched release has
+          # nothing to bump, and a red run would only train people to ignore it.
+          ignore-unfixed: true
+          # Fail on findings: the run going red (and the failure email on the
+          # weekly schedule) is the alert. The image is already deployed, so
+          # this never blocks a release.
+          exit-code: "1"
+
+      - uses: github/codeql-action/upload-sarif@v4.39.3
+        if: always() && !github.event.repository.private
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
