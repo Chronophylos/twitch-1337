@@ -8,6 +8,10 @@ split-debuginfo = "unpacked"
 [profile.dev.package."*"]
 debug = false
 
-[profile.debugging]
-inherits = "dev"
+# Built-in `debug` profile (inherits dev); full debuginfo for debugger sessions.
+[profile.debug]
 debug = true
+
+# Supply-chain cooldown: resolve only versions published at least 7 days ago.
+[registry]
+global-min-publish-age = "7 days"
