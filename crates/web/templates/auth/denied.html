@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}Access denied — twitch-1337{% endblock %}
+{% block title %}Access denied — Ɛ:3{% endblock %}
 {% block layout %}
 <div class="shell-solo">
   <div class="auth-card">
-    <div class="auth-mark" aria-hidden="true">⌬</div>
+    <div class="auth-mark" aria-hidden="true">{% include "_mark.html" %}</div>
     <h1>Access denied</h1>
     <p>Your account isn't a mod of {{ channel }} or on the viewer allowlist.</p>
     <a href="/login" class="btn primary">Try a different account</a>
