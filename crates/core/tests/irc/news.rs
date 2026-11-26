@@ -339,7 +339,7 @@ async fn news_command_falls_back_to_chat_when_whisper_fails() {
     bot.llm.push_chat("fallback summary");
     bot.send("alice", "!news").await;
     let out = bot.expect_say(Duration::from_secs(2)).await;
-    let body = out.strip_prefix(". ").unwrap_or(&out);
+    let body = out.trim_prefix(". ");
     assert_eq!(body, "ICYMI: fallback summary");
 
     bot.shutdown().await;

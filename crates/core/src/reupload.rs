@@ -131,7 +131,7 @@ impl Hosts {
                     UploadError::BadResponse("oversized response".into())
                 }
             })?;
-        Ok((status, String::from_utf8_lossy(&bytes).into_owned()))
+        Ok((status, String::from_utf8_lossy_owned(bytes)))
     }
 
     /// `POST /api/upload` (fields `file`, `expires`); answers

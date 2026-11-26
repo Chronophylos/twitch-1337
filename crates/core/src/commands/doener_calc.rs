@@ -27,7 +27,7 @@ fn parse_euro_amount(raw: &str) -> Option<f64> {
     if t.is_empty() {
         return None;
     }
-    t = t.strip_suffix('€').unwrap_or(t).trim();
+    t = t.trim_suffix('€').trim();
     let mut parser = AmountExprParser::new(t);
     let value = parser.parse_expr()?;
     parser.skip_ws();

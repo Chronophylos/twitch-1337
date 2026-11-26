@@ -691,7 +691,7 @@ async fn toggle(
                 move |o: &mut twitch_1337_core::settings::SettingsOverrides| {
                     let mut next = o.schedules.clone().unwrap_or_default();
                     if let Some(s) = next.iter_mut().find(|s| s.name == name_for) {
-                        s.enabled = !s.enabled;
+                        s.enabled.toggle();
                     }
                     o.schedules = Some(next);
                 },
