@@ -1,0 +1,7 @@
+# Picked up automatically by gitleaks-action from the repo root.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Throwaway test-only RSA keys for the GitHub App client tests; never installed anywhere"
+paths = ['''crates/core/src/github/fixtures/test_key_pkcs(1|8)\.pem''']

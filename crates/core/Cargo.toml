@@ -39,9 +39,13 @@ parking_lot = { workspace = true }
 random-flight = { path = "../random-flight" }
 rand = { workspace = true }
 reqwest = { workspace = true }
+# GitHub App JWT (RS256) for the feedback pipeline; already in the tree via rustls.
+ring = { version = "0.17.14", features = ["std"] }
 ron = { workspace = true }
 rusqlite = { workspace = true }
 rustls = { workspace = true }
+# PEM decoding of the GitHub App private key (PKCS#1 / PKCS#8).
+rustls-pki-types = "1.16"
 schemars = { workspace = true }
 scraper = { workspace = true }
 secrecy = { workspace = true }

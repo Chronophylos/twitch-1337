@@ -92,6 +92,22 @@ pub struct FinnhubBootstrap {
     pub api_key: SecretString,
 }
 
+/// Bootstrap-only GitHub App configuration. Presence lets the `/feedback`
+/// dashboard turn chat feedback into issues and poll for closes. Runtime
+/// knobs live in `settings.ron` under `feedback.*`.
+///
+/// Deserialize-only on purpose: the private key never round-trips out.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GithubBootstrap {
+    /// Target repository, `owner/name`.
+    pub repo: String,
+    /// Numeric GitHub App id (the JWT `iss`).
+    pub app_id: u64,
+    /// Inline PEM: PKCS#1 (`BEGIN RSA PRIVATE KEY`, what GitHub hands out)
+    /// or PKCS#8 (`BEGIN PRIVATE KEY`).
+    pub private_key: SecretString,
+}
+
 /// Bootstrap-only Langfuse configuration. Presence of the section enables
 /// first-party OTLP export. Keys never belong in settings.ron.
 #[derive(Debug, Clone, Deserialize)]
@@ -180,6 +196,8 @@ pub struct Configuration {
     #[serde(default)]
     pub finnhub: Option<FinnhubBootstrap>,
     #[serde(default)]
+    pub github: Option<GithubBootstrap>,
+    #[serde(default)]
     pub langfuse: Option<LangfuseBootstrap>,
     #[serde(default)]
     pub otel: Option<OtelBootstrap>,
@@ -210,6 +228,7 @@ impl Configuration {
             ipinfo: None,
             amp: None,
             finnhub: None,
+            github: None,
             langfuse: None,
             otel: None,
             ai: None,
@@ -307,6 +326,20 @@ pub fn validate_config(config: &Configuration) -> Result<()> {
         .is_some_and(|f| f.api_key.expose_secret().trim().is_empty())
     {
         bail!("finnhub.api_key cannot be empty when finnhub is configured");
+    }
+
+    if let Some(github) = config.github.as_ref() {
+        if !crate::github::is_valid_repo(&github.repo) {
+            bail!("github.repo must be \"owner/name\", got {:?}", github.repo);
+        }
+        if github.app_id == 0 {
+            bail!("github.app_id must be set when github is configured");
+        }
+        if let Err(error) = crate::github::parse_private_key(github.private_key.expose_secret()) {
+            bail!(
+                "github.private_key must be an inline RSA private key PEM (PKCS#1 or PKCS#8): {error:#}"
+            );
+        }
     }
 
     if let Some(lf) = config.langfuse.as_ref() {
@@ -627,5 +660,79 @@ mod tests {
         assert!(err.to_string().contains("otel.auth_header"), "{err}");
         cfg.otel = Some(otel("http://alloy:4318"));
         validate_config(&cfg).expect("plain LAN collector accepted");
+    }
+
+    fn github(repo: &str, key: &str) -> GithubBootstrap {
+        GithubBootstrap {
+            repo: repo.to_owned(),
+            app_id: 42,
+            private_key: SecretString::new(key.into()),
+        }
+    }
+
+    #[test]
+    fn github_section_parses_and_validates() {
+        let cfg: Configuration = toml::from_str(&format!(
+            r#"
+            [twitch]
+            channel = "c"
+            username = "u"
+            refresh_token = "r"
+            client_id = "i"
+            client_secret = "s"
+
+            [github]
+            repo = "Chronophylos/twitch-1337"
+            app_id = 42
+            private_key = """
+{}"""
+        "#,
+            crate::github::test_support::TEST_PRIVATE_KEY_PEM
+        ))
+        .expect("parse");
+        let gh = cfg.github.as_ref().expect("github present");
+        assert_eq!(gh.repo, "Chronophylos/twitch-1337");
+        assert_eq!(gh.app_id, 42);
+        validate_config(&cfg).expect("valid github section");
+    }
+
+    #[test]
+    fn github_repo_must_be_owner_slash_name() {
+        let key = crate::github::test_support::TEST_PRIVATE_KEY_PEM;
+        for bad in [
+            "",
+            "twitch-1337",
+            "/name",
+            "owner/",
+            "a/b/c",
+            " a/b",
+            "a/b ",
+            "a b/c",
+        ] {
+            let mut cfg = Configuration::test_default();
+            cfg.github = Some(github(bad, key));
+            let err = validate_config(&cfg).expect_err(bad);
+            assert!(err.to_string().contains("github.repo"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn github_private_key_must_parse() {
+        for bad in [
+            "",
+            "not a pem",
+            "-----BEGIN RSA PRIVATE KEY-----\nAAAA\n-----END RSA PRIVATE KEY-----\n",
+        ] {
+            let mut cfg = Configuration::test_default();
+            cfg.github = Some(github("o/r", bad));
+            let err = validate_config(&cfg).expect_err(bad);
+            assert!(err.to_string().contains("github.private_key"), "{err}");
+        }
+        let mut cfg = Configuration::test_default();
+        cfg.github = Some(github(
+            "o/r",
+            include_str!("github/fixtures/test_key_pkcs8.pem"),
+        ));
+        validate_config(&cfg).expect("PKCS#8 accepted");
     }
 }
