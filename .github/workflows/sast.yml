@@ -63,6 +63,9 @@ jobs:
           format: sarif
           output: trivy-config.sarif
           severity: HIGH,CRITICAL
+          # The action unsets `severity` for SARIF unless this is set, so
+          # exit-code would trip on LOW/MEDIUM findings too.
+          limit-severities-for-sarif: true
           # Same rule as hadolint: fail on findings, upload regardless.
           exit-code: "1"
 
