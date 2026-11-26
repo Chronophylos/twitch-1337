@@ -102,6 +102,12 @@ wiremock = "0.6"
 # Drop .symtab/.strtab from the musl static binary (~8 MiB). The scratch
 # image is essentially just this binary, so strip directly caps image size.
 strip = "symbols"
+# Thin LTO + one codegen unit: ~13% smaller binary for ~50 s extra on the
+# final link (fat LTO only saves 4 points more at ~3x the link cost; cargo-chef
+# caches deps but LTO runs on every image build). No `panic = "abort"`: ADR-0012
+# fail-fast relies on unwinding for drain/finalizers.
+lto = "thin"
+codegen-units = 1
 
 [workspace.lints.cargo]
 unused_dependencies = "deny"

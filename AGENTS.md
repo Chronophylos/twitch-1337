@@ -579,7 +579,7 @@ pub async fn run_my_handler<T, L>(
 
 ## Binary / Docker
 
-Musl static build: `cargo build --release --target x86_64-unknown-linux-musl` (~29 MB stripped; works on Alpine/busybox, `FROM scratch` image). `[profile.release] strip = "symbols"` keeps the image ≈ binary size. rustls + **ring** only (no OpenSSL, no aws-lc — see ADR-0007); call `install_crypto_provider()` before any TLS client. Multi-stage Dockerfile with cargo-chef; the image builds with `cargo auditable build` so the dependency tree lives in a `.dep-v0` section (kept by `strip = "symbols"`) for Trivy/Grype.
+Musl static build: `cargo build --release --target x86_64-unknown-linux-musl` (~39 MB stripped; works on Alpine/busybox, `FROM scratch` image). `[profile.release] strip = "symbols"` keeps the image ≈ binary size; `lto = "thin"` + `codegen-units = 1` trims ~13% for ~50 s extra final link per image build (fat LTO measured not worth ~3x link time); no `panic = "abort"` (ADR-0012 needs unwinding). rustls + **ring** only (no OpenSSL, no aws-lc — see ADR-0007); call `install_crypto_provider()` before any TLS client. Multi-stage Dockerfile with cargo-chef; the image builds with `cargo auditable build` so the dependency tree lives in a `.dep-v0` section (kept by `strip = "symbols"`) for Trivy/Grype.
 
 Global allocator is `mimalloc` (default features), set in the binary crate's `main.rs` only — musl's malloc serializes under multithreaded load; core/web/tests keep the system allocator.
 
