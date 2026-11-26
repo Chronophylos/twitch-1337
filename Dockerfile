@@ -6,7 +6,7 @@
 # this Rust version rebuilds. rust-toolchain.toml is the real pin — it is
 # copied in below so every stage resolves the same toolchain regardless of
 # which Rust the base image ships.
-FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1.99.1@sha256:420b7375dc4059a85f1c365f23f96b8f561c2861e365645b413c531b206c528a AS base
+FROM docker.io/lukemathwalker/cargo-chef:latest-rust-1.100.0@sha256:edbf6876f6a78e921b94e65001cc494214bfb790f374c8bd7bc05de62f69258b AS base
 
 WORKDIR /app
 # Before `rustup target add`: the musl std must land on the pinned toolchain,
