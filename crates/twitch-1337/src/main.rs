@@ -29,6 +29,10 @@ use twitch_irc::login::LoginCredentials as _;
 
 use twitch_1337_core as twitch_1337;
 
+/// musl's allocator serializes under multithreaded load; mimalloc does not.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn build_aviation_client(
     bootstrap: Option<&twitch_1337::config::AviationstackBootstrap>,
     settings: &twitch_1337::settings::AviationstackSettings,

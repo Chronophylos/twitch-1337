@@ -12,6 +12,7 @@ async-trait = { workspace = true }
 color-eyre = { workspace = true }
 eyre = { workspace = true }
 jiff = { workspace = true }
+mimalloc = { workspace = true }
 reqwest = { workspace = true }
 secrecy = { workspace = true }
 tokio = { workspace = true }
