@@ -1,8 +1,7 @@
-#![allow(
+#![expect(
     clippy::unwrap_used,
     clippy::expect_used,
-    clippy::panic,
-    reason = "test crate: a panic is a test failure"
+    reason = "test crate: helper fns outside #[test] still trip these; a panic is a test failure"
 )]
 #[path = "../helpers/mod.rs"]
 mod helpers;
