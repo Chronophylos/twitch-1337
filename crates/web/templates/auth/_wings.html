@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{# Standalone auth/error pages: the Ɛ:3 mark opens up and the card sits in
+   its colon. Pages fill `card`; motion and the phone fallback live in app.css. #}
+{% block layout %}
+<main class="shell-solo wings">
+  <svg class="wing wing-l" viewBox="9 10 24 44" aria-hidden="true"><path d="M23 15 A10.5 8.5 0 0 0 23 32 A10.5 8.5 0 0 0 23 49"/></svg>
+  <div class="auth-card">
+    <span class="wing-dot wing-dot-t" aria-hidden="true"></span>
+    <div class="auth-mark" aria-hidden="true">{% include "_mark.html" %}</div>
+    <div class="wing-body">{% block card %}{% endblock %}</div>
+    <span class="wing-dot wing-dot-b" aria-hidden="true"></span>
+  </div>
+  <svg class="wing wing-r" viewBox="31 10 24 44" aria-hidden="true"><path d="M41 15 A10.5 8.5 0 0 1 41 32 A10.5 8.5 0 0 1 41 49"/></svg>
+</main>
+{% endblock %}

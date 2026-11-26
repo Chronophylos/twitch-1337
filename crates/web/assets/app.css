@@ -1018,33 +1018,141 @@ textarea.input { resize: vertical; min-height: 140px; line-height: 1.6; }
   overflow: auto;
 }
 
-/* Auth standalone pages */
+/* Auth standalone pages: the Ɛ:3 mark splits open and the card sits in its
+   colon (templates/auth/_wings.html). Every size is in mark units (--u), so
+   the closed start frame is the logo exactly. The keyframes only hold `from`;
+   with reduced motion the page simply renders open. */
+.wings {
+  --u: 6.25px;
+  --mid: 360px;
+  --gap: 36px;
+  --open: 1.6s cubic-bezier(0.65, 0, 0.35, 1) 0.4s both;
+  grid-template-columns: auto var(--mid) auto;
+  column-gap: var(--gap);
+  place-content: center;
+}
+/* Backdrop: a dark planet whose lilac rim rises like a sunrise while the
+   wings open, under two star layers that twinkle out of step and sway very
+   slowly. All three are fixed, behind the wings, inside .wings' stacking
+   context. */
+.wings::before,
+.wings::after,
+.auth-card::before {
+  content: "";
+  position: fixed; inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.wings::after {
+  background: radial-gradient(ellipse 110% 55% at 50% 122%,
+    var(--bg-0) 64%,
+    oklch(var(--accent-l) var(--accent-c) var(--accent-h) / 0.6) 64.5%,
+    oklch(var(--accent-l) var(--accent-c) var(--accent-h) / 0.18) 66.5%,
+    oklch(0.62 0.2 285 / 0.06) 76%,
+    transparent 86%);
+  animation:
+    horizon-rise 3.4s cubic-bezier(0.45, 0, 0.2, 1) 0.9s both,
+    horizon-breathe 9s ease-in-out 4.3s infinite alternate;
+}
+/* Stars: tiles with coprime-ish sizes so the field reads as scattered. The
+   layer is oversized so the slow sway never shows an edge. */
+.wings::before,
+.auth-card::before {
+  inset: -30%;
+  transform-origin: 50% 100%;
+  mask-image: linear-gradient(#000 40%, transparent 70%);
+}
+.wings::before {
+  background:
+    radial-gradient(circle, rgb(255 255 255 / 0.6) 0.8px, transparent 1.4px) 13px 29px / 331px 277px,
+    radial-gradient(circle, oklch(var(--accent-l) var(--accent-c) var(--accent-h) / 0.7) 1px, transparent 1.6px) 101px 83px / 463px 419px,
+    radial-gradient(circle, rgb(255 255 255 / 0.5) 0.7px, transparent 1.3px) 211px 41px / 401px 347px,
+    radial-gradient(circle, rgb(255 255 255 / 0.45) 0.7px, transparent 1.3px) 7px 301px / 293px 509px;
+  animation:
+    fade-in 3s ease 0.8s both,
+    twinkle 5s ease-in-out 3.8s infinite alternate,
+    sky-sway 140s ease-in-out infinite alternate;
+}
+.auth-card::before {
+  background:
+    radial-gradient(circle, rgb(255 255 255 / 0.4) 0.7px, transparent 1.3px) 61px 7px / 257px 389px,
+    radial-gradient(circle, rgb(255 255 255 / 0.3) 0.6px, transparent 1.2px) 37px 153px / 193px 233px,
+    radial-gradient(circle, rgb(170 230 225 / 0.35) 0.6px, transparent 1.2px) 143px 191px / 523px 457px;
+  animation:
+    fade-in 3s ease 1.2s both,
+    twinkle 7s ease-in-out 4.5s infinite alternate-reverse,
+    sky-sway 190s ease-in-out infinite alternate-reverse;
+}
+@keyframes horizon-rise { from { transform: translateY(60px); opacity: 0; } }
+@keyframes horizon-breathe { to { opacity: 0.75; } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes twinkle { to { opacity: 0.35; } }
+@keyframes sky-sway { from { transform: rotate(-2deg); } to { transform: rotate(2deg); } }
+.wing {
+  width: calc(24 * var(--u));
+  height: calc(44 * var(--u));
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 4;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 28px var(--accent-soft));
+  animation: wing-open var(--open);
+}
+.wing path { animation: wing-thin var(--open); }
+.wing-l { --dx: calc(var(--mid) / 2 + var(--gap) + var(--u)); }
+.wing-r { --dx: calc(-1 * (var(--mid) / 2 + var(--gap) + var(--u))); }
 .auth-card {
-  width: min(420px, 100%);
-  border: 1px solid var(--line);
-  background: var(--bg-1);
-  border-radius: var(--r-lg);
-  padding: 28px 28px 24px;
+  position: relative;
+  min-height: calc(44 * var(--u));
+  padding: calc(9 * var(--u)) 0;
+  display: flex; flex-direction: column; justify-content: center;
   text-align: center;
 }
-.auth-mark {
-  width: 48px; height: 48px;
-  border-radius: 10px;
-  background: var(--bg-2);
-  border: 1px solid var(--line-2);
-  color: var(--accent);
-  display: grid; place-items: center;
-  margin: 0 auto 14px;
+.wing-dot {
+  position: absolute;
+  left: 50%;
+  width: calc(7.2 * var(--u)); height: calc(7.2 * var(--u));
+  margin-left: calc(-3.6 * var(--u));
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 40px var(--accent-soft);
+  transform: scale(0.5);
+  animation: dot-open var(--open);
 }
-.auth-mark .mark { width: 34px; height: 34px; }
+/* Closed: dot centres sit 8 units off the card centre, as in the mark. */
+.wing-dot-t { top: 0; --dy: calc(10.4 * var(--u)); }
+.wing-dot-b { bottom: 0; --dy: calc(-10.4 * var(--u)); }
+.wing-body { animation: card-in 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) 1.5s both; }
+@keyframes wing-open { from { transform: translateX(var(--dx)); } }
+@keyframes wing-thin { from { stroke-width: 6.5; } }
+@keyframes dot-open { from { transform: translateY(var(--dy)) scale(1); } }
+@keyframes card-in { from { opacity: 0; transform: scale(0.96); } }
+.auth-mark { display: none; color: var(--accent); margin: 0 auto 28px; }
+.auth-mark .mark { width: 96px; height: 96px; }
 .auth-card h1 {
-  margin: 0 0 6px;
-  font-size: 22px;
+  margin: 0 0 8px;
+  font-size: 24px;
   letter-spacing: -0.02em;
 }
 .auth-card p {
   color: var(--fg-3);
-  margin: 0 0 18px;
+  margin: 0 0 22px;
+  text-wrap: pretty;
+}
+.auth-card .btn {
+  border-radius: 999px;
+  padding: 11px 20px;
+  font-size: 14px;
+  gap: 10px;
+}
+.auth-card .btn.primary { box-shadow: 0 0 32px var(--accent-soft); }
+.twitch-glyph { width: 18px; height: 18px; fill: currentColor; }
+/* Phone: no room for the wings; the whole mark sits above the card. */
+@media (max-width: 860px) {
+  .wings { grid-template-columns: min(var(--mid), 100%); }
+  .wing, .wing-dot { display: none; }
+  .auth-card { min-height: 0; padding: 0; }
+  .auth-mark { display: block; }
 }
 
 /* Public command list (/commands): standalone, no shell */

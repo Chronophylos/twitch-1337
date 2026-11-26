@@ -1,15 +1,10 @@
-{% extends "base.html" %}
+{% extends "auth/_wings.html" %}
 {% block title %}{{ heading }} — Ɛ:3{% endblock %}
-{% block layout %}
-<div class="shell-solo">
-  <div class="auth-card">
-    <div class="auth-mark" aria-hidden="true">{% include "_mark.html" %}</div>
-    <h1>{{ heading }}</h1>
-    <p>{{ message }}</p>
-    <div class="error-actions">
-      <button type="button" class="btn primary" data-history-back>← Back</button>
-      <a href="/" class="btn">Home</a>
-    </div>
-  </div>
+{% block card %}
+<h1>{{ heading }}</h1>
+<p>{{ message }}</p>
+<div class="error-actions">
+  <button type="button" class="btn primary" data-history-back>← Back</button>
+  <a href="/" class="btn">Home</a>
 </div>
 {% endblock %}
