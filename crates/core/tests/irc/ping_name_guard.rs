@@ -23,8 +23,7 @@ const TIMEOUT: Duration = Duration::from_secs(2);
 ///
 /// Drop a gate and this test stays green while covering fewer commands.
 ///
-/// Known gaps, acceptable by construction (see `RESERVED_PING_NAMES`):
-/// aliases (`!doener` normalizing onto `!döner`) stay hand-maintained, and
+/// Known gap, acceptable by construction (see `RESERVED_PING_NAMES`):
 /// `@grok` can never be a legal ping name (`create_ping` only accepts
 /// `[a-z0-9_-]`).
 ///

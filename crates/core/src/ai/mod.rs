@@ -5,7 +5,6 @@ pub mod command;
 pub mod commands_tool;
 pub mod content;
 pub mod dhl_tool;
-pub mod doener_tool;
 pub mod emote_stats_tool;
 pub mod emote_tool;
 pub mod emotes_agent;

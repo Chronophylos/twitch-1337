@@ -12,7 +12,6 @@ pub mod commands;
 pub mod config;
 pub mod cooldown;
 pub mod dhl;
-pub mod doener;
 pub mod emote_tracker;
 pub mod feedback;
 pub mod finnhub;
@@ -110,7 +109,6 @@ pub struct Services {
     /// Finnhub quote client backing `!aktien`. `None` when `[finnhub]` is
     /// absent from config.toml, which leaves the command unregistered.
     pub finnhub: Option<Arc<crate::finnhub::FinnhubClient>>,
-    pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub whisper: Option<Arc<dyn WhisperSender>>,
     pub data_dir: PathBuf,
     /// Shared dashboard-managed runtime settings. Constructed by the bin so

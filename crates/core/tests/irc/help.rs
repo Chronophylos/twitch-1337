@@ -234,8 +234,8 @@ async fn live_commands_page_uses_aurora_registration_catalog_but_help_stays_chat
         .expect("connect to commands page");
     assert_eq!(page.status(), 200);
     let html = page.text().await.expect("commands page body");
-    assert_eq!(html.matches("class=\"tr aurora-tool\"").count(), 7);
-    for expected in ["Döner-Index", "Bash-Sandbox", "DHL-Sendung"] {
+    assert_eq!(html.matches("class=\"tr aurora-tool\"").count(), 6);
+    for expected in ["Tarotkarten", "Bash-Sandbox", "DHL-Sendung"] {
         assert!(html.contains(expected), "missing {expected}");
     }
     assert!(

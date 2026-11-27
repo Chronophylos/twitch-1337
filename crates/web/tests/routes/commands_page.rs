@@ -172,7 +172,7 @@ async fn commands_page_lists_every_enabled_aurora_tool_once_with_public_copy() {
     let html = body(res).await;
 
     assert_eq!(html.matches("Aurora-Werkzeuge").count(), 1);
-    assert_eq!(html.matches("class=\"tr aurora-tool\"").count(), 11);
+    assert_eq!(html.matches("class=\"tr aurora-tool\"").count(), 10);
     assert!(html.contains("Sie sind keine eigenen Chat-Befehle"));
     for info in expected {
         assert!(html.contains(info.display_name), "missing {info:?}");
@@ -214,7 +214,7 @@ async fn commands_page_omits_tools_whose_integrations_are_unavailable() {
 
     let html = body(app.oneshot(get("/commands")).await.unwrap()).await;
 
-    assert_eq!(html.matches("class=\"tr aurora-tool\"").count(), 6);
+    assert_eq!(html.matches("class=\"tr aurora-tool\"").count(), 5);
     for tool in [
         ViewerTool::TrackShipment,
         ViewerTool::WebSearch,
@@ -229,7 +229,6 @@ async fn commands_page_omits_tools_whose_integrations_are_unavailable() {
         );
     }
     for tool in [
-        ViewerTool::DoenerIndex,
         ViewerTool::DrawTarot,
         ViewerTool::PlanFlight,
         ViewerTool::SearchPackages,

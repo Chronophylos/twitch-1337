@@ -18,7 +18,6 @@
     {% call m::num_row("cooldowns", self.knob("cooldowns.info"), "Per-user cooldown for !info.", current.cooldowns.info, defaults.cooldowns.info, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.track"), "Per-user cooldown for !track.", current.cooldowns.track, defaults.cooldowns.track, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.feedback"), "Per-user cooldown for !fb.", current.cooldowns.feedback, defaults.cooldowns.feedback, "s") %}{% endcall %}
-    {% call m::num_row("cooldowns", self.knob("cooldowns.doener"), "Per-user cooldown for !dpi and !döner (!doener); both use Döneratlas.", current.cooldowns.doener, defaults.cooldowns.doener, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.spoiler"), "Per-user cooldown for !spoiler.", current.cooldowns.spoiler, defaults.cooldowns.spoiler, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.servers"), "Per-user cooldown for !servers.", current.cooldowns.servers, defaults.cooldowns.servers, "s") %}{% endcall %}
     {% call m::num_row("cooldowns", self.knob("cooldowns.aktien"), "Per-user cooldown for !aktien (!stocks); quotes are cached for 5 minutes anyway.", current.cooldowns.aktien, defaults.cooldowns.aktien, "s") %}{% endcall %}

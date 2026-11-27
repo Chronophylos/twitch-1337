@@ -11,7 +11,6 @@ mod aktien;
 mod announce;
 mod bash;
 mod command_execution;
-mod doener;
 mod emote_lookup;
 mod emote_usage;
 mod feedback;

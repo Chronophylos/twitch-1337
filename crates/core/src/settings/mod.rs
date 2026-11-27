@@ -238,8 +238,6 @@ pub struct Cooldowns {
     #[knob(min = 1, max = 3600)]
     pub feedback: u64,
     #[knob(min = 1, max = 3600)]
-    pub doener: u64,
-    #[knob(min = 1, max = 3600)]
     pub spoiler: u64,
     /// Per-user cooldown for `!servers` (AMP calls).
     #[knob(min = 1, max = 3600)]
@@ -316,7 +314,6 @@ impl Settings {
                 news: 60,
                 up: 30,
                 feedback: 60,
-                doener: 30,
                 spoiler: 30,
                 servers: 30,
                 aktien: 60,
