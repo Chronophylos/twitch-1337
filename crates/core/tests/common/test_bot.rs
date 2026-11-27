@@ -125,7 +125,6 @@ pub struct TestBotBuilder {
     seeded_leaderboard: Option<HashMap<String, PersonalBest>>,
     seeded_hall_of_shame: Option<HashMap<String, PersonalWorst>>,
     whisper_failure: bool,
-    doener_base_url: Option<String>,
     dhl_base_url: Option<String>,
     amp_base_url: Option<String>,
     finnhub_base_url: Option<String>,
@@ -149,7 +148,6 @@ impl TestBotBuilder {
             seeded_leaderboard: None,
             seeded_hall_of_shame: None,
             whisper_failure: false,
-            doener_base_url: None,
             dhl_base_url: None,
             amp_base_url: None,
             finnhub_base_url: None,
@@ -250,12 +248,6 @@ impl TestBotBuilder {
         self.config.web.bind_addr = bind.into();
         self.config.web.session_secret = secrecy::SecretString::new("0".repeat(64).into());
         self.config.web.public_url = "https://test.invalid".into();
-        self
-    }
-
-    /// Override the Döneratlas API base URL (wiremock) for `!dpi` / `!döner` / AI tool.
-    pub fn with_doener_base_url(mut self, base: impl Into<String>) -> Self {
-        self.doener_base_url = Some(base.into());
         self
     }
 
@@ -636,12 +628,6 @@ impl TestBotBuilder {
                         secrecy::SecretString::new("test".into()),
                     ))
                 }),
-                doener: Arc::new(twitch_1337::doener::DoeneratlasClient::with_base_url(
-                    reqwest::Client::new(),
-                    self.doener_base_url
-                        .clone()
-                        .unwrap_or_else(|| "http://127.0.0.1:1".to_string()),
-                )),
                 whisper: Some(whisper.clone() as Arc<dyn WhisperSender>),
                 data_dir: data_dir.path().to_path_buf(),
                 settings: settings_handle.clone(),

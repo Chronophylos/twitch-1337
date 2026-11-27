@@ -8,8 +8,6 @@ use twitch_irc::{login::LoginCredentials, message::PrivmsgMessage, transport::Tr
 pub mod aktien;
 pub mod bash;
 pub mod catalog;
-pub mod doener;
-pub mod doener_calc;
 pub mod emote;
 pub mod execution;
 pub mod feedback;
@@ -94,8 +92,7 @@ pub fn is_admin(privmsg: &PrivmsgMessage, hidden_admin_ids: &[String]) -> bool {
 ///
 /// Rows are copied verbatim from each `Command::name()` and every `!` alias,
 /// then normalized at comparison time by [`is_reserved_ping_name`] — adding one
-/// is a copy-paste, with no chance to get the `!`-stripping or the
-/// `döner`/`doener` collapse wrong by hand.
+/// is a copy-paste, with no chance to get the `!`-stripping wrong by hand.
 ///
 /// Kept by hand because every trigger lives in its own command implementation
 /// and the registered list is built from `Services` at handler start, so there
@@ -105,16 +102,12 @@ pub fn is_admin(privmsg: &PrivmsgMessage, hidden_admin_ids: &[String]) -> bool {
 /// The guard is one-directional: command-registry construction rejects a
 /// registered command name or `!` alias with no row (so drift trips in every
 /// build and is covered by the `ping_name_guard` integration test), while a
-/// stale row is harmless and may simply be deleted. A command trigger that does
-/// not equal its `name()` (e.g. the `!doener` alias normalizing onto `!döner`)
-/// must still be kept in `normalize_command_name` by hand.
+/// stale row is harmless and may simply be deleted.
 pub const RESERVED_PING_NAMES: &[&str] = &[
     "!ai",
     "!aktien",
     "!bash",
     "!commands",
-    "!döner",
-    "!dpi",
     "!e",
     "!fb",
     "!fl",
@@ -156,15 +149,11 @@ pub fn is_reserved_ping_name(name: &str) -> bool {
         .any(|trigger| normalize_command_name(trigger) == name)
 }
 
-/// Normalize a command name from user input: strip leading `!`s,
-/// ASCII-lowercase, and collapse known command aliases. Used both by admin
-/// suspend commands and by the dispatcher's suspension lookup — they MUST
-/// agree.
+/// Normalize a command name from user input: strip leading `!`s and
+/// ASCII-lowercase. Used both by admin suspend commands and by the
+/// dispatcher's suspension lookup — they MUST agree.
 pub fn normalize_command_name(raw: &str) -> String {
-    match raw.trim_start_matches('!').to_ascii_lowercase().as_str() {
-        "döner" => "doener".to_owned(),
-        normalized => normalized.to_owned(),
-    }
+    raw.trim_start_matches('!').to_ascii_lowercase()
 }
 
 /// Normalize a username argument: strip a leading `@` and ASCII-lowercase.
@@ -271,6 +260,5 @@ mod tests {
         assert_eq!(normalize_command_name("!AI"), "ai");
         assert_eq!(normalize_command_name("!!foo"), "foo");
         assert_eq!(normalize_command_name("track"), "track");
-        assert_eq!(normalize_command_name("!döner"), "doener");
     }
 }

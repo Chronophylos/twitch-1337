@@ -146,10 +146,6 @@ fn save_form_body(bare_csrf: &str, current: &Settings, extra: &[(&str, &str)]) -
             current.cooldowns.feedback.to_string(),
         ),
         (
-            "cooldowns.doener".to_owned(),
-            current.cooldowns.doener.to_string(),
-        ),
-        (
             "pings.cooldown".to_owned(),
             current.pings.cooldown.to_string(),
         ),

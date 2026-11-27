@@ -13,8 +13,8 @@ use twitch_1337_core::{
     AuthenticatedLoginCredentials, PersonalBest, PersonalWorst, Services,
     ai::chat_context::ChatContext,
     ai::memory::store::MemoryStore,
-    aviation, doener, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing,
-    llm_factory, load_configuration, load_hall_of_shame, load_leaderboard,
+    aviation, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing, llm_factory,
+    load_configuration, load_hall_of_shame, load_leaderboard,
     ping::{PingManager, ping_runtime},
     run_bot, setup_and_verify_twitch_client,
     suspend::SuspensionManager,
@@ -239,9 +239,6 @@ async fn prepare(
         setup_and_verify_twitch_client(&config, &extra_channels).await?;
     let client = Arc::new(client);
 
-    let doener_client = Arc::new(
-        doener::DoeneratlasClient::new().wrap_err("Failed to initialize Döneratlas client")?,
-    );
     let whisper_credentials = credentials.clone();
     let whisper = whisper::HelixWhisperSender::new(
         whisper_credentials,
@@ -467,7 +464,6 @@ async fn prepare(
         ipinfo: ipinfo_client,
         amp: amp_client,
         finnhub: finnhub_client,
-        doener: doener_client,
         whisper: Some(whisper),
         data_dir: get_data_dir(),
         settings: settings_handle,

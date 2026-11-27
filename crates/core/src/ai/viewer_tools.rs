@@ -75,7 +75,6 @@ pub struct ViewerToolInfo {
 /// maintenance and command discovery intentionally have no variant here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ViewerTool {
-    DoenerIndex,
     DrawTarot,
     PlanFlight,
     SearchPackages,
@@ -89,8 +88,7 @@ pub enum ViewerTool {
 }
 
 impl ViewerTool {
-    pub const ALL: [Self; 11] = [
-        Self::DoenerIndex,
+    pub const ALL: [Self; 10] = [
         Self::DrawTarot,
         Self::PlanFlight,
         Self::SearchPackages,
@@ -107,7 +105,6 @@ impl ViewerTool {
     /// public invocation syntax.
     pub const fn id(self) -> &'static str {
         match self {
-            Self::DoenerIndex => super::doener_tool::DOENER_TOOL_NAME,
             Self::DrawTarot => super::tarot_tool::TAROT_TOOL_NAME,
             Self::PlanFlight => super::flight_tool::PLAN_FLIGHT_TOOL_NAME,
             Self::SearchPackages => super::packages_tool::SEARCH_PACKAGES_TOOL_NAME,
@@ -124,11 +121,6 @@ impl ViewerTool {
     /// Friendly public copy, kept separate from the operational prompt text.
     pub const fn metadata(self) -> ViewerToolInfo {
         let (display_name, description, example) = match self {
-            Self::DoenerIndex => (
-                "Döner-Index",
-                "Vergleicht Dönerpreise in Deutschland und zeigt Preise für eine Stadt.",
-                "!ai Was kostet ein Döner in Köln?",
-            ),
             Self::DrawTarot => (
                 "Tarotkarten",
                 "Zieht eine Tageskarte oder ein Tarotbild zu einer Frage.",
@@ -195,8 +187,7 @@ impl ViewerTool {
             Self::WebSearch | Self::ReadUrl => availability.web,
             Self::SearchEmotes => availability.emotes,
             Self::EmoteStats => availability.emote_stats,
-            Self::DoenerIndex
-            | Self::DrawTarot
+            Self::DrawTarot
             | Self::PlanFlight
             | Self::SearchPackages
             | Self::LookupNetwork
@@ -221,7 +212,6 @@ impl ViewerTool {
     /// Preserve the existing model-facing definitions and schemas.
     pub(crate) fn definition(self) -> ToolDefinition {
         match self {
-            Self::DoenerIndex => super::doener_tool::doener_tool(),
             Self::DrawTarot => super::tarot_tool::tarot_tool(),
             Self::PlanFlight => super::flight_tool::plan_flight_tool(),
             Self::SearchPackages => super::packages_tool::search_packages_tool(),
@@ -264,7 +254,6 @@ mod tests {
         let catalog = catalog(AuroraToolAvailability::all());
         let actual = ids(&catalog);
         let expected = [
-            "doener_index",
             "draw_tarot",
             "plan_flight",
             "search_packages",
@@ -277,7 +266,7 @@ mod tests {
             "emote_stats",
         ];
         assert_eq!(actual, expected);
-        assert_eq!(actual.iter().copied().collect::<BTreeSet<_>>().len(), 11);
+        assert_eq!(actual.iter().copied().collect::<BTreeSet<_>>().len(), 10);
 
         for tool in ViewerTool::ALL {
             let info = tool.metadata();
@@ -295,7 +284,6 @@ mod tests {
     #[test]
     fn optional_integrations_control_exactly_their_own_tools() {
         let baseline = vec![
-            "doener_index",
             "draw_tarot",
             "plan_flight",
             "search_packages",

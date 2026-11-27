@@ -185,7 +185,6 @@ pub struct TurnDeps {
     pub web: Option<AiWeb>,
     pub emotes: Option<Arc<SevenTvEmoteProvider>>,
     pub bot_username: String,
-    pub doener: Arc<crate::doener::DoeneratlasClient>,
     pub repology: Arc<crate::repology::RepologyClient>,
     pub pronouns: Arc<crate::pronouns::PronounsClient>,
     pub model_catalog: Arc<ModelCatalog>,
@@ -214,7 +213,6 @@ pub struct TurnRunner {
     web: Option<AiWeb>,
     emotes: Option<Arc<SevenTvEmoteProvider>>,
     bot_username: String,
-    doener: Arc<crate::doener::DoeneratlasClient>,
     repology: Arc<crate::repology::RepologyClient>,
     pronouns: Arc<crate::pronouns::PronounsClient>,
     model_catalog: Arc<ModelCatalog>,
@@ -254,7 +252,6 @@ impl TurnRunner {
             web: deps.web,
             emotes: deps.emotes,
             bot_username: deps.bot_username,
-            doener: deps.doener,
             repology: deps.repology,
             pronouns: deps.pronouns,
             model_catalog: deps.model_catalog,
@@ -618,7 +615,6 @@ impl TurnRunner {
         } else {
             chat_turn_tools()
         };
-        tools.push(ViewerTool::DoenerIndex.definition());
         tools.push(crate::ai::commands_tool::list_commands_tool());
         if !grok_alias {
             tools.extend(
@@ -634,7 +630,7 @@ impl TurnRunner {
         tools.extend(
             self.tool_catalog
                 .enabled_tools()
-                .filter(|tool| *tool != ViewerTool::DoenerIndex && !tool.is_aurora_only())
+                .filter(|tool| !tool.is_aurora_only())
                 .map(ViewerTool::definition),
         );
         let registered_tools: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
@@ -697,7 +693,6 @@ impl TurnRunner {
                         registered_tools: &registered_tools,
                         web: self.web.as_ref().map(|w| w.executor.as_ref()),
                         emotes: self.emotes.as_deref(),
-                        doener: self.doener.as_ref(),
                         repology: self.repology.as_ref(),
                         dhl: self.dhl.as_deref(),
                         rdap: self.rdap.as_ref(),
@@ -809,7 +804,7 @@ impl TurnRunner {
 /// executor (write_file/write_scratch/delete_scratch), the web search executor
 /// (web_search/read_url) when web tools are configured, the on-demand
 /// `search_emotes` tool when the emote provider is active, the always-on
-/// doener_index and list_commands tools, the Aurora-only draw_tarot and plan_flight tools, or the
+/// list_commands tool, the Aurora-only draw_tarot and plan_flight tools, or the
 /// Aurora-only search_packages, lookup_network and run_bash tools. A name outside
 /// `registered_tools` runs nothing, so a model can't reach a tool this turn
 /// never offered it.
@@ -819,7 +814,6 @@ struct V2Executor<'a> {
     chat: &'a ChatTurnExecutor,
     web: Option<&'a content::ContentToolExecutor>,
     emotes: Option<&'a SevenTvEmoteProvider>,
-    doener: &'a crate::doener::DoeneratlasClient,
     repology: &'a crate::repology::RepologyClient,
     dhl: Option<&'a crate::dhl::DhlClient>,
     rdap: &'a crate::rdap::RdapClient,
@@ -851,9 +845,6 @@ impl ToolExecutor for V2Executor<'_> {
         if !self.registered_tools.contains(&call.name) {
             warn!(tool = %call.name, "model called a tool not offered this turn");
             return ToolResultMessage::for_call(call, "unknown_tool".to_string());
-        }
-        if call.name == crate::ai::doener_tool::DOENER_TOOL_NAME {
-            return crate::ai::doener_tool::execute_doener_index(self.doener, call).await;
         }
         if call.name == crate::ai::commands_tool::LIST_COMMANDS_TOOL_NAME {
             return crate::ai::commands_tool::execute_list_commands(self.command_catalog, call);
@@ -1245,10 +1236,6 @@ mod turn_tests {
             web,
             emotes: None,
             bot_username: "utilitybot".into(),
-            doener: Arc::new(crate::doener::DoeneratlasClient::with_base_url(
-                reqwest::Client::new(),
-                "http://127.0.0.1:1".to_string(),
-            )),
             repology: Arc::new(crate::repology::RepologyClient::new().unwrap()),
             pronouns: Arc::new(crate::pronouns::PronounsClient::new().unwrap()),
             model_catalog: Arc::new(ModelCatalog::new(reqwest::Client::new())),

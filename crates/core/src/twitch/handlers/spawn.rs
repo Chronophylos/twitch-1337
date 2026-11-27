@@ -98,14 +98,6 @@ where
             services.feedback.clone(),
             services.settings.clone(),
         )),
-        Arc::new(commands::doener::DoenerCommand::new(
-            services.doener.clone(),
-            services.settings.clone(),
-        )),
-        Arc::new(commands::doener_calc::DoenerCalcCommand::new(
-            services.doener.clone(),
-            services.settings.clone(),
-        )),
         Arc::new(commands::spoiler::SpoilerCommand::new(
             services.llm.clone(),
             services.settings.clone(),
@@ -235,7 +227,6 @@ where
             web,
             emotes: services.emote_provider.clone(),
             bot_username: services.bot_username.clone(),
-            doener: services.doener.clone(),
             repology,
             pronouns,
             dhl: services.dhl.clone(),
