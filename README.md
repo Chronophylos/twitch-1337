@@ -14,55 +14,15 @@
 Every day at **13:37** Berlin time, chat races to type `1337`. **Ɛ:3** keeps
 score. Over the years it picked up a few other hobbies.
 
-## The 13:37 race
+## Features
 
-<img src="docs/readme/race.svg" alt="A chat log at 13:37 with millisecond timestamps, the bot's verdict, and a podium of the three fastest personal bests" width="100%">
-
-> For one minute a day, Ɛ:3 watches chat with a stopwatch. A latency probe
-> pings the IRC server every five minutes, so the bot wakes up early enough to
-> catch the very first message, to the millisecond. Sub-second personal bests
-> go on the board. The slowest go in the hall of shame.
-
-## Aurora dreams
-
-<img src="docs/readme/dreams.svg" alt="A character sheet before and after the nightly dreamer: stale lines struck out, new relationships and interests added" width="100%">
-
-> Aurora, the AI who lives in chat, keeps a character sheet on every regular,
-> a lore file for the channel and a soul file for herself. Every night the
-> dreamer reads the day's transcript and rewrites them: what will still matter
-> in two weeks moves up, the rest fades. Each sheet is capped at 4 KiB, so
-> forgetting is part of the design.
-
-## Flights
-
-<img src="docs/readme/flights.svg" alt="A route from FRA to PMI with the aircraft two thirds along, next to the chat messages the tracker posted from takeoff to landing, and a graded Volanta landing" width="100%">
-
-> `!track` follows a real aircraft over ADS-B from takeoff to touchdown and
-> polls faster while it climbs, descends and lands. Regulars who fly in
-> Volanta get their landings graded the moment the wheels settle: sink rate and
-> G-force, one grade worse for every bounce.
-
-## Under the hood
-
-```mermaid
-flowchart LR
-    irc(["Twitch IRC"]) --> bus{{"broadcast channel"}}
-    bus --> race["13:37 race"]
-    bus --> commands["commands"]
-    bus --> aurora["Aurora"]
-    bus --> flights["flights"]
-    bus --> more["…"]
-    aurora -. "own Twitch account" .-> helix(["Helix chat"])
-    dash["dashboard"] -- "edits" --> settings[("settings.ron")]
-    settings -. "live" .-> commands
-    settings -. "live" .-> aurora
-```
-
-<img src="docs/readme/flex.svg" alt="static musl binary, ~29 MB · Docker image FROM scratch · TLS on ring, no OpenSSL · panics denied by lint · every AI turn traced · settings apply live" width="100%">
-
-> One IRC connection, one broadcast channel, one task per feature. A slow
-> feature lags on its own; a crashed one takes the whole bot down so it comes
-> back clean, instead of limping on half-alive.
+- **13:37 race:** millisecond leaderboard of the first `1337` after 13:37, plus a hall of shame for the slowest.
+- **AI:** Aurora and Grok answer in chat; Aurora keeps character sheets and channel lore, rewritten nightly from the day's transcript.
+- **Flights:** live tracking of real aircraft over ADS-B, aviation lookups, and graded landings for Volanta pilots.
+- **Alerts:** earthquakes in Germany, solar flares, Earth-directed CMEs and F1 race-week reminders.
+- **Chat tools:** ping groups, scheduled messages, a sandboxed `!bash`, game server status, stock picks, spoiler checks, file reuploads.
+- **Feedback:** `!fb` reports land in a review inbox and can become GitHub issues.
+- **Dashboard:** settings, schedules, AI profiles and memory; most changes apply without a restart.
 
 ## License
 
