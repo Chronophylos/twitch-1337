@@ -661,7 +661,7 @@ where
     loop {
         let now_berlin = crate::util::to_berlin(clock.now_utc());
         let Some(next_berlin) = schedule.next_active_fire(now_berlin) else {
-            info!(bot.schedule.name = %schedule.name, "past end_date, exiting");
+            info!(bot.schedule.name = %schedule.name, "no further fire, exiting");
             return ScheduleCompletion::Expired;
         };
         let next_utc = next_berlin.timestamp();

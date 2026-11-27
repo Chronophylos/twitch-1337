@@ -46,8 +46,10 @@ pub enum Trigger {
 
 impl Trigger {
     /// Next instant strictly > `now` when this trigger should fire, or `None`
-    /// when the next slot falls outside jiff's supported date range (e.g. a
-    /// user-entered `start_date` at the end of time).
+    /// when it never fires again: the next slot falls outside jiff's supported
+    /// date range (e.g. a user-entered `start_date` at the end of time), or an
+    /// `Interval` has no slot inside its active window (see
+    /// [`Self::has_slot_in_window`], which saving enforces).
     /// All arithmetic is Berlin-local; the returned `ZonedDateTime` is
     /// always in Europe/Berlin.
     ///
@@ -64,6 +66,30 @@ impl Trigger {
                 active_to,
             } => next_interval(now, *every, days, *active_from, *active_to),
             Trigger::Calendar { days, at } => next_calendar(now, days, *at),
+        }
+    }
+
+    /// Whether an `Interval` has any wall-clock slot inside its active window
+    /// (every 12h with 08:00–10:00 has none: its slots are 00:00 and 12:00).
+    /// `Calendar` always has one. Counted on the local clock, like
+    /// [`Self::next_fire_after`], without DST shifts.
+    pub fn has_slot_in_window(&self) -> bool {
+        match self {
+            Trigger::Interval {
+                every,
+                active_from,
+                active_to,
+                ..
+            } => (0..SECS_PER_DAY)
+                .step_by(usize::try_from(every.as_secs().max(1)).unwrap_or(usize::MAX))
+                .any(|slot| {
+                    in_window(
+                        Time::MIN.wrapping_add(SignedDuration::from_secs(slot)),
+                        *active_from,
+                        *active_to,
+                    )
+                }),
+            Trigger::Calendar { .. } => true,
         }
     }
 }
@@ -96,12 +122,10 @@ fn next_interval(
             return Some(next);
         }
     }
-    // No slot ever lands in the window (e.g. every 12h, 08:00-10:00). Push it
-    // far out rather than fire outside the window.
-    now.checked_add(SignedDuration::from_secs(
-        every.as_secs() as i64 * 14 * 1440,
-    ))
-    .ok()
+    // Every allowed weekday was scanned and no slot landed in the window, so
+    // none ever will (e.g. every 12h, 08:00-10:00). Saving rejects this; a
+    // file written before that rule just never fires.
+    None
 }
 
 /// Real instants for one local slot. In the autumn fold a slot exists twice;
@@ -416,6 +440,27 @@ mod interval_filter_tests {
         assert_eq!(next.weekday(), Weekday::Tuesday);
         assert_eq!(next.hour(), 18);
         assert_eq!(next.minute(), 0);
+    }
+
+    #[test]
+    fn interval_with_no_slot_in_window_never_fires() {
+        // every 12h has slots 00:00 and 12:00; neither is in 08:00-10:00.
+        let trig = Trigger::Interval {
+            every: Duration::from_secs(12 * 3600),
+            days: WeekdaySet::default(),
+            active_from: Some(jiff::civil::time(8, 0, 0, 0)),
+            active_to: Some(jiff::civil::time(10, 0, 0, 0)),
+        };
+        assert!(!trig.has_slot_in_window());
+        assert_eq!(trig.next_fire_after(now_berlin(2026, 5, 28, 6, 0)), None);
+
+        let every_2h = Trigger::Interval {
+            every: Duration::from_secs(2 * 3600),
+            days: WeekdaySet::default(),
+            active_from: Some(jiff::civil::time(8, 0, 0, 0)),
+            active_to: Some(jiff::civil::time(10, 0, 0, 0)),
+        };
+        assert!(every_2h.has_slot_in_window());
     }
 }
 
