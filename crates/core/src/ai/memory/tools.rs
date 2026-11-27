@@ -448,10 +448,14 @@ pub struct DreamerExecutorOpts {
     /// Every user sheet that exists on disk. The dreamer has no speaker and no
     /// chat history, so this is the whole set of sheets it may rewrite.
     pub known_user_ids: BTreeSet<String>,
+    /// Existing sheets whose body did not fit the prompt. `write_file`
+    /// replaces the whole body, so these are refused for the run.
+    pub unseen_user_ids: BTreeSet<String>,
 }
 
 pub struct DreamerExecutor {
     inner: ChatTurnExecutor,
+    unseen_user_ids: BTreeSet<String>,
 }
 
 impl DreamerExecutor {
@@ -470,6 +474,7 @@ impl DreamerExecutor {
                 pronouns: None,
                 writable_user_ids: opts.known_user_ids,
             }),
+            unseen_user_ids: opts.unseen_user_ids,
         }
     }
 }
@@ -477,6 +482,15 @@ impl DreamerExecutor {
 #[async_trait]
 impl ToolExecutor for DreamerExecutor {
     async fn execute(&self, call: &ToolCall) -> ToolResultMessage {
+        if let Some(user_id) = self.unseen_target(call) {
+            return ToolResultMessage::for_call(
+                call,
+                format!(
+                    "sheet_not_loaded: users/{user_id}.md exists but its body was not in your prompt, \
+                     and write_file replaces the whole file. Leave it for a later run."
+                ),
+            );
+        }
         self.inner.execute(call).await
     }
 }
@@ -1038,6 +1052,7 @@ mod exec_tests {
             store: store.clone(),
             max_writes_per_turn: 32,
             known_user_ids: store.list_user_ids().await.unwrap(),
+            unseen_user_ids: BTreeSet::new(),
         });
 
         // Invented id: nothing on disk, no chat context to vouch for it.
@@ -1075,6 +1090,7 @@ mod exec_tests {
             store: store.clone(),
             max_writes_per_turn: 32,
             known_user_ids: BTreeSet::from(["77".to_string()]),
+            unseen_user_ids: BTreeSet::new(),
         });
         for path in ["SOUL.md", "LORE.md", "users/77.md"] {
             let r = exec
