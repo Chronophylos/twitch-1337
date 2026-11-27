@@ -18,10 +18,6 @@ fn membership_cooldown_duration(s: &Settings) -> Duration {
     Duration::from_secs(s.cooldowns.ping_membership)
 }
 
-fn normalize_ping_name(name: &str) -> String {
-    name.to_lowercase()
-}
-
 /// Chat wording for a ping failure. `Persist` details are logged, never shown.
 fn chat_error(settings: &SettingsHandle, e: &PingError) -> String {
     let (category, text) = match e {
@@ -61,10 +57,6 @@ fn chat_error(settings: &SettingsHandle, e: &PingError) -> String {
             ReplyEmoteCategory::Invalid,
             format!("{user} ist nicht in \"{ping}\""),
         ),
-        PingError::Unavailable => (
-            ReplyEmoteCategory::Unavailable,
-            "Ping-System ist gerade nicht verfügbar".to_string(),
-        ),
         PingError::Persist(_) => {
             crate::log_handled!(error, e, "Failed to persist ping change");
             (
@@ -74,44 +66,6 @@ fn chat_error(settings: &SettingsHandle, e: &PingError) -> String {
         }
     };
     error_reply(settings, category, text)
-}
-
-#[derive(Clone, Copy)]
-enum AdminOp {
-    Create,
-    Delete,
-    Edit,
-    Member(MemberOp),
-}
-
-#[derive(Clone, Copy)]
-enum MemberOp {
-    Add,
-    Remove,
-}
-
-impl MemberOp {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Add => "add",
-            Self::Remove => "remove",
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum SelfOp {
-    Join,
-    Leave,
-}
-
-impl SelfOp {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Join => "join",
-            Self::Leave => "leave",
-        }
-    }
 }
 
 pub struct PingAdminCommand {
@@ -161,290 +115,154 @@ where
 
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
         let subcommand = ctx.args.first().map(String::as_str).unwrap_or("");
-        let admin_op = match subcommand {
-            "create" => Some(AdminOp::Create),
-            "delete" => Some(AdminOp::Delete),
-            "edit" => Some(AdminOp::Edit),
-            "add" => Some(AdminOp::Member(MemberOp::Add)),
-            "remove" => Some(AdminOp::Member(MemberOp::Remove)),
-            _ => None,
-        };
-        if let Some(op) = admin_op {
-            let hidden_admins = self.settings.load();
-            if !is_admin(&ctx.privmsg, &hidden_admins.twitch.hidden_admins) {
-                ctx.sender
-                    .reply(
-                        &ctx.privmsg,
-                        error_reply(&self.settings, ReplyEmoteCategory::Denied, ADMIN_DENIED_MSG),
-                    )
-                    .await;
-                return Ok(());
-            }
-            return match op {
-                AdminOp::Create => self.handle_create(&ctx).await,
-                AdminOp::Delete => self.handle_delete(&ctx).await,
-                AdminOp::Edit => self.handle_edit(&ctx).await,
-                AdminOp::Member(op) => self.handle_member_op(&ctx, op).await,
-            };
+        let mod_only = matches!(subcommand, "create" | "delete" | "edit" | "add" | "remove");
+        if mod_only && !is_admin(&ctx.privmsg, &self.settings.load().twitch.hidden_admins) {
+            let denied = error_reply(&self.settings, ReplyEmoteCategory::Denied, ADMIN_DENIED_MSG);
+            ctx.sender.reply(&ctx.privmsg, denied).await;
+            return Ok(());
         }
+        let args = &ctx.args;
         match subcommand {
-            "join" => self.handle_self_op(&ctx, SelfOp::Join).await,
-            "leave" => self.handle_self_op(&ctx, SelfOp::Leave).await,
-            "list" => self.handle_list(&ctx).await,
-            _ => {
-                ctx.sender
-                    .reply(
-                        &ctx.privmsg,
-                        error_reply(
-                            &self.settings,
-                            ReplyEmoteCategory::Invalid,
-                            "Nutze: join, leave, list (oder create, delete, edit, add, remove als Mod)",
-                        ),
-                    )
+            "create" => match (args.get(1), args.get(2..).filter(|rest| !rest.is_empty())) {
+                (Some(name), Some(template)) => {
+                    let result = self
+                        .ping
+                        .create_ping(
+                            name.clone(),
+                            template.join(" "),
+                            ctx.privmsg.sender.login.clone(),
+                        )
+                        .await;
+                    self.reply_result(&ctx, result, format!("Ping \"{name}\" erstellt Okayge"))
+                        .await;
+                }
+                _ => self.usage(&ctx, "Nutze: !p create <name> <template>").await,
+            },
+            "delete" => match args.get(1) {
+                Some(name) => {
+                    let result = self.ping.delete_ping(name.clone()).await;
+                    self.reply_result(&ctx, result, format!("Ping \"{name}\" gelöscht Okayge"))
+                        .await;
+                }
+                None => self.usage(&ctx, "Nutze: !p delete <name>").await,
+            },
+            "edit" => match (args.get(1), args.get(2..).filter(|rest| !rest.is_empty())) {
+                (Some(name), Some(template)) => {
+                    let result = self
+                        .ping
+                        .edit_template(name.clone(), template.join(" "))
+                        .await;
+                    let ok = format!("Ping \"{name}\" aktualisiert Okayge");
+                    self.reply_result(&ctx, result, ok).await;
+                }
+                _ => self.usage(&ctx, "Nutze: !p edit <name> <template>").await,
+            },
+            "add" | "remove" => match (args.get(1), args.get(2)) {
+                (Some(name), Some(user)) => {
+                    let user = normalize_username(user);
+                    let (result, ok) = if subcommand == "add" {
+                        let result = self.ping.add_member(name.clone(), user.clone()).await;
+                        (result, format!("{user} zu \"{name}\" hinzugefügt Okayge"))
+                    } else {
+                        let result = self.ping.remove_member(name.clone(), user.clone()).await;
+                        (result, format!("{user} aus \"{name}\" entfernt Okayge"))
+                    };
+                    self.reply_result(&ctx, result, ok).await;
+                }
+                _ => {
+                    self.usage(&ctx, format!("Nutze: !p {subcommand} <name> <user>"))
+                        .await;
+                }
+            },
+            "join" | "leave" => match args.get(1) {
+                Some(name) => self.handle_self_op(&ctx, name, subcommand == "join").await,
+                None => {
+                    self.usage(&ctx, format!("Nutze: !p {subcommand} <name>"))
+                        .await;
+                }
+            },
+            "list" => {
+                let pings = self
+                    .ping
+                    .list_for_user(ctx.privmsg.sender.login.clone())
                     .await;
-                Ok(())
+                let response = if pings.is_empty() {
+                    "Keine Pings".to_string()
+                } else {
+                    pings.join(" ")
+                };
+                ctx.sender.reply(&ctx.privmsg, response).await;
+            }
+            _ => {
+                self.usage(
+                    &ctx,
+                    "Nutze: join, leave, list (oder create, delete, edit, add, remove als Mod)",
+                )
+                .await;
             }
         }
+        Ok(())
     }
 }
 
 impl PingAdminCommand {
-    async fn handle_create<T, L>(&self, ctx: &CommandContext<T, L>) -> Result<()>
+    async fn usage<T, L>(&self, ctx: &CommandContext<T, L>, text: impl std::fmt::Display + Send)
     where
         T: Transport,
         L: LoginCredentials,
     {
-        if ctx.args.len() < 3 {
-            ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    error_reply(
-                        &self.settings,
-                        ReplyEmoteCategory::Invalid,
-                        "Nutze: !p create <name> <template>",
-                    ),
-                )
-                .await;
-            return Ok(());
-        }
-        let name = normalize_ping_name(&ctx.args[1]);
-        let template = ctx.args[2..].join(" ");
-        match self
-            .ping
-            .create_ping(
-                name.clone(),
-                template,
-                ctx.privmsg.sender.login.clone(),
-                None,
-            )
-            .await
-        {
-            Ok(()) => {
-                ctx.sender
-                    .reply(&ctx.privmsg, format!("Ping \"{name}\" erstellt Okayge"))
-                    .await;
-            }
-            Err(e) => {
-                ctx.sender
-                    .reply(&ctx.privmsg, chat_error(&self.settings, &e))
-                    .await;
-            }
-        }
-        Ok(())
+        let reply = error_reply(&self.settings, ReplyEmoteCategory::Invalid, text);
+        ctx.sender.reply(&ctx.privmsg, reply).await;
     }
 
-    async fn handle_delete<T, L>(&self, ctx: &CommandContext<T, L>) -> Result<()>
-    where
+    async fn reply_result<T, L>(
+        &self,
+        ctx: &CommandContext<T, L>,
+        result: Result<(), PingError>,
+        ok: String,
+    ) where
         T: Transport,
         L: LoginCredentials,
     {
-        let name = match ctx.args.get(1) {
-            Some(n) => normalize_ping_name(n),
-            None => {
-                ctx.sender
-                    .reply(
-                        &ctx.privmsg,
-                        error_reply(
-                            &self.settings,
-                            ReplyEmoteCategory::Invalid,
-                            "Nutze: !p delete <name>",
-                        ),
-                    )
-                    .await;
-                return Ok(());
-            }
+        let reply = match result {
+            Ok(()) => ok,
+            Err(e) => chat_error(&self.settings, &e),
         };
-        match self.ping.delete_ping(name.clone()).await {
-            Ok(()) => {
-                ctx.sender
-                    .reply(&ctx.privmsg, format!("Ping \"{name}\" gelöscht Okayge"))
-                    .await;
-            }
-            Err(e) => {
-                ctx.sender
-                    .reply(&ctx.privmsg, chat_error(&self.settings, &e))
-                    .await;
-            }
-        }
-        Ok(())
+        ctx.sender.reply(&ctx.privmsg, reply).await;
     }
 
-    async fn handle_edit<T, L>(&self, ctx: &CommandContext<T, L>) -> Result<()>
+    /// `!p join` / `!p leave`: the sender adds or removes themselves, behind
+    /// the membership cooldown.
+    async fn handle_self_op<T, L>(&self, ctx: &CommandContext<T, L>, name: &str, join: bool)
     where
         T: Transport,
         L: LoginCredentials,
     {
-        if ctx.args.len() < 3 {
-            ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    error_reply(
-                        &self.settings,
-                        ReplyEmoteCategory::Invalid,
-                        "Nutze: !p edit <name> <template>",
-                    ),
-                )
-                .await;
-            return Ok(());
-        }
-        let name = normalize_ping_name(&ctx.args[1]);
-        let template = ctx.args[2..].join(" ");
-        match self.ping.edit_template(name.clone(), template).await {
-            Ok(()) => {
-                ctx.sender
-                    .reply(&ctx.privmsg, format!("Ping \"{name}\" updated SeemsGood"))
-                    .await;
-            }
-            Err(e) => {
-                ctx.sender
-                    .reply(&ctx.privmsg, chat_error(&self.settings, &e))
-                    .await;
-            }
-        }
-        Ok(())
-    }
-
-    async fn handle_member_op<T, L>(&self, ctx: &CommandContext<T, L>, op: MemberOp) -> Result<()>
-    where
-        T: Transport,
-        L: LoginCredentials,
-    {
-        if ctx.args.len() < 3 {
-            ctx.sender
-                .reply(
-                    &ctx.privmsg,
-                    error_reply(
-                        &self.settings,
-                        ReplyEmoteCategory::Invalid,
-                        format!("Nutze: !p {} <name> <user>", op.as_str()),
-                    ),
-                )
-                .await;
-            return Ok(());
-        }
-        let name = normalize_ping_name(&ctx.args[1]);
-        let user = normalize_username(&ctx.args[2]);
-        let result = match op {
-            MemberOp::Add => self.ping.add_member(name.clone(), user.clone()).await,
-            MemberOp::Remove => self.ping.remove_member(name.clone(), user.clone()).await,
-        };
-        match result {
-            Ok(()) => {
-                let msg = match op {
-                    MemberOp::Add => format!("{user} zu \"{name}\" hinzugefügt Okayge"),
-                    MemberOp::Remove => format!("{user} aus \"{name}\" entfernt Okayge"),
-                };
-                ctx.sender.reply(&ctx.privmsg, msg).await;
-            }
-            Err(e) => {
-                ctx.sender
-                    .reply(&ctx.privmsg, chat_error(&self.settings, &e))
-                    .await;
-            }
-        }
-        Ok(())
-    }
-
-    async fn handle_self_op<T, L>(&self, ctx: &CommandContext<T, L>, op: SelfOp) -> Result<()>
-    where
-        T: Transport,
-        L: LoginCredentials,
-    {
-        let name = match ctx.args.get(1) {
-            Some(n) => normalize_ping_name(n),
-            None => {
-                ctx.sender
-                    .reply(
-                        &ctx.privmsg,
-                        error_reply(
-                            &self.settings,
-                            ReplyEmoteCategory::Invalid,
-                            format!("Nutze: !p {} <name>", op.as_str()),
-                        ),
-                    )
-                    .await;
-                return Ok(());
-            }
-        };
         let user = &ctx.privmsg.sender.login;
         if let Err(remaining) = self.membership_cooldown.try_acquire(user).await {
-            debug!(user = %user, remaining_secs = remaining.as_secs(), "!p {} on cooldown", op.as_str());
+            debug!(user = %user, remaining_secs = remaining.as_secs(), join, "!p join/leave on cooldown");
             ctx.sender
                 .reply(&ctx.privmsg, cooldown_reply(&self.settings, remaining))
                 .await;
-            return Ok(());
+            return;
         }
-        let result = match op {
-            SelfOp::Join => {
-                self.ping
-                    .add_member(name.clone(), ctx.privmsg.sender.login.clone())
-                    .await
-            }
-            SelfOp::Leave => {
-                self.ping
-                    .remove_member(name.clone(), ctx.privmsg.sender.login.clone())
-                    .await
-            }
-        };
-        match result {
-            Ok(()) => {
-                ctx.sender
-                    .reply(&ctx.privmsg, "Hab ich gemacht Okayge")
-                    .await;
-            }
-            Err(e) => {
-                let msg = match (op, &e) {
-                    (SelfOp::Join, PingError::AlreadyMember { .. }) => {
-                        error_reply(&self.settings, ReplyEmoteCategory::Invalid, "Bist du schon")
-                    }
-                    (SelfOp::Leave, PingError::NotMember { .. }) => error_reply(
-                        &self.settings,
-                        ReplyEmoteCategory::Invalid,
-                        "Bist du nicht drin",
-                    ),
-                    _ => chat_error(&self.settings, &e),
-                };
-                ctx.sender.reply(&ctx.privmsg, msg).await;
-            }
-        }
-        Ok(())
-    }
-
-    async fn handle_list<T, L>(&self, ctx: &CommandContext<T, L>) -> Result<()>
-    where
-        T: Transport,
-        L: LoginCredentials,
-    {
-        let pings = self
-            .ping
-            .list_for_user(ctx.privmsg.sender.login.clone())
-            .await;
-        let response = if pings.is_empty() {
-            "Keine Pings".to_string()
+        let result = if join {
+            self.ping.add_member(name.to_owned(), user.clone()).await
         } else {
-            pings.join(" ")
+            self.ping.remove_member(name.to_owned(), user.clone()).await
         };
-        ctx.sender.reply(&ctx.privmsg, response).await;
-        Ok(())
+        let reply = match result {
+            Ok(()) => "Hab ich gemacht Okayge".to_owned(),
+            Err(PingError::AlreadyMember { .. }) if join => {
+                error_reply(&self.settings, ReplyEmoteCategory::Invalid, "Bist du schon")
+            }
+            Err(PingError::NotMember { .. }) if !join => error_reply(
+                &self.settings,
+                ReplyEmoteCategory::Invalid,
+                "Bist du nicht drin",
+            ),
+            Err(e) => chat_error(&self.settings, &e),
+        };
+        ctx.sender.reply(&ctx.privmsg, reply).await;
     }
 }

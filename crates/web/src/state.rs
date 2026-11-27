@@ -191,18 +191,8 @@ impl WebState {
     /// enabling `testing`, and the dev bin via `dev-login`.
     #[cfg(any(test, feature = "testing", feature = "dev-login"))]
     pub async fn for_tests(cfg: WebTestConfig) -> eyre::Result<WebState> {
-        // Spawn the ping actor for the lifetime of the returned state: the
-        // task owns the receiver half, so it only exits once every
-        // `WebState.ping_actor` clone (and thus the state) is dropped.
-        let pings = twitch_1337_core::ping::PingManager::load(&cfg.ping_dir)
-            .wrap_err("load ping manager")?;
-        let (ping_runtime, ping_actor, _ping_names_rx) =
-            twitch_1337_core::ping::ping_runtime(pings);
-        let _ping_actor_task = tokio::spawn(twitch_1337_core::ping::run_ping_actor(
-            ping_runtime.rx,
-            ping_runtime.manager,
-            ping_runtime.names_tx,
-        ));
+        let ping_actor =
+            twitch_1337_core::ping::PingHandle::load(&cfg.ping_dir).wrap_err("load pings")?;
 
         let sessions = Arc::new(SessionTable::new(cfg.clock.clone()));
         let oauth = Arc::new(

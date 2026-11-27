@@ -30,7 +30,7 @@ const USER_ID: &str = "9001";
 async fn create(state: &WebState, name: &str, created_by: &str, members: &[&str]) {
     state
         .ping_actor
-        .create_ping(name.into(), "{mentions}".into(), created_by.into(), None)
+        .create_ping(name.into(), "{mentions}".into(), created_by.into())
         .await
         .unwrap();
     for m in members {

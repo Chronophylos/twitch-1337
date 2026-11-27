@@ -11,17 +11,11 @@ use tokio::sync::oneshot;
 use tracing::{Instrument as _, info, info_span};
 use twitch_1337_core::{
     AuthenticatedLoginCredentials, PersonalBest, PersonalWorst, Services,
-    ai::chat_context::ChatContext,
-    ai::memory::store::MemoryStore,
-    aviation, ensure_data_dir, get_data_dir, install_crypto_provider, install_tracing, llm_factory,
-    load_configuration, load_hall_of_shame, load_leaderboard,
-    ping::{PingManager, ping_runtime},
-    run_bot, setup_and_verify_twitch_client,
-    suspend::SuspensionManager,
-    twitch::mouth_setup::build_mouths,
-    twitch::seventv::build_emote_provider,
-    twitch::whisper,
-    util::clock::SystemClock,
+    ai::chat_context::ChatContext, ai::memory::store::MemoryStore, aviation, ensure_data_dir,
+    get_data_dir, install_crypto_provider, install_tracing, llm_factory, load_configuration,
+    load_hall_of_shame, load_leaderboard, ping::PingHandle, run_bot,
+    setup_and_verify_twitch_client, suspend::SuspensionManager, twitch::mouth_setup::build_mouths,
+    twitch::seventv::build_emote_provider, twitch::whisper, util::clock::SystemClock,
     util::observability::metrics,
 };
 use twitch_1337_web::helix::{AccessTokenProvider, HelixClient as _, ReqwestHelixClient};
@@ -133,7 +127,6 @@ pub async fn main() -> Result<()> {
         client,
         incoming,
         services,
-        ping_runtime,
         aviation_tracker_rx,
         web_spawner,
     } = prepare(
@@ -150,7 +143,6 @@ pub async fn main() -> Result<()> {
         client,
         incoming,
         services,
-        ping_runtime,
         aviation_tracker_rx,
         web_spawner,
         startup,
@@ -202,7 +194,6 @@ struct Prepared {
     client: Arc<twitch_1337::AuthenticatedTwitchClient>,
     incoming: tokio::sync::mpsc::UnboundedReceiver<twitch_irc::message::ServerMessage>,
     services: Services,
-    ping_runtime: twitch_1337::ping::PingRuntime,
     aviation_tracker_rx: Option<tokio::sync::mpsc::Receiver<aviation::TrackerCommand>>,
     web_spawner: Option<twitch_1337::WebSpawner>,
 }
@@ -251,9 +242,7 @@ async fn prepare(
 
     let irc_connected = Arc::new(AtomicBool::new(false));
 
-    let ping_manager =
-        PingManager::load(&get_data_dir()).wrap_err("Failed to load ping manager")?;
-    let (ping_runtime, ping_handle, ping_names_rx) = ping_runtime(ping_manager);
+    let ping_handle = PingHandle::load(&get_data_dir()).wrap_err("Failed to load ping manager")?;
 
     // Build aviation client from settings (restart-required fields).
     // `enabled`, `base_url`, and `timeout_secs` come from the settings store;
@@ -476,7 +465,6 @@ async fn prepare(
         ai_enabled: config.ai.is_some(),
         started_at,
         ping: ping_handle,
-        ping_names_rx,
         command_catalog: Default::default(),
         aurora_tools: Default::default(),
         memory_store,
@@ -515,7 +503,6 @@ async fn prepare(
         client,
         incoming,
         services,
-        ping_runtime,
         aviation_tracker_rx,
         web_spawner,
     })

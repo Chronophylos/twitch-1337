@@ -48,7 +48,7 @@ impl UserFacing for PingError {
             PingError::AlreadyMember { user, .. } => format!("`{user}` is already a member"),
             PingError::NotMember { user, .. } => format!("`{user}` is not a member"),
             // Internal failures bubble via [`ping_error_for_form`], not display.
-            PingError::Unavailable | PingError::Persist(_) => "internal error".to_owned(),
+            PingError::Persist(_) => "internal error".to_owned(),
         }
     }
 }
@@ -62,13 +62,11 @@ pub fn write_error_for_form(err: WriteError) -> Result<String, WebError> {
     }
 }
 
-/// `PingError::{Persist, Unavailable}` bubble to `WebError::Internal`;
-/// other variants become an inline form message.
+/// `PingError::Persist` bubbles to `WebError::Internal`; other variants
+/// become an inline form message.
 pub fn ping_error_for_form(err: PingError) -> Result<String, WebError> {
     match err {
-        PingError::Unavailable | PingError::Persist(_) => {
-            Err(WebError::Internal(eyre::Report::new(err)))
-        }
+        PingError::Persist(_) => Err(WebError::Internal(eyre::Report::new(err))),
         e => Ok(e.user_message()),
     }
 }
