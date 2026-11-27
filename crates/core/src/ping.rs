@@ -1,3 +1,11 @@
+//! Ping groups: named sets of chat members a viewer can mention at once with
+//! `!<name>`, persisted to `$DATA_DIR/pings.ron`.
+//!
+//! [`PingHandle`] is the one shared entry point (chat commands, the scheduler,
+//! the dashboard). It serializes every read and write through one async mutex
+//! around the store, so a check-then-write such as a trigger's cooldown check
+//! and fire record is atomic. Cooldowns are in memory only (ADR-0017).
+
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -6,11 +14,10 @@ use std::time::{Duration, Instant};
 use eyre::{Result, WrapErr};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{Mutex, watch};
 use tracing::{debug, info, warn};
 
 const PINGS_FILENAME: &str = "pings.ron";
-const PING_ACTOR_CHANNEL: usize = 64;
 
 /// Why a ping mutation failed. `Display` is neutral English for logs; each
 /// Surface (chat, dashboard) words the variants itself (ADR-0012).
@@ -36,8 +43,6 @@ pub enum PingError {
     AlreadyMember { ping: String, user: String },
     #[error("{user} is not a member of ping {ping:?}")]
     NotMember { ping: String, user: String },
-    #[error("ping actor unavailable")]
-    Unavailable,
     #[error("failed to persist pings")]
     Persist(#[source] eyre::Report),
 }
@@ -56,6 +61,8 @@ pub struct Ping {
     pub template: String,
     /// Sorted, so a fire that spans several messages splits in a stable order.
     pub members: BTreeSet<String>,
+    /// Per-ping cooldown in seconds, overriding `pings.cooldown`. Read from
+    /// `pings.ron` only; neither chat nor the dashboard sets it.
     pub cooldown: Option<u64>,
     pub created_by: String,
     #[serde(default)]
@@ -76,7 +83,7 @@ pub struct PingView {
 }
 
 impl PingView {
-    fn from_name_ping(name: &str, p: &Ping) -> Self {
+    fn new(name: &str, p: &Ping) -> Self {
         Self {
             name: name.to_owned(),
             template: p.template.clone(),
@@ -89,100 +96,41 @@ impl PingView {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PingStore {
-    pub pings: HashMap<String, Ping>,
-}
-
 #[derive(Debug)]
 pub enum TriggerDecision {
     Skip,
     OnCooldown(Duration),
-    /// One or more chat lines, each within the outbound limit; see
-    /// [`PingManager::render_template`].
+    /// One or more chat lines, each within the outbound limit: a large group
+    /// spreads its mentions over several messages.
     Fire(Vec<String>),
 }
 
-pub enum PingCommand {
-    CreatePing {
-        name: String,
-        template: String,
-        created_by: String,
-        cooldown: Option<u64>,
-        reply: oneshot::Sender<Result<(), PingError>>,
-    },
-    DeletePing {
-        name: String,
-        reply: oneshot::Sender<Result<(), PingError>>,
-    },
-    EditTemplate {
-        name: String,
-        template: String,
-        reply: oneshot::Sender<Result<(), PingError>>,
-    },
-    AddMember {
-        ping_name: String,
-        username: String,
-        reply: oneshot::Sender<Result<(), PingError>>,
-    },
-    RemoveMember {
-        ping_name: String,
-        username: String,
-        reply: oneshot::Sender<Result<(), PingError>>,
-    },
-    TryRecordTrigger {
-        ping_name: String,
-        sender: String,
-        default_cooldown: Duration,
-        public: bool,
-        reply: oneshot::Sender<TriggerDecision>,
-    },
-    Snapshot {
-        reply: oneshot::Sender<Vec<PingView>>,
-    },
-    GetOne {
-        name: String,
-        reply: oneshot::Sender<Option<PingView>>,
-    },
-    ListForUser {
-        username: String,
-        reply: oneshot::Sender<Vec<String>>,
-    },
-    IsMember {
-        ping_name: String,
-        username: String,
-        reply: oneshot::Sender<bool>,
-    },
+/// Shared access to the ping store. Cheap to clone.
+#[derive(Clone)]
+pub struct PingHandle {
+    manager: Arc<Mutex<PingManager>>,
+    /// Ping names, republished after every create and delete, so
+    /// `PingTriggerCommand::matches` (synchronous) can test a chat word
+    /// without locking the store.
+    names: Arc<watch::Sender<HashSet<String>>>,
 }
 
-#[derive(Clone)]
-pub struct PingHandle(Arc<mpsc::Sender<PingCommand>>);
-
 impl PingHandle {
-    pub fn new(tx: mpsc::Sender<PingCommand>) -> Self {
-        Self(Arc::new(tx))
+    /// Load `$DATA_DIR/pings.ron`. A missing file starts empty; an unreadable
+    /// or unparseable one is an error, because starting empty would overwrite
+    /// every ping with the next save.
+    pub fn load(data_dir: &Path) -> Result<Self> {
+        let manager = PingManager::load(data_dir)?;
+        let (names, _) = watch::channel(manager.names());
+        Ok(Self {
+            manager: Arc::new(Mutex::new(manager)),
+            names: Arc::new(names),
+        })
     }
 
-    /// Returns `None` when the ping actor is gone (channel closed or reply
-    /// dropped). Callers map that to a safe default so a dead actor degrades
-    /// ping features instead of panicking inside handler tasks.
-    async fn send<T>(&self, make_cmd: impl FnOnce(oneshot::Sender<T>) -> PingCommand) -> Option<T> {
-        let (tx, rx) = oneshot::channel();
-        if self.0.send(make_cmd(tx)).await.is_err() {
-            warn!("ping actor unavailable, dropping command");
-            return None;
-        }
-        match rx.await {
-            Ok(value) => Some(value),
-            Err(_) => {
-                warn!("ping actor dropped reply channel");
-                None
-            }
-        }
-    }
-
-    fn actor_gone_err() -> Result<(), PingError> {
-        Err(PingError::Unavailable)
+    /// Live set of ping names.
+    pub fn names(&self) -> watch::Receiver<HashSet<String>> {
+        self.names.subscribe()
     }
 
     pub async fn create_ping(
@@ -190,54 +138,48 @@ impl PingHandle {
         name: String,
         template: String,
         created_by: String,
-        cooldown: Option<u64>,
     ) -> Result<(), PingError> {
-        self.send(|reply| PingCommand::CreatePing {
-            name,
-            template,
-            created_by,
-            cooldown,
-            reply,
-        })
-        .await
-        .unwrap_or_else(Self::actor_gone_err)
+        let mut manager = self.manager.lock().await;
+        manager.create_ping(&name, template, created_by).await?;
+        self.names.send_replace(manager.names());
+        Ok(())
     }
+
     pub async fn delete_ping(&self, name: String) -> Result<(), PingError> {
-        self.send(|reply| PingCommand::DeletePing { name, reply })
-            .await
-            .unwrap_or_else(Self::actor_gone_err)
+        let mut manager = self.manager.lock().await;
+        manager.delete_ping(&name).await?;
+        self.names.send_replace(manager.names());
+        Ok(())
     }
+
     pub async fn edit_template(&self, name: String, template: String) -> Result<(), PingError> {
-        self.send(|reply| PingCommand::EditTemplate {
-            name,
-            template,
-            reply,
-        })
-        .await
-        .unwrap_or_else(Self::actor_gone_err)
+        self.manager
+            .lock()
+            .await
+            .edit_template(&name, template)
+            .await
     }
+
     pub async fn add_member(&self, ping_name: String, username: String) -> Result<(), PingError> {
-        self.send(|reply| PingCommand::AddMember {
-            ping_name,
-            username,
-            reply,
-        })
-        .await
-        .unwrap_or_else(Self::actor_gone_err)
+        self.manager
+            .lock()
+            .await
+            .add_member(&ping_name, &username)
+            .await
     }
+
     pub async fn remove_member(
         &self,
         ping_name: String,
         username: String,
     ) -> Result<(), PingError> {
-        self.send(|reply| PingCommand::RemoveMember {
-            ping_name,
-            username,
-            reply,
-        })
-        .await
-        .unwrap_or_else(Self::actor_gone_err)
+        self.manager
+            .lock()
+            .await
+            .remove_member(&ping_name, &username)
+            .await
     }
+
     pub async fn try_record_trigger(
         &self,
         ping_name: String,
@@ -245,211 +187,68 @@ impl PingHandle {
         default_cooldown: Duration,
         public: bool,
     ) -> TriggerDecision {
-        self.send(|reply| PingCommand::TryRecordTrigger {
-            ping_name,
-            sender,
-            default_cooldown,
-            public,
-            reply,
-        })
-        .await
-        .unwrap_or(TriggerDecision::Skip)
+        self.manager
+            .lock()
+            .await
+            .try_record_trigger(&ping_name, &sender, default_cooldown, public)
+            .await
     }
+
     pub async fn snapshot(&self) -> Vec<PingView> {
-        self.send(|reply| PingCommand::Snapshot { reply })
-            .await
-            .unwrap_or_default()
+        let manager = self.manager.lock().await;
+        manager
+            .store
+            .pings
+            .iter()
+            .map(|(name, ping)| PingView::new(name, ping))
+            .collect()
     }
+
     pub async fn get_one(&self, name: String) -> Option<PingView> {
-        self.send(|reply| PingCommand::GetOne { name, reply })
-            .await
-            .flatten()
+        let name = ping_key(&name);
+        let manager = self.manager.lock().await;
+        manager
+            .store
+            .pings
+            .get(&name)
+            .map(|ping| PingView::new(&name, ping))
     }
+
     pub async fn list_for_user(&self, username: String) -> Vec<String> {
-        self.send(|reply| PingCommand::ListForUser { username, reply })
-            .await
-            .unwrap_or_default()
+        self.manager.lock().await.list_pings_for_user(&username)
     }
+
     pub async fn is_member(&self, ping_name: String, username: String) -> bool {
-        self.send(|reply| PingCommand::IsMember {
-            ping_name,
-            username,
-            reply,
-        })
-        .await
-        .unwrap_or(false)
+        self.manager
+            .lock()
+            .await
+            .is_member(&ping_key(&ping_name), &username)
     }
 }
 
-/// Consumed-once inputs for the ping actor. `run_bot` takes these by value,
-/// spawns the actor, and owns its `JoinHandle` for shutdown.
-pub struct PingRuntime {
-    pub rx: mpsc::Receiver<PingCommand>,
-    pub manager: PingManager,
-    pub names_tx: watch::Sender<HashSet<String>>,
-}
-
-/// Create the ping actor channel from a loaded [`PingManager`].
-///
-/// Returns the actor inputs, the shared [`PingHandle`] for `Services` and
-/// `WebState`, and the live name-set receiver for `PingTriggerCommand`.
-pub fn ping_runtime(
-    manager: PingManager,
-) -> (PingRuntime, PingHandle, watch::Receiver<HashSet<String>>) {
-    let (cmd_tx, cmd_rx) = mpsc::channel(PING_ACTOR_CHANNEL);
-    // Seeded so a reader polled before the actor's first publish (e.g. the
-    // first `/commands.json`) already sees the loaded pings.
-    let (names_tx, names_rx) = watch::channel(manager.store.pings.keys().cloned().collect());
-    (
-        PingRuntime {
-            rx: cmd_rx,
-            manager,
-            names_tx,
-        },
-        PingHandle::new(cmd_tx),
-        names_rx,
-    )
-}
-
-pub async fn run_ping_actor(
-    cmd_rx: mpsc::Receiver<PingCommand>,
-    manager: PingManager,
-    names_tx: watch::Sender<HashSet<String>>,
-) {
-    // Standalone callers (web test fixtures and ping-command tests) do not have
-    // the bot lifecycle. Keep their existing channel-closed behavior by using a
-    // lifecycle that never transitions.
-    run_ping_actor_until(
-        cmd_rx,
-        manager,
-        names_tx,
-        crate::lifecycle::Lifecycle::new(),
-    )
-    .await;
-}
-
-/// Lifecycle-aware ping actor used by the composed bot runtime.
-pub(crate) async fn run_ping_actor_until(
-    mut cmd_rx: mpsc::Receiver<PingCommand>,
-    mut manager: PingManager,
-    names_tx: watch::Sender<HashSet<String>>,
-    lifecycle: crate::lifecycle::Lifecycle,
-) {
-    publish_names(&manager, &names_tx);
-    loop {
-        let cmd = tokio::select! {
-            biased;
-            _ = lifecycle.wait_for_cancellation() => return,
-            cmd = cmd_rx.recv() => {
-                let Some(cmd) = cmd else { return };
-                cmd
-            }
-        };
-        match cmd {
-            PingCommand::CreatePing {
-                name,
-                template,
-                created_by,
-                cooldown,
-                reply,
-            } => {
-                let result = manager
-                    .create_ping(name, template, created_by, cooldown)
-                    .await;
-                let ok = result.is_ok();
-                reply.send(result).ok();
-                if ok {
-                    publish_names(&manager, &names_tx);
-                }
-            }
-            PingCommand::DeletePing { name, reply } => {
-                let result = manager.delete_ping(&name).await;
-                let ok = result.is_ok();
-                reply.send(result).ok();
-                if ok {
-                    publish_names(&manager, &names_tx);
-                }
-            }
-            PingCommand::EditTemplate {
-                name,
-                template,
-                reply,
-            } => {
-                reply
-                    .send(manager.edit_template(&name, template).await)
-                    .ok();
-            }
-            PingCommand::AddMember {
-                ping_name,
-                username,
-                reply,
-            } => {
-                reply
-                    .send(manager.add_member(&ping_name, &username).await)
-                    .ok();
-            }
-            PingCommand::RemoveMember {
-                ping_name,
-                username,
-                reply,
-            } => {
-                reply
-                    .send(manager.remove_member(&ping_name, &username).await)
-                    .ok();
-            }
-            PingCommand::TryRecordTrigger {
-                ping_name,
-                sender,
-                default_cooldown,
-                public,
-                reply,
-            } => {
-                let decision = manager
-                    .try_record_trigger(&ping_name, &sender, default_cooldown, public)
-                    .await;
-                reply.send(decision).ok();
-            }
-            PingCommand::Snapshot { reply } => {
-                let views = manager
-                    .store
-                    .pings
-                    .iter()
-                    .map(|(n, p)| PingView::from_name_ping(n, p))
-                    .collect();
-                reply.send(views).ok();
-            }
-            PingCommand::GetOne { name, reply } => {
-                let view = manager
-                    .store
-                    .pings
-                    .get(&name)
-                    .map(|p| PingView::from_name_ping(&name, p));
-                reply.send(view).ok();
-            }
-            PingCommand::ListForUser { username, reply } => {
-                reply
-                    .send(manager.list_pings_for_user_owned(&username))
-                    .ok();
-            }
-            PingCommand::IsMember {
-                ping_name,
-                username,
-                reply,
-            } => {
-                reply.send(manager.is_member(&ping_name, &username)).ok();
-            }
-        }
-    }
-}
-
-fn publish_names(manager: &PingManager, tx: &watch::Sender<HashSet<String>>) {
-    let names: HashSet<String> = manager.store.pings.keys().cloned().collect();
-    tx.send(names).ok();
+/// The one normalization of a ping name: every lookup and create goes
+/// through it, so `!Kaffee`, `!p join KAFFEE` and the dashboard all reach
+/// `kaffee`.
+fn ping_key(name: &str) -> String {
+    name.trim().to_ascii_lowercase()
 }
 
 fn validate_template(template: &str) -> Result<(), PingError> {
     if template.chars().any(char::is_control) {
         return Err(PingError::ControlChars);
+    }
+    Ok(())
+}
+
+fn validate_name(name: &str) -> Result<(), PingError> {
+    if name.is_empty() {
+        return Err(PingError::EmptyName);
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(PingError::InvalidName);
     }
     Ok(())
 }
@@ -460,37 +259,34 @@ fn not_found(name: &str) -> PingError {
     }
 }
 
-pub struct PingManager {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PingStore {
+    pings: HashMap<String, Ping>,
+}
+
+struct PingManager {
     store: PingStore,
     last_triggered: HashMap<String, Instant>,
     path: PathBuf,
 }
 
 impl PingManager {
-    #[cfg(any(test, feature = "testing"))]
-    pub fn empty() -> Self {
-        Self {
-            store: PingStore {
-                pings: HashMap::new(),
-            },
-            last_triggered: HashMap::new(),
-            path: PathBuf::from(PINGS_FILENAME),
-        }
-    }
-
-    pub fn load(data_dir: &Path) -> Result<Self> {
+    fn load(data_dir: &Path) -> Result<Self> {
         let path = data_dir.join(PINGS_FILENAME);
-        let store: PingStore = if path.exists() {
-            let data = std::fs::read_to_string(&path).wrap_err("Failed to read pings.ron")?;
-            ron::from_str(&data).wrap_err("Failed to parse pings.ron")?
-        } else {
-            info!("No pings.ron found, starting with empty ping store");
-            PingStore {
-                pings: HashMap::new(),
+        let pings = match std::fs::read_to_string(&path) {
+            Ok(data) => {
+                ron::from_str::<PingStore>(&data)
+                    .wrap_err("Failed to parse pings.ron")?
+                    .pings
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                info!("No pings.ron found, starting with empty ping store");
+                HashMap::new()
+            }
+            Err(error) => return Err(error).wrap_err("Failed to read pings.ron"),
         };
         let store = PingStore {
-            pings: sanitize_loaded(store.pings),
+            pings: sanitize_loaded(pings),
         };
         info!(count = store.pings.len(), "Loaded pings");
         Ok(Self {
@@ -498,6 +294,10 @@ impl PingManager {
             last_triggered: HashMap::new(),
             path,
         })
+    }
+
+    fn names(&self) -> HashSet<String> {
+        self.store.pings.keys().cloned().collect()
     }
 
     async fn save(&self) -> Result<()> {
@@ -520,15 +320,14 @@ impl PingManager {
         result.map_err(PingError::Persist)
     }
 
-    pub async fn create_ping(
+    async fn create_ping(
         &mut self,
-        name: String,
+        name: &str,
         template: String,
         created_by: String,
-        cooldown: Option<u64>,
     ) -> Result<(), PingError> {
         let before = self.store.clone();
-        let name = name.to_ascii_lowercase();
+        let name = ping_key(name);
         validate_name(&name)?;
         // A ping named after a built-in command never fires: the dispatcher
         // scans commands in order and the ping catch-all is last, so the
@@ -546,7 +345,7 @@ impl PingManager {
             Ping {
                 template,
                 members: BTreeSet::new(),
-                cooldown,
+                cooldown: None,
                 created_by,
                 last_fired_at: None,
                 fire_count: 0,
@@ -555,149 +354,136 @@ impl PingManager {
         self.save_or_revert(before).await
     }
 
-    pub async fn delete_ping(&mut self, name: &str) -> Result<(), PingError> {
+    async fn delete_ping(&mut self, name: &str) -> Result<(), PingError> {
         let before = self.store.clone();
-        if self.store.pings.remove(name).is_none() {
-            return Err(not_found(name));
+        let name = ping_key(name);
+        if self.store.pings.remove(&name).is_none() {
+            return Err(not_found(&name));
         }
-        self.last_triggered.remove(name);
+        self.last_triggered.remove(&name);
         self.save_or_revert(before).await
     }
 
-    pub async fn edit_template(&mut self, name: &str, template: String) -> Result<(), PingError> {
+    async fn edit_template(&mut self, name: &str, template: String) -> Result<(), PingError> {
         let before = self.store.clone();
         validate_template(&template)?;
+        let name = ping_key(name);
         let ping = self
             .store
             .pings
-            .get_mut(name)
-            .ok_or_else(|| not_found(name))?;
+            .get_mut(&name)
+            .ok_or_else(|| not_found(&name))?;
         ping.template = template;
         self.save_or_revert(before).await
     }
 
-    pub async fn add_member(&mut self, ping_name: &str, username: &str) -> Result<(), PingError> {
+    async fn add_member(&mut self, ping_name: &str, username: &str) -> Result<(), PingError> {
         let before = self.store.clone();
+        let ping_name = ping_key(ping_name);
         let ping = self
             .store
             .pings
-            .get_mut(ping_name)
-            .ok_or_else(|| not_found(ping_name))?;
-        let username_lower = username.to_lowercase();
-        if !is_valid_twitch_login(&username_lower) {
+            .get_mut(&ping_name)
+            .ok_or_else(|| not_found(&ping_name))?;
+        let login = username.to_lowercase();
+        if !is_valid_twitch_login(&login) {
             return Err(PingError::InvalidMember {
                 user: username.to_owned(),
             });
         }
-        if !ping.members.insert(username_lower) {
+        if !ping.members.insert(login) {
             return Err(PingError::AlreadyMember {
-                ping: ping_name.to_owned(),
+                ping: ping_name,
                 user: username.to_owned(),
             });
         }
         self.save_or_revert(before).await
     }
 
-    pub async fn remove_member(
-        &mut self,
-        ping_name: &str,
-        username: &str,
-    ) -> Result<(), PingError> {
+    async fn remove_member(&mut self, ping_name: &str, username: &str) -> Result<(), PingError> {
         let before = self.store.clone();
+        let ping_name = ping_key(ping_name);
         let ping = self
             .store
             .pings
-            .get_mut(ping_name)
-            .ok_or_else(|| not_found(ping_name))?;
-        let username_lower = username.to_lowercase();
-        if !ping.members.remove(&username_lower) {
+            .get_mut(&ping_name)
+            .ok_or_else(|| not_found(&ping_name))?;
+        if !ping.members.remove(&username.to_lowercase()) {
             return Err(PingError::NotMember {
-                ping: ping_name.to_owned(),
+                ping: ping_name,
                 user: username.to_owned(),
             });
         }
         self.save_or_revert(before).await
     }
 
-    pub fn get(&self, name: &str) -> Option<&Ping> {
-        self.store.pings.get(name)
-    }
-
-    pub fn is_member(&self, ping_name: &str, username: &str) -> bool {
+    fn is_member(&self, ping_name: &str, username: &str) -> bool {
         self.store
             .pings
             .get(ping_name)
-            .map(|p| p.members.contains(username))
-            .unwrap_or(false)
+            .is_some_and(|p| p.members.contains(username))
     }
 
-    pub fn list_pings_for_user_owned(&self, username: &str) -> Vec<String> {
-        self.store
+    fn list_pings_for_user(&self, username: &str) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .store
             .pings
             .iter()
             .filter(|(_, p)| p.members.contains(username))
             .map(|(name, _)| name.clone())
-            .collect()
+            .collect();
+        names.sort_unstable();
+        names
     }
 
-    pub fn remaining_cooldown(
-        &self,
-        ping_name: &str,
-        default_cooldown: Duration,
-    ) -> Option<Duration> {
+    fn remaining_cooldown(&self, ping_name: &str, default_cooldown: Duration) -> Option<Duration> {
         let ping = self.store.pings.get(ping_name)?;
         let cooldown = ping.cooldown.map_or(default_cooldown, Duration::from_secs);
-        match self.last_triggered.get(ping_name) {
-            Some(last) => {
-                let elapsed = last.elapsed();
-                if elapsed < cooldown {
-                    Some(cooldown - elapsed)
-                } else {
-                    None
-                }
-            }
-            None => None,
-        }
+        let elapsed = self.last_triggered.get(ping_name)?.elapsed();
+        (elapsed < cooldown).then(|| cooldown - elapsed)
     }
 
-    pub async fn record_trigger(&mut self, ping_name: &str) -> Result<()> {
+    async fn record_trigger(&mut self, ping_name: &str) -> Result<()> {
         let Some(ping) = self.store.pings.get_mut(ping_name) else {
             return Ok(());
         };
         self.last_triggered
-            .insert(ping_name.to_string(), Instant::now());
+            .insert(ping_name.to_owned(), Instant::now());
         ping.last_fired_at = Some(Timestamp::now());
         ping.fire_count = ping.fire_count.saturating_add(1);
         self.save().await
     }
 
-    pub async fn try_record_trigger(
+    /// Membership check (unless `public`), cooldown, render and record as one
+    /// step, so two concurrent triggers can never both fire.
+    async fn try_record_trigger(
         &mut self,
         ping_name: &str,
         sender: &str,
         default_cooldown: Duration,
         public: bool,
     ) -> TriggerDecision {
-        if !public && !self.is_member(ping_name, sender) {
+        let ping_name = ping_key(ping_name);
+        if !public && !self.is_member(&ping_name, sender) {
             return TriggerDecision::Skip;
         }
-        if let Some(remaining) = self.remaining_cooldown(ping_name, default_cooldown) {
+        if let Some(remaining) = self.remaining_cooldown(&ping_name, default_cooldown) {
             return TriggerDecision::OnCooldown(remaining);
         }
-        let Some(rendered) = self.render_template(ping_name, sender) else {
+        let Some(lines) = self.render_template(&ping_name, sender) else {
             return TriggerDecision::Skip;
         };
-        if let Err(e) = self.record_trigger(ping_name).await {
+        if let Err(e) = self.record_trigger(&ping_name).await {
             crate::log_handled!(warn, e, ping = %ping_name, "Failed to persist fire stats");
         }
-        TriggerDecision::Fire(rendered)
+        TriggerDecision::Fire(lines)
     }
 
     /// Chat lines for one fire: the template with as many mentions as fit one
     /// message, then the remaining mentions on as many further lines as
     /// needed. One line would be cut at the outbound limit, silently dropping
     /// every member past it.
-    pub fn render_template(&self, ping_name: &str, sender: &str) -> Option<Vec<String>> {
+    fn render_template(&self, ping_name: &str, sender: &str) -> Option<Vec<String>> {
         let ping = self.store.pings.get(ping_name)?;
         let sender_in_template = ping.template.contains("{sender}");
         let mentions: Vec<String> = ping
@@ -746,19 +532,6 @@ fn take_fitting(mentions: &[String], fits: impl Fn(&str) -> bool) -> (String, &[
         taken += 1;
     }
     (chunk, mentions.get(taken..).unwrap_or_default())
-}
-
-fn validate_name(name: &str) -> Result<(), PingError> {
-    if name.is_empty() {
-        return Err(PingError::EmptyName);
-    }
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-    {
-        return Err(PingError::InvalidName);
-    }
-    Ok(())
 }
 
 /// Apply the create/add rules to a file that may predate them: names are
@@ -818,14 +591,9 @@ mod tests {
 
     async fn test_manager(dir: &Path) -> PingManager {
         let mut mgr = empty_manager(dir);
-        mgr.create_ping(
-            "test".into(),
-            "Hey {mentions}!".into(),
-            "admin".into(),
-            None,
-        )
-        .await
-        .unwrap();
+        mgr.create_ping("test", "Hey {mentions}!".into(), "admin".into())
+            .await
+            .unwrap();
         mgr
     }
 
@@ -837,7 +605,7 @@ mod tests {
         // `!lb` is a registered command, so the dispatcher would always win
         // this word and the ping would never fire.
         let err = mgr
-            .create_ping("lb".into(), "Hey {mentions}!".into(), "admin".into(), None)
+            .create_ping("lb", "Hey {mentions}!".into(), "admin".into())
             .await
             .expect_err("a built-in command name must be rejected");
         assert!(
@@ -847,62 +615,39 @@ mod tests {
 
         // The name is lowercased before the check, so casing is no escape.
         assert!(
-            mgr.create_ping("LB".into(), "Hey {mentions}!".into(), "admin".into(), None)
+            mgr.create_ping("LB", "Hey {mentions}!".into(), "admin".into())
                 .await
                 .is_err()
         );
 
         // A name that is not a command is still fine.
-        mgr.create_ping("uwu".into(), "Hey {mentions}!".into(), "admin".into(), None)
+        mgr.create_ping("uwu", "Hey {mentions}!".into(), "admin".into())
             .await
             .unwrap();
     }
 
     #[tokio::test]
-    async fn actor_stops_through_lifecycle_without_sender_drain() {
+    async fn handle_normalizes_names_and_publishes_them() {
         let dir = tempfile::tempdir().unwrap();
-        let manager = test_manager(dir.path()).await;
-        let (tx, rx) = mpsc::channel(1);
-        let (names_tx, _names_rx) = watch::channel(HashSet::new());
-        let lifecycle = crate::lifecycle::Lifecycle::new();
-        let actor_lifecycle = lifecycle.clone();
-        let actor = tokio::spawn(run_ping_actor_until(rx, manager, names_tx, actor_lifecycle));
-        let retained_sender = PingHandle::new(tx);
-        tokio::task::yield_now().await;
-
-        lifecycle.request_graceful_stop();
-        actor.await.expect("ping actor joined");
-
-        // The handle still owns a sender; lifecycle cancellation, not channel
-        // closure, is what ended the actor.
-        assert!(retained_sender.snapshot().await.is_empty());
-    }
-
-    #[tokio::test]
-    async fn handle_survives_dead_actor() {
-        let (tx, rx) = mpsc::channel(1);
-        drop(rx);
-        let handle = PingHandle::new(tx);
+        let handle = PingHandle::load(dir.path()).unwrap();
+        let names = handle.names();
+        handle
+            .create_ping(" Kaffee ".into(), "{mentions}".into(), "admin".into())
+            .await
+            .unwrap();
+        assert_eq!(*names.borrow(), HashSet::from(["kaffee".to_owned()]));
+        handle
+            .add_member("KAFFEE".into(), "Alice".into())
+            .await
+            .unwrap();
         assert!(matches!(
             handle
-                .create_ping("x".into(), "Hey {mentions}".into(), "admin".into(), None)
+                .try_record_trigger("Kaffee".into(), "alice".into(), Duration::ZERO, false)
                 .await,
-            Err(PingError::Unavailable)
+            TriggerDecision::Fire(_)
         ));
-        assert!(matches!(
-            handle.delete_ping("x".into()).await,
-            Err(PingError::Unavailable)
-        ));
-        assert!(matches!(
-            handle
-                .try_record_trigger("x".into(), "alice".into(), Duration::from_secs(1), false)
-                .await,
-            TriggerDecision::Skip
-        ));
-        assert!(handle.snapshot().await.is_empty());
-        assert!(handle.get_one("x".into()).await.is_none());
-        assert!(handle.list_for_user("alice".into()).await.is_empty());
-        assert!(!handle.is_member("x".into(), "alice".into()).await);
+        handle.delete_ping("kaffee".into()).await.unwrap();
+        assert!(names.borrow().is_empty());
     }
 
     #[tokio::test]
@@ -968,10 +713,9 @@ mod tests {
         let mut mgr = empty_manager(dir.path());
         let result = mgr
             .create_ping(
-                "bad".into(),
+                "bad",
                 "Hey {mentions}\r\nPRIVMSG #other :pwned".into(),
                 "admin".into(),
-                None,
             )
             .await;
         assert!(matches!(result, Err(PingError::ControlChars)));
@@ -998,7 +742,7 @@ mod tests {
         mgr.path = dir.path().join("gone").join(PINGS_FILENAME);
 
         assert!(matches!(
-            mgr.create_ping("new".into(), "Hi {mentions}".into(), "admin".into(), None)
+            mgr.create_ping("new", "Hi {mentions}".into(), "admin".into())
                 .await,
             Err(PingError::Persist(_))
         ));
@@ -1028,6 +772,42 @@ mod tests {
         assert!(
             !mgr.store.pings.contains_key("bad"),
             "ping with control chars must be dropped on load"
+        );
+    }
+
+    #[test]
+    fn load_lowercases_names_and_drops_invalid_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = r#"(pings: {
+            "Kaffee": (template: "{mentions}", members: ["Alice", "../../victim/delete?"], cooldown: None, created_by: "admin"),
+            "kaffee": (template: "{mentions}", members: ["bob"], cooldown: None, created_by: "admin"),
+            "bad name": (template: "{mentions}", members: ["carol"], cooldown: None, created_by: "admin"),
+            "Tee": (template: "{mentions}", members: ["Dora", "../x"], cooldown: None, created_by: "admin"),
+        })"#;
+        std::fs::write(dir.path().join(PINGS_FILENAME), raw).unwrap();
+        let mgr = PingManager::load(dir.path()).unwrap();
+        let mut names: Vec<&str> = mgr.store.pings.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["kaffee", "tee"]);
+        assert!(
+            mgr.is_member("kaffee", "bob"),
+            "the key that was already lowercase wins a collision"
+        );
+        let tee: Vec<&str> = mgr.store.pings["tee"]
+            .members
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(tee, ["dora"]);
+    }
+
+    #[test]
+    fn unparseable_file_is_an_error_not_an_empty_store() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(PINGS_FILENAME), "not ron").unwrap();
+        assert!(
+            PingManager::load(dir.path()).is_err(),
+            "starting empty would overwrite every ping on the next save"
         );
     }
 
@@ -1140,7 +920,7 @@ mod tests {
     async fn render_template_includes_sender_when_no_sender_placeholder() {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = empty_manager(dir.path());
-        mgr.create_ping("grp".into(), "{mentions}".into(), "admin".into(), None)
+        mgr.create_ping("grp", "{mentions}".into(), "admin".into())
             .await
             .unwrap();
         mgr.add_member("grp", "alice").await.unwrap();
@@ -1153,14 +933,9 @@ mod tests {
     async fn render_template_excludes_sender_when_template_has_sender_placeholder() {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = empty_manager(dir.path());
-        mgr.create_ping(
-            "grp".into(),
-            "{sender} pinged {mentions}".into(),
-            "admin".into(),
-            None,
-        )
-        .await
-        .unwrap();
+        mgr.create_ping("grp", "{sender} pinged {mentions}".into(), "admin".into())
+            .await
+            .unwrap();
         mgr.add_member("grp", "alice").await.unwrap();
         mgr.add_member("grp", "bob").await.unwrap();
         let result = mgr.render_template("grp", "alice").unwrap();
@@ -1171,7 +946,7 @@ mod tests {
     async fn render_template_fires_when_sender_is_sole_member_and_no_sender_placeholder() {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = empty_manager(dir.path());
-        mgr.create_ping("grp".into(), "{mentions}".into(), "admin".into(), None)
+        mgr.create_ping("grp", "{mentions}".into(), "admin".into())
             .await
             .unwrap();
         mgr.add_member("grp", "alice").await.unwrap();
@@ -1184,14 +959,9 @@ mod tests {
     {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = empty_manager(dir.path());
-        mgr.create_ping(
-            "grp".into(),
-            "{sender} pinged {mentions}".into(),
-            "admin".into(),
-            None,
-        )
-        .await
-        .unwrap();
+        mgr.create_ping("grp", "{sender} pinged {mentions}".into(), "admin".into())
+            .await
+            .unwrap();
         mgr.add_member("grp", "alice").await.unwrap();
         let result = mgr.render_template("grp", "alice");
         assert!(result.is_none());
@@ -1201,14 +971,9 @@ mod tests {
     async fn large_group_spreads_over_messages_without_losing_anyone() {
         let dir = tempfile::tempdir().unwrap();
         let mut mgr = empty_manager(dir.path());
-        mgr.create_ping(
-            "grp".into(),
-            "Raid {mentions}!".into(),
-            "admin".into(),
-            None,
-        )
-        .await
-        .unwrap();
+        mgr.create_ping("grp", "Raid {mentions}!".into(), "admin".into())
+            .await
+            .unwrap();
         // 25-char logins: about 18 fit one 480-byte line.
         let members: Vec<String> = (0..60)
             .map(|i| format!("viewer_{i:02}_{}", "x".repeat(15)))
@@ -1232,28 +997,5 @@ mod tests {
             .map(|w| w.trim_end_matches('!'))
             .collect();
         assert_eq!(mentioned, members, "every member once, in sorted order");
-    }
-
-    #[test]
-    fn load_lowercases_names_and_drops_invalid_members() {
-        let dir = tempfile::tempdir().unwrap();
-        let raw = r#"(pings: {
-            "Kaffee": (template: "{mentions}", members: ["Alice", "../../victim/delete?"], cooldown: None, created_by: "admin"),
-            "kaffee": (template: "{mentions}", members: ["bob"], cooldown: None, created_by: "admin"),
-            "bad name": (template: "{mentions}", members: ["carol"], cooldown: None, created_by: "admin"),
-            "Tee": (template: "{mentions}", members: ["Dora"], cooldown: None, created_by: "admin"),
-        })"#;
-        std::fs::write(dir.path().join(PINGS_FILENAME), raw).unwrap();
-        let mgr = PingManager::load(dir.path()).unwrap();
-        let mut names: Vec<&str> = mgr.store.pings.keys().map(String::as_str).collect();
-        names.sort_unstable();
-        assert_eq!(names, ["kaffee", "tee"]);
-        assert!(
-            mgr.is_member("kaffee", "bob"),
-            "the key that was already lowercase wins a collision"
-        );
-        assert!(mgr.is_member("tee", "dora"));
-        let ping = mgr.get("tee").unwrap();
-        assert_eq!(ping.members.len(), 1);
     }
 }

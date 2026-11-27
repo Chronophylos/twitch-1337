@@ -20,11 +20,8 @@ pub struct PingTriggerCommand {
 }
 
 impl PingTriggerCommand {
-    pub fn new(
-        ping: PingHandle,
-        settings: crate::settings::SettingsHandle,
-        names: watch::Receiver<HashSet<String>>,
-    ) -> Self {
+    pub fn new(ping: PingHandle, settings: crate::settings::SettingsHandle) -> Self {
+        let names = ping.names();
         Self {
             ping,
             settings,
@@ -40,12 +37,9 @@ impl PingTriggerCommand {
     }
 }
 
-fn parse_ping_trigger(word: &str) -> Option<String> {
-    let name = word.strip_prefix('!')?;
-    if name.is_empty() {
-        return None;
-    }
-    Some(name.to_lowercase())
+/// The ping name of a `!<name>` chat word; the store normalizes its case.
+fn parse_ping_trigger(word: &str) -> Option<&str> {
+    word.strip_prefix('!').filter(|name| !name.is_empty())
 }
 
 #[async_trait]
@@ -81,15 +75,8 @@ where
         if !self.current_public() {
             return Vec::new();
         }
-        let mut names: Vec<String> = self
-            .names
-            .borrow()
-            .iter()
-            // A non-lowercase key can never fire: the trigger is lowercased
-            // before the store lookup.
-            .filter(|name| **name == name.to_lowercase())
-            .cloned()
-            .collect();
+        // Names are lowercase: create and load both normalize them.
+        let mut names: Vec<String> = self.names.borrow().iter().cloned().collect();
         names.sort_unstable();
         names
             .into_iter()
@@ -105,14 +92,8 @@ where
     }
 
     fn matches(&self, word: &str) -> bool {
-        let Some(name) = word.strip_prefix('!') else {
-            return false;
-        };
-        if name.is_empty() {
-            return false;
-        }
-        let names = self.names.borrow();
-        names.iter().any(|k| k.eq_ignore_ascii_case(name))
+        parse_ping_trigger(word)
+            .is_some_and(|name| self.names.borrow().contains(&name.to_ascii_lowercase()))
     }
 
     async fn execute(&self, ctx: CommandContext<T, L>) -> Result<()> {
@@ -123,7 +104,7 @@ where
         let decision = self
             .ping
             .try_record_trigger(
-                ping_name.clone(),
+                ping_name.to_owned(),
                 invoker,
                 self.current_cooldown(),
                 self.current_public(),
@@ -152,23 +133,16 @@ where
 #[cfg(test)]
 mod settings_live_tests {
     use super::*;
-    use crate::ping::{PingManager, ping_runtime};
+    use crate::ping::PingHandle;
     use crate::settings::Settings;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn reads_cooldown_and_public_from_handle_at_call_time() {
-        let initial = Settings::compiled_defaults();
-        let handle: crate::settings::SettingsHandle =
-            crate::settings::SettingsHandle::from_settings(initial);
-        let mgr = PingManager::empty();
-        let (ping_runtime, ping, names_rx) = ping_runtime(mgr);
-        tokio::spawn(crate::ping::run_ping_actor(
-            ping_runtime.rx,
-            ping_runtime.manager,
-            ping_runtime.names_tx,
-        ));
-        let cmd = PingTriggerCommand::new(ping, handle.clone(), names_rx);
+        let dir = tempfile::tempdir().unwrap();
+        let handle = crate::settings::SettingsHandle::from_settings(Settings::compiled_defaults());
+        let ping = PingHandle::load(dir.path()).unwrap();
+        let cmd = PingTriggerCommand::new(ping, handle.clone());
         let before_cooldown = cmd.current_cooldown();
         let before_public = cmd.current_public();
         let mut next = Settings::compiled_defaults();
@@ -184,25 +158,31 @@ mod settings_live_tests {
     }
 
     #[tokio::test]
-    async fn catalog_lists_public_pings_sorted() {
+    async fn catalog_lists_public_pings_sorted_and_matches_any_case() {
+        let dir = tempfile::tempdir().unwrap();
         let handle = crate::settings::SettingsHandle::from_settings(Settings::compiled_defaults());
-        let (_runtime, ping, _) = ping_runtime(PingManager::empty());
-        let (_names_tx, names_rx) = watch::channel(HashSet::from([
-            "kaffee".to_owned(),
-            "abend".to_owned(),
-            "Dead".to_owned(),
-        ]));
-        let cmd = PingTriggerCommand::new(ping, handle.clone(), names_rx);
-        let catalog = |cmd: &PingTriggerCommand| {
-            Command::<twitch_irc::SecureTCPTransport, twitch_irc::login::StaticLoginCredentials>::catalog_entries(cmd)
-        };
+        let ping = PingHandle::load(dir.path()).unwrap();
+        for name in ["kaffee", "abend"] {
+            ping.create_ping(name.into(), "{mentions}".into(), "admin".into())
+                .await
+                .unwrap();
+        }
+        let cmd = PingTriggerCommand::new(ping, handle.clone());
+        type Cmd =
+            dyn Command<twitch_irc::SecureTCPTransport, twitch_irc::login::StaticLoginCredentials>;
+        let cmd: &Cmd = &cmd;
 
-        assert!(catalog(&cmd).is_empty(), "members-only pings stay private");
+        assert!(
+            cmd.catalog_entries().is_empty(),
+            "members-only pings stay private"
+        );
+        assert!(cmd.matches("!KAFFEE"));
+        assert!(!cmd.matches("!tee") && !cmd.matches("!") && !cmd.matches("kaffee"));
 
         let mut next = Settings::compiled_defaults();
         next.pings.public = true;
         handle.store(Arc::new(next));
-        let entries = catalog(&cmd);
+        let entries = cmd.catalog_entries();
         let names: Vec<_> = entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["!abend", "!kaffee"]);
         assert!(entries.iter().all(|e| e.kind == CommandKind::Ping));

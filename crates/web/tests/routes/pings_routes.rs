@@ -52,7 +52,7 @@ async fn list_renders_existing_pings() {
     let (state, sid, csrf, _bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("team".into(), "Hey {mentions}".into(), "admin".into(), None)
+        .create_ping("team".into(), "Hey {mentions}".into(), "admin".into())
         .await
         .unwrap();
     let app = build_router(state);
@@ -106,7 +106,7 @@ async fn create_rejects_duplicate_name() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("dup".into(), "x {mentions}".into(), "admin".into(), None)
+        .create_ping("dup".into(), "x {mentions}".into(), "admin".into())
         .await
         .unwrap();
     let app = build_router(state.clone());
@@ -136,7 +136,7 @@ async fn edit_round_trip() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("team".into(), "Hey {mentions}".into(), "admin".into(), None)
+        .create_ping("team".into(), "Hey {mentions}".into(), "admin".into())
         .await
         .unwrap();
 
@@ -181,12 +181,12 @@ async fn delete_via_htmx_returns_oob_counts() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("doomed".into(), "{mentions}".into(), "admin".into(), None)
+        .create_ping("doomed".into(), "{mentions}".into(), "admin".into())
         .await
         .unwrap();
     state
         .ping_actor
-        .create_ping("kept".into(), "{mentions}".into(), "bob".into(), None)
+        .create_ping("kept".into(), "{mentions}".into(), "bob".into())
         .await
         .unwrap();
     state
@@ -245,7 +245,7 @@ async fn delete_without_htmx_redirects_to_list() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("doomed".into(), "{mentions}".into(), "admin".into(), None)
+        .create_ping("doomed".into(), "{mentions}".into(), "admin".into())
         .await
         .unwrap();
     let app = build_router(state.clone());
@@ -268,7 +268,7 @@ async fn delete_with_failing_persist_returns_500() {
     let (state, sid, csrf, bare_csrf, td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("doomed".into(), "{mentions}".into(), "admin".into(), None)
+        .create_ping("doomed".into(), "{mentions}".into(), "admin".into())
         .await
         .unwrap();
     // Remove the data dir so the atomic save has no parent to write into.
@@ -314,7 +314,7 @@ async fn delete_without_csrf_rejected() {
     let (state, sid, csrf, _bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("survives".into(), "{mentions}".into(), "admin".into(), None)
+        .create_ping("survives".into(), "{mentions}".into(), "admin".into())
         .await
         .unwrap();
     let app = build_router(state.clone());
@@ -427,7 +427,7 @@ async fn create_duplicate_renders_form_with_error_and_user_draft() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("foo".into(), "@user".into(), "admin".into(), None)
+        .create_ping("foo".into(), "@user".into(), "admin".into())
         .await
         .unwrap();
     let app = build_router(state);
@@ -464,7 +464,7 @@ async fn update_invalid_template_renders_form_with_error() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("team".into(), "Hey {mentions}".into(), "admin".into(), None)
+        .create_ping("team".into(), "Hey {mentions}".into(), "admin".into())
         .await
         .unwrap();
     let app = build_router(state.clone());
@@ -505,7 +505,7 @@ async fn add_member_round_trip() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+        .create_ping("team".into(), "{mentions}".into(), "admin".into())
         .await
         .unwrap();
     let body = format!(
@@ -536,7 +536,7 @@ async fn add_member_rejects_invalid_login() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+        .create_ping("team".into(), "{mentions}".into(), "admin".into())
         .await
         .unwrap();
     let body = format!(
@@ -562,7 +562,7 @@ async fn remove_member_via_htmx_returns_oob_member_count() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+        .create_ping("team".into(), "{mentions}".into(), "admin".into())
         .await
         .unwrap();
     for m in ["alice", "bob"] {
@@ -603,7 +603,7 @@ async fn remove_member_without_htmx_redirects_to_edit_page() {
     let (state, sid, csrf, bare_csrf, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+        .create_ping("team".into(), "{mentions}".into(), "admin".into())
         .await
         .unwrap();
     state
@@ -636,7 +636,7 @@ async fn remove_member_without_csrf_rejected() {
     let (state, sid, csrf, _bare, _td) = authed_setup().await;
     state
         .ping_actor
-        .create_ping("team".into(), "{mentions}".into(), "admin".into(), None)
+        .create_ping("team".into(), "{mentions}".into(), "admin".into())
         .await
         .unwrap();
     state
@@ -692,7 +692,7 @@ async fn viewer_pings_list_has_no_mutation_controls() {
     // Seed a ping so the table renders rows, not the empty state.
     state
         .ping_actor
-        .create_ping("alpha".into(), "{mentions}".into(), "creator".into(), None)
+        .create_ping("alpha".into(), "{mentions}".into(), "creator".into())
         .await
         .unwrap();
 
@@ -736,7 +736,7 @@ async fn mod_pings_list_shows_mutation_controls() {
 
     state
         .ping_actor
-        .create_ping("beta".into(), "{mentions}".into(), "creator".into(), None)
+        .create_ping("beta".into(), "{mentions}".into(), "creator".into())
         .await
         .unwrap();
 

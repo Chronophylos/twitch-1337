@@ -35,7 +35,6 @@ pub mod util;
 #[cfg(test)]
 mod persisted_time_compat;
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -52,7 +51,6 @@ use twitch_irc::{
 use crate::{
     aviation::AviationClient,
     lifecycle::{Lifecycle, TaskSupervisor},
-    ping::PingRuntime,
     twitch::handlers::{
         spawn::{build_command_registry, spawn_handlers},
         tracker_1337::{TARGET_HOUR, TARGET_MINUTE},
@@ -142,11 +140,8 @@ pub struct Services {
     /// Process start instant, captured at composition. Used by `!v` for
     /// uptime.
     pub started_at: std::time::Instant,
-    /// Shared ping actor handle. The actor itself is spawned inside
-    /// [`run_bot`], which owns its `JoinHandle` for shutdown.
+    /// Shared ping store; also publishes the live ping name set.
     pub ping: crate::ping::PingHandle,
-    /// Live ping name set, published by the ping actor.
-    pub ping_names_rx: tokio::sync::watch::Receiver<HashSet<String>>,
     /// Public command catalog for `/commands.json`. Filled by [`run_bot`]
     /// once the registry is built; the web state is composed earlier, so it
     /// shares this cell instead of the registry itself.
@@ -262,15 +257,10 @@ pub type WebSpawner = Box<dyn FnOnce(Lifecycle) -> WebRuntimeTasks + Send + 'sta
 /// `FakeTransport` without touching production code paths. `startup` is the
 /// caller's `startup` root span; it covers handler spawn and is closed once
 /// the bot runs (pass `Span::none()` when there is none).
-#[expect(
-    clippy::too_many_arguments,
-    reason = "composition root hands every runtime part over once"
-)]
 pub async fn run_bot<T, L>(
     client: Arc<TwitchIRCClient<T, L>>,
     incoming: UnboundedReceiver<ServerMessage>,
     services: Services,
-    ping: PingRuntime,
     tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
     web_spawner: Option<WebSpawner>,
     startup: tracing::Span,
@@ -284,7 +274,6 @@ where
         client,
         incoming,
         services,
-        ping,
         tracker_rx,
         web_spawner,
         startup,
@@ -300,15 +289,10 @@ where
 /// not add a second executor abstraction. The registry remains shared by
 /// ingress and `CommandExecutionManager`.
 #[cfg(any(test, feature = "testing"))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "test entrypoint mirrors run_bot plus injected registry"
-)]
 pub async fn run_bot_with_command_registry<T, L>(
     client: Arc<TwitchIRCClient<T, L>>,
     incoming: UnboundedReceiver<ServerMessage>,
     services: Services,
-    ping: PingRuntime,
     tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
     web_spawner: Option<WebSpawner>,
     shutdown: oneshot::Receiver<()>,
@@ -322,7 +306,6 @@ where
         client,
         incoming,
         services,
-        ping,
         tracker_rx,
         web_spawner,
         startup: tracing::Span::none(),
@@ -340,7 +323,6 @@ where
     client: Arc<TwitchIRCClient<T, L>>,
     incoming: UnboundedReceiver<ServerMessage>,
     services: Services,
-    ping: PingRuntime,
     tracker_rx: Option<tokio::sync::mpsc::Receiver<crate::aviation::TrackerCommand>>,
     web_spawner: Option<WebSpawner>,
     startup: tracing::Span,
@@ -357,7 +339,6 @@ where
         client,
         incoming,
         services,
-        ping,
         tracker_rx,
         web_spawner,
         startup,
@@ -371,9 +352,7 @@ where
         // The flight-tracker boot guard ties all three values together —
         // `Services.aviation`, `Services.aviation_tracker_tx`, and `tracker_rx` —
         // restoring the invariant the deleted
-        // `expect("tracker_tx must be Some when aviation is Some")` enforced. It
-        // runs before the ping actor spawns so the bail path never orphans the
-        // actor task with no handle.
+        // `expect("tracker_tx must be Some when aviation is Some")` enforced.
         if [
             services.aviation.is_some(),
             services.aviation_tracker_tx.is_some(),
@@ -390,8 +369,8 @@ where
         let services = Arc::new(services);
 
         // Construct the registry and all command-owned optional clients before any
-        // runtime task is registered. A startup error therefore cannot leave the
-        // ping actor or another task behind.
+        // runtime task is registered. A startup error therefore cannot leave a
+        // task behind.
         let command_registry = match injected_registry {
             Some(registry) => registry,
             None => build_command_registry(&services, &services.settings.load())?,
@@ -406,18 +385,6 @@ where
 
         let lifecycle = Lifecycle::new();
         let mut supervisor = TaskSupervisor::new(lifecycle.clone());
-
-        // The ping actor is single-owner and lifecycle-aware. It is registered
-        // directly, so a clean actor return before shutdown is a runtime fault and
-        // a lifecycle stop is observed without relying on sender-count drain.
-        {
-            let lifecycle = lifecycle.clone();
-            supervisor.spawn("ping actor", async move {
-                crate::ping::run_ping_actor_until(ping.rx, ping.manager, ping.names_tx, lifecycle)
-                    .await;
-            });
-        }
-
         // Cloned Arc retained for the startup/shutdown announces; `client` itself is
         // moved into spawn_handlers below.
         let client_for_announce = client.clone();

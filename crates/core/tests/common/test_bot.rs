@@ -21,9 +21,7 @@ use twitch_1337::{
     PersonalBest, PersonalWorst, Services,
     aviation::AviationClient,
     config::{AiBootstrap, Configuration},
-    load_hall_of_shame, load_leaderboard,
-    ping::ping_runtime,
-    run_bot,
+    load_hall_of_shame, load_leaderboard, run_bot,
     twitch::echo::{EchoGuard, MouthIdentities},
     twitch::mouth::{Agent, Mouth, MouthRouter, SpeakError, SpeakRequest, SpokenMessage},
     twitch::whisper::{self, WhisperError, WhisperSender},
@@ -469,9 +467,8 @@ impl TestBotBuilder {
 
             let irc_connected = Arc::new(AtomicBool::new(false));
 
-            let ping_manager =
-                twitch_1337::ping::PingManager::load(data_dir.path()).expect("load ping manager");
-            let (ping_runtime, ping_handle, ping_names_rx) = ping_runtime(ping_manager);
+            let ping_handle =
+                twitch_1337::ping::PingHandle::load(data_dir.path()).expect("load pings");
 
             let memory_store = twitch_1337::ai::memory::store::MemoryStore::open(
                 data_dir.path(),
@@ -644,7 +641,6 @@ impl TestBotBuilder {
                 ai_enabled: self.config.ai.is_some(),
                 started_at,
                 ping: ping_handle,
-                ping_names_rx,
                 command_catalog: Default::default(),
                 aurora_tools: Default::default(),
                 memory_store,
@@ -736,7 +732,6 @@ impl TestBotBuilder {
                     client,
                     incoming,
                     services,
-                    ping_runtime,
                     aviation_tracker_rx,
                     web_spawner,
                     shutdown_rx,
@@ -747,7 +742,6 @@ impl TestBotBuilder {
                     client,
                     incoming,
                     services,
-                    ping_runtime,
                     aviation_tracker_rx,
                     web_spawner,
                     tracing::Span::none(),

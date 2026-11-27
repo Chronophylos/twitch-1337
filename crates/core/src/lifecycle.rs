@@ -509,6 +509,10 @@ impl LocalTaskGroup {
         }
     }
 
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "every production task returns a Result")
+    )]
     fn spawn<F>(&mut self, name: impl Into<String>, future: F)
     where
         F: Future<Output = ()> + Send + 'static,
@@ -733,7 +737,12 @@ impl TaskSupervisor {
         }
     }
 
-    /// Spawn and register a top-level application task.
+    /// Spawn and register a top-level application task. Production tasks all
+    /// use [`Self::spawn_result`]; supervisor tests use this one.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "every production task returns a Result")
+    )]
     pub(crate) fn spawn<F>(&mut self, name: impl Into<String>, future: F)
     where
         F: Future<Output = ()> + Send + 'static,

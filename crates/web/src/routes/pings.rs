@@ -454,12 +454,7 @@ async fn create(
 
     if let Err(e) = state
         .ping_actor
-        .create_ping(
-            name.clone(),
-            template.clone(),
-            session.user_login.clone(),
-            None,
-        )
+        .create_ping(name.clone(), template.clone(), session.user_login.clone())
         .await
     {
         let msg = ping_error_for_form(e)?;

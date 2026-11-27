@@ -270,7 +270,6 @@ where
     command_list.push(Arc::new(commands::ping_trigger::PingTriggerCommand::new(
         services.ping.clone(),
         services.settings.clone(),
-        services.ping_names_rx.clone(),
     )));
 
     CommandRegistry::from_commands(command_list)
