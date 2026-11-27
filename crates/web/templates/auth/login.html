@@ -1,12 +1,8 @@
-{% extends "base.html" %}
+{% extends "auth/_wings.html" %}
 {% block title %}Sign in — Ɛ:3{% endblock %}
-{% block layout %}
-<div class="shell-solo">
-  <div class="auth-card">
-    <div class="auth-mark" aria-hidden="true">{% include "_mark.html" %}</div>
-    <h1>Ɛ:3</h1>
-    <p>Dashboard for {{ channel }}. Sign in with Twitch.</p>
-    <a href="{{ login_href }}" class="btn primary">Sign in with Twitch</a>
-  </div>
-</div>
+{% block card %}
+<a href="{{ login_href }}" class="btn primary">
+  <svg class="twitch-glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 2 2.5 5.5v14h5V22h3l2.5-2.5h4L22 14.5V2H4zm16 11.5-3 3h-5l-2.5 2.5v-2.5H5.5V4H20v9.5zM15.5 7h2v5h-2zm-5 0h2v5h-2z"/></svg>
+  Sign in with Twitch
+</a>
 {% endblock %}
