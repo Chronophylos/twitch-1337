@@ -21,7 +21,8 @@ pub fn marker(id: EntryId) -> String {
     format!("{MARKER_PREFIX}:F{id}")
 }
 
-/// Hidden HTML comment carrying [`marker`], appended to every body and comment.
+/// Hidden HTML comment carrying [`marker`], appended to every body and
+/// comment. `GithubClient::find_marker` accepts a hit only with exactly this.
 fn marker_comment(id: EntryId) -> String {
     format!("<!-- {} -->", marker(id))
 }

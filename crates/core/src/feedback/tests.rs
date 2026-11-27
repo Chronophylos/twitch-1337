@@ -102,8 +102,18 @@ async fn mount_create(server: &MockServer, status: u16, times: u64) {
         .await;
 }
 
-async fn mount_search(server: &MockServer, hit: Option<u64>) {
-    let items: Vec<Value> = hit.into_iter().map(issue_json).collect();
+/// Search hit `issue` for entry `id`: the item's body and one comment on the
+/// issue carry the entry's exact hidden marker, as GitHub would return them.
+async fn mount_search(server: &MockServer, hit: Option<(u64, EntryId)>) {
+    let hidden = |id| format!("<!-- {} -->", crate::feedback::marker(id));
+    let items: Vec<Value> = hit
+        .into_iter()
+        .map(|(n, id)| {
+            let mut item = issue_json(n);
+            item["body"] = json!(hidden(id));
+            item
+        })
+        .collect();
     Mock::given(method("GET"))
         .and(path("/search/issues"))
         .respond_with(
@@ -112,6 +122,13 @@ async fn mount_search(server: &MockServer, hit: Option<u64>) {
         )
         .mount(server)
         .await;
+    if let Some((n, id)) = hit {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/o/r/issues/{n}/comments")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{ "body": hidden(id) }])))
+            .mount(server)
+            .await;
+    }
 }
 
 #[tokio::test]
@@ -268,7 +285,7 @@ async fn ambiguous_promote_holds_off_then_creates_once() {
 async fn ambiguous_promote_resolved_by_marker_creates_nothing() {
     let server = MockServer::start().await;
     mount_create(&server, 504, 1).await;
-    mount_search(&server, Some(7)).await;
+    mount_search(&server, Some((7, 1))).await;
     let mut f = fixture(Some(&server)).await;
     let id = f.hub.submit("u1", "alice", "x").await.expect("submit");
     let t0 = Timestamp::now();
@@ -417,11 +434,21 @@ async fn attach_comments_labels_links_and_notices() {
 }
 
 #[tokio::test]
-async fn attach_to_missing_issue_returns_to_new() {
+async fn attach_to_missing_issue_returns_to_the_previous_state() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/repos/o/r/issues/99"))
         .respond_with(ResponseTemplate::new(404).set_body_json(json!({ "message": "Not Found" })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/issues/12"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(issue_json(12)))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/o/r/issues/12/comments"))
+        .respond_with(ResponseTemplate::new(503))
         .mount(&server)
         .await;
     let f = fixture(Some(&server)).await;
@@ -436,6 +463,22 @@ async fn attach_to_missing_issue_returns_to_new() {
             .await
             .is_empty()
     );
+
+    // The comment on #12 may have landed. A mistyped #99 must not forget
+    // that, or the next attach to #12 would comment again without a check.
+    let t0 = Timestamp::now();
+    assert!(matches!(
+        f.hub.attach_at(id, 12, "m", t0).await,
+        Err(ActionError::Ambiguous)
+    ));
+    assert!(matches!(
+        f.hub.attach_at(id, 99, "m", t0).await,
+        Err(ActionError::IssueNotFound)
+    ));
+    assert!(matches!(
+        state(&f.hub, id),
+        EntryState::AttachUnknown { issue: 12, .. }
+    ));
 }
 
 #[tokio::test]
@@ -457,7 +500,7 @@ async fn ambiguous_attach_parks_then_marker_in_comments_resolves() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(&server)
         .await;
-    mount_search(&server, Some(12)).await;
+    mount_search(&server, Some((12, 1))).await;
     let f = fixture(Some(&server)).await;
     let id = f.hub.submit("u2", "bob", "same").await.expect("submit");
     let t0 = Timestamp::now();
@@ -545,15 +588,29 @@ async fn dismiss_restore_and_persisted_round_trip() {
         f.hub.dismiss(id, "m").await,
         Err(ActionError::InvalidState)
     ));
-    f.hub.restore(id, "m").await.expect("restore");
+    f.hub.restore(id).await.expect("restore");
     assert_eq!(state(&f.hub, id), EntryState::New);
     assert!(matches!(
-        f.hub.restore(id, "m").await,
+        f.hub.restore(id).await,
         Err(ActionError::InvalidState)
     ));
     assert!(matches!(
         f.hub.dismiss(999, "m").await,
         Err(ActionError::NotFound)
+    ));
+
+    // An entry whose promote outcome is unknown cannot be dismissed: Restore
+    // would bring it back as New and skip the marker check.
+    let mut unknown = f.hub.entry(id).expect("entry");
+    unknown.id = 50;
+    unknown.state = EntryState::PromoteUnknown {
+        failed_at: Timestamp::now(),
+        by: "m".into(),
+    };
+    f.hub.insert_for_tests(unknown).await;
+    assert!(matches!(
+        f.hub.dismiss(50, "m").await,
+        Err(ActionError::InvalidState)
     ));
 
     let reopened = FeedbackHub::open(f.dir.path(), None, settings())
