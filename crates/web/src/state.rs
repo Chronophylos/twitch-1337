@@ -102,7 +102,7 @@ pub struct WebState {
     /// for `/settings` post-back via `store.apply(...)`.
     pub settings_store: Arc<twitch_1337_core::settings::SettingsStore>,
     /// Per-schedule runtime state (last_fired_at, fires_today, day_anchor).
-    /// Shared with the IRC `schedule_runner` orchestrator so the dashboard
+    /// Shared with the IRC scheduler (`schedule_runner`) so the dashboard
     /// surfaces live fire counters.
     pub schedule_runtime: Arc<twitch_1337_core::schedule::ScheduleRuntimeStore>,
     /// Shared chat-recap handle (same `Arc` the bot's recap batcher writes
