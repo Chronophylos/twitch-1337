@@ -1,63 +1,28 @@
-# twitch-1337
+<p align="center">
+  <img src="docs/readme/hero.svg" alt="The Ɛ:3 mark splitting open over a glowing planet horizon, with twitch-1337 between its wings" width="100%">
+</p>
 
-[![CI](https://github.com/Chronophylos/twitch-1337/actions/workflows/ci.yml/badge.svg)](https://github.com/Chronophylos/twitch-1337/actions/workflows/ci.yml)
-[![Docker](https://github.com/Chronophylos/twitch-1337/actions/workflows/docker.yml/badge.svg)](https://github.com/Chronophylos/twitch-1337/actions/workflows/docker.yml)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
-[![Rust Edition 2024](https://img.shields.io/badge/rust-2024-orange.svg)](https://doc.rust-lang.org/edition-guide/rust-2024/)
+<p align="center"><em>A Twitch bot for one channel, with a mind of its own.</em></p>
 
-A personal Twitch chat bot for a single channel, with a mind of its own.
-Written in Rust, it ships as a ~29 MB stripped static binary.
+<p align="center">
+  <a href="https://github.com/Chronophylos/twitch-1337/actions/workflows/ci.yml"><img src="https://github.com/Chronophylos/twitch-1337/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Chronophylos/twitch-1337/actions/workflows/docker.yml"><img src="https://github.com/Chronophylos/twitch-1337/actions/workflows/docker.yml/badge.svg" alt="Docker"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-c79bff.svg" alt="License: MIT OR Apache-2.0"></a>
+  <a href="https://doc.rust-lang.org/edition-guide/rust-2024/"><img src="https://img.shields.io/badge/rust-2024-c79bff.svg" alt="Rust Edition 2024"></a>
+</p>
 
-The name is from its oldest job: every day at **13:37** Berlin time, chat races
-to type `1337`, and the bot keeps score.
+Every day at **13:37** Berlin time, chat races to type `1337`. **Ɛ:3** keeps
+score. Over the years it picked up a few other hobbies.
 
-## What it does
+## Features
 
-- **The 13:37 ritual.** For one minute a day it watches for `1337`/`DANKIES` and
-  records who typed it fastest, down to the millisecond. `!lb` / `!pb` show
-  the all-time / personal bests; `!sb` / `!pw` cover the hall of shame (slowest).
-- **Aviation toys.** What's flying overhead right now (`!up`), a random but
-  plausible flight plan (`!fl`), and live tracking of one aircraft from takeoff
-  to landing (`!track`).
-- **An AI that remembers.** `!ai` talks to an OpenAI-compatible or local model.
-  It keeps a character sheet on the regulars and a sense of the channel's lore,
-  then rewrites those memories each night from the day's transcript.
-- **Chat plumbing.** Community ping groups people can join (`!p`), scheduled
-  messages, and feedback (`!fb`) that mods review on the dashboard and turn
-  into GitHub issues; reporters hear back in chat when theirs is done.
-
-## How it's built
-
-One persistent IRC connection feeds a broadcast channel. Each feature is an
-independent handler task that reads from it and acts on its own, so one can lag
-or fail without taking the others down.
-
-Runtime state like the leaderboard, pings, tracked flights, and AI memory lives
-under a data directory as RON and markdown files. Most of what you'd tune day to
-day (permissions, schedules, AI behavior) is set from a web dashboard backed by
-`settings.ron` and applies without a restart. Only secrets and a few bootstrap
-fields stay in `config.toml`.
-
-The release build is a static musl binary with no dynamic dependencies, so the
-Docker image can start from `scratch`.
-
-## Running it
-
-```bash
-cp config.toml.example config.toml   # add your Twitch credentials
-cargo run
-```
-
-`config.toml.example` documents the bootstrap fields. Everything else is set
-from the dashboard once the bot is running.
-
-Docker, via the Justfile:
-
-```bash
-just build     # build the image
-just deploy    # build, push, and restart on the remote host
-just logs      # tail remote logs
-```
+- **13:37 race:** millisecond leaderboard of the first `1337` after 13:37, plus a hall of shame for the slowest.
+- **AI:** Aurora and Grok answer in chat; Aurora keeps character sheets and channel lore, rewritten nightly from the day's transcript.
+- **Flights:** live tracking of real aircraft over ADS-B, aviation lookups, and graded landings for Volanta pilots.
+- **Alerts:** earthquakes in Germany, solar flares, Earth-directed CMEs and F1 race-week reminders.
+- **Chat tools:** ping groups, scheduled messages, a sandboxed `!bash`, game server status, stock picks, spoiler checks, file reuploads.
+- **Feedback:** `!fb` reports land in a review inbox and can become GitHub issues.
+- **Dashboard:** settings, schedules, AI profiles and memory; most changes apply without a restart.
 
 ## License
 
@@ -67,3 +32,5 @@ Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or
 Unless you explicitly state otherwise, any contribution intentionally submitted
 for inclusion in this project by you, as defined in the Apache-2.0 license,
 shall be dual licensed as above, without any additional terms or conditions.
+
+<p align="center"><img src="docs/brand/mark.svg" alt="Ɛ:3" width="40"></p>
