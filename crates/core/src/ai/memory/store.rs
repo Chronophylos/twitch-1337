@@ -436,11 +436,14 @@ impl MemoryStore {
         }
         // ponytail: single-slot backup, so one bad dreamer run is recoverable.
         // Rotate to N versions only if one night back turns out to be too little.
+        // Copy, never rename: the atomic write below must be the only thing
+        // that replaces `abs`, or readers see a missing file in between and a
+        // failed write leaves it gone.
         let bak = abs.with_extension("md.bak");
-        match tokio::fs::rename(&abs, &bak).await {
-            Ok(()) => {}
+        match tokio::fs::copy(&abs, &bak).await {
+            Ok(_) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => warn!(?error, path = %bak.display(), "memory .bak rotation failed"),
+            Err(error) => warn!(?error, path = %bak.display(), "memory .bak copy failed"),
         }
         atomic_write_bytes_async(raw.as_bytes(), &abs, PERSIST_FILE)
             .await
