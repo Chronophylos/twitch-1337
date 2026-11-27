@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -54,7 +54,8 @@ pub fn is_valid_twitch_login(s: &str) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Ping {
     pub template: String,
-    pub members: HashSet<String>,
+    /// Sorted, so a fire that spans several messages splits in a stable order.
+    pub members: BTreeSet<String>,
     pub cooldown: Option<u64>,
     pub created_by: String,
     #[serde(default)]
@@ -67,7 +68,7 @@ pub struct Ping {
 pub struct PingView {
     pub name: String,
     pub template: String,
-    pub members: HashSet<String>,
+    pub members: BTreeSet<String>,
     pub cooldown: Option<u64>,
     pub created_by: String,
     pub last_fired_at: Option<Timestamp>,
@@ -97,7 +98,9 @@ pub struct PingStore {
 pub enum TriggerDecision {
     Skip,
     OnCooldown(Duration),
-    Fire(String),
+    /// One or more chat lines, each within the outbound limit; see
+    /// [`PingManager::render_template`].
+    Fire(Vec<String>),
 }
 
 pub enum PingCommand {
@@ -477,7 +480,7 @@ impl PingManager {
 
     pub fn load(data_dir: &Path) -> Result<Self> {
         let path = data_dir.join(PINGS_FILENAME);
-        let mut store: PingStore = if path.exists() {
+        let store: PingStore = if path.exists() {
             let data = std::fs::read_to_string(&path).wrap_err("Failed to read pings.ron")?;
             ron::from_str(&data).wrap_err("Failed to parse pings.ron")?
         } else {
@@ -486,13 +489,9 @@ impl PingManager {
                 pings: HashMap::new(),
             }
         };
-        store.pings.retain(|name, ping| match validate_template(&ping.template) {
-            Ok(()) => true,
-            Err(e) => {
-                crate::log_handled!(warn, e, ping = %name, "Dropping ping with invalid template on load");
-                false
-            }
-        });
+        let store = PingStore {
+            pings: sanitize_loaded(store.pings),
+        };
         info!(count = store.pings.len(), "Loaded pings");
         Ok(Self {
             store,
@@ -530,15 +529,7 @@ impl PingManager {
     ) -> Result<(), PingError> {
         let before = self.store.clone();
         let name = name.to_ascii_lowercase();
-        if name.is_empty() {
-            return Err(PingError::EmptyName);
-        }
-        if !name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err(PingError::InvalidName);
-        }
+        validate_name(&name)?;
         // A ping named after a built-in command never fires: the dispatcher
         // scans commands in order and the ping catch-all is last, so the
         // command always wins. Reject it here rather than letting it sit in
@@ -554,7 +545,7 @@ impl PingManager {
             name,
             Ping {
                 template,
-                members: HashSet::new(),
+                members: BTreeSet::new(),
                 cooldown,
                 created_by,
                 last_fired_at: None,
@@ -702,25 +693,109 @@ impl PingManager {
         TriggerDecision::Fire(rendered)
     }
 
-    pub fn render_template(&self, ping_name: &str, sender: &str) -> Option<String> {
+    /// Chat lines for one fire: the template with as many mentions as fit one
+    /// message, then the remaining mentions on as many further lines as
+    /// needed. One line would be cut at the outbound limit, silently dropping
+    /// every member past it.
+    pub fn render_template(&self, ping_name: &str, sender: &str) -> Option<Vec<String>> {
         let ping = self.store.pings.get(ping_name)?;
         let sender_in_template = ping.template.contains("{sender}");
-        let mentions = ping
+        let mentions: Vec<String> = ping
             .members
             .iter()
             .filter(|m| !sender_in_template || m.as_str() != sender)
             .map(|m| format!("@{m}"))
-            .collect::<Vec<_>>()
-            .join(" ");
+            .collect();
         if mentions.is_empty() {
             return None;
         }
-        let rendered = ping
-            .template
-            .replace("{mentions}", &mentions)
-            .replace("{sender}", &format!("@{sender}"));
-        Some(rendered)
+        let sender = format!("@{sender}");
+        let fill = |chunk: &str| {
+            ping.template
+                .replace("{mentions}", chunk)
+                .replace("{sender}", &sender)
+        };
+        let (first, mut rest) = take_fitting(&mentions, |chunk| {
+            crate::twitch::chat_sender::fits_outbound(&fill(chunk))
+        });
+        let mut lines = vec![fill(&first)];
+        while !rest.is_empty() {
+            let (chunk, tail) = take_fitting(rest, crate::twitch::chat_sender::fits_outbound);
+            lines.push(chunk);
+            rest = tail;
+        }
+        Some(lines)
     }
+}
+
+/// The longest prefix of `mentions`, joined by spaces, that `fits`, and the
+/// rest. Takes at least one mention, so a caller looping on the rest always
+/// makes progress even when a single mention does not fit.
+fn take_fitting(mentions: &[String], fits: impl Fn(&str) -> bool) -> (String, &[String]) {
+    let Some((head, tail)) = mentions.split_first() else {
+        return (String::new(), mentions);
+    };
+    let mut chunk = head.clone();
+    let mut taken = 1;
+    for mention in tail {
+        let candidate = format!("{chunk} {mention}");
+        if !fits(&candidate) {
+            break;
+        }
+        chunk = candidate;
+        taken += 1;
+    }
+    (chunk, mentions.get(taken..).unwrap_or_default())
+}
+
+fn validate_name(name: &str) -> Result<(), PingError> {
+    if name.is_empty() {
+        return Err(PingError::EmptyName);
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return Err(PingError::InvalidName);
+    }
+    Ok(())
+}
+
+/// Apply the create/add rules to a file that may predate them: names are
+/// lowercased (the trigger lowercases before lookup, so an uppercase key
+/// never fired), and pings with an invalid name or template and members
+/// that are not Twitch logins (they end up in mentions and dashboard URL
+/// paths) are dropped with a warning. On a lowercase collision the key that
+/// was already lowercase wins.
+fn sanitize_loaded(pings: HashMap<String, Ping>) -> HashMap<String, Ping> {
+    let mut entries: Vec<(String, Ping)> = pings.into_iter().collect();
+    entries.sort_by_key(|(name, _)| *name != name.to_ascii_lowercase());
+    let mut out = HashMap::with_capacity(entries.len());
+    for (raw_name, mut ping) in entries {
+        let name = raw_name.to_ascii_lowercase();
+        if let Err(error) = validate_name(&name).and_then(|()| validate_template(&ping.template)) {
+            crate::log_handled!(warn, error, ping = %raw_name, "Dropping invalid ping on load");
+            continue;
+        }
+        if out.contains_key(&name) {
+            warn!(ping = %raw_name, "Dropping ping whose lowercased name is taken on load");
+            continue;
+        }
+        ping.members = std::mem::take(&mut ping.members)
+            .into_iter()
+            .filter_map(|member| {
+                let login = member.to_ascii_lowercase();
+                if is_valid_twitch_login(&login) {
+                    Some(login)
+                } else {
+                    warn!(ping = %name, member = %member, "Dropping invalid member on load");
+                    None
+                }
+            })
+            .collect();
+        out.insert(name, ping);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -1013,9 +1088,8 @@ mod tests {
             .try_record_trigger("test", "bob", Duration::from_secs(300), false)
             .await;
         match first {
-            TriggerDecision::Fire(rendered) => {
-                assert!(rendered.contains("@alice"));
-                assert!(rendered.contains("@bob"));
+            TriggerDecision::Fire(lines) => {
+                assert_eq!(lines, ["Hey @alice @bob!"]);
             }
             other => panic!("expected Fire on first call, got {other:?}"),
         }
@@ -1072,8 +1146,7 @@ mod tests {
         mgr.add_member("grp", "alice").await.unwrap();
         mgr.add_member("grp", "bob").await.unwrap();
         let result = mgr.render_template("grp", "alice").unwrap();
-        assert!(result.contains("@alice"));
-        assert!(result.contains("@bob"));
+        assert_eq!(result, ["@alice @bob"]);
     }
 
     #[tokio::test]
@@ -1091,8 +1164,7 @@ mod tests {
         mgr.add_member("grp", "alice").await.unwrap();
         mgr.add_member("grp", "bob").await.unwrap();
         let result = mgr.render_template("grp", "alice").unwrap();
-        assert!(!result.contains("@alice @") && result.starts_with("@alice pinged"));
-        assert!(result.contains("@bob"));
+        assert_eq!(result, ["@alice pinged @bob"]);
     }
 
     #[tokio::test]
@@ -1104,8 +1176,7 @@ mod tests {
             .unwrap();
         mgr.add_member("grp", "alice").await.unwrap();
         let result = mgr.render_template("grp", "alice");
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("@alice"));
+        assert_eq!(result.unwrap(), ["@alice"]);
     }
 
     #[tokio::test]
@@ -1124,5 +1195,65 @@ mod tests {
         mgr.add_member("grp", "alice").await.unwrap();
         let result = mgr.render_template("grp", "alice");
         assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn large_group_spreads_over_messages_without_losing_anyone() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = empty_manager(dir.path());
+        mgr.create_ping(
+            "grp".into(),
+            "Raid {mentions}!".into(),
+            "admin".into(),
+            None,
+        )
+        .await
+        .unwrap();
+        // 25-char logins: about 18 fit one 480-byte line.
+        let members: Vec<String> = (0..60)
+            .map(|i| format!("viewer_{i:02}_{}", "x".repeat(15)))
+            .collect();
+        for m in &members {
+            mgr.add_member("grp", m).await.unwrap();
+        }
+        let lines = mgr.render_template("grp", "someone").unwrap();
+        assert!(lines.len() > 1, "{lines:?}");
+        assert!(lines[0].starts_with("Raid @viewer_00") && lines[0].ends_with('!'));
+        assert!(
+            lines
+                .iter()
+                .all(|l| crate::twitch::chat_sender::fits_outbound(l)),
+            "every line passes the outbound clamp untouched"
+        );
+        let mentioned: Vec<&str> = lines
+            .iter()
+            .flat_map(|l| l.split(' '))
+            .filter_map(|w| w.strip_prefix('@'))
+            .map(|w| w.trim_end_matches('!'))
+            .collect();
+        assert_eq!(mentioned, members, "every member once, in sorted order");
+    }
+
+    #[test]
+    fn load_lowercases_names_and_drops_invalid_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let raw = r#"(pings: {
+            "Kaffee": (template: "{mentions}", members: ["Alice", "../../victim/delete?"], cooldown: None, created_by: "admin"),
+            "kaffee": (template: "{mentions}", members: ["bob"], cooldown: None, created_by: "admin"),
+            "bad name": (template: "{mentions}", members: ["carol"], cooldown: None, created_by: "admin"),
+            "Tee": (template: "{mentions}", members: ["Dora"], cooldown: None, created_by: "admin"),
+        })"#;
+        std::fs::write(dir.path().join(PINGS_FILENAME), raw).unwrap();
+        let mgr = PingManager::load(dir.path()).unwrap();
+        let mut names: Vec<&str> = mgr.store.pings.keys().map(String::as_str).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["kaffee", "tee"]);
+        assert!(
+            mgr.is_member("kaffee", "bob"),
+            "the key that was already lowercase wins a collision"
+        );
+        assert!(mgr.is_member("tee", "dora"));
+        let ping = mgr.get("tee").unwrap();
+        assert_eq!(ping.members.len(), 1);
     }
 }

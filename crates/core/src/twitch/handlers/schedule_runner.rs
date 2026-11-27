@@ -41,7 +41,11 @@ impl SchedulePing {
             .try_record_trigger(ping_name.to_owned(), self.bot_login.clone(), cooldown, true)
             .await
         {
-            TriggerDecision::Fire(rendered) => sender.say(channel.to_owned(), rendered).await,
+            TriggerDecision::Fire(lines) => {
+                for line in lines {
+                    sender.say(channel.to_owned(), line).await;
+                }
+            }
             TriggerDecision::OnCooldown(remaining) => {
                 debug!(ping = %ping_name, ?remaining, "scheduled ping on cooldown, skipped");
             }

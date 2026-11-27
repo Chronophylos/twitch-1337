@@ -129,7 +129,7 @@ where
                 self.current_public(),
             )
             .await;
-        let rendered = match decision {
+        let lines = match decision {
             TriggerDecision::Skip => return Ok(()),
             TriggerDecision::OnCooldown(remaining) => {
                 debug!(ping = %ping_name, "Ping on cooldown");
@@ -138,11 +138,13 @@ where
                     .await;
                 return Ok(());
             }
-            TriggerDecision::Fire(rendered) => rendered,
+            TriggerDecision::Fire(lines) => lines,
         };
-        ctx.sender
-            .say(ctx.privmsg.channel_login.clone(), rendered)
-            .await;
+        for line in lines {
+            ctx.sender
+                .say(ctx.privmsg.channel_login.clone(), line)
+                .await;
+        }
         Ok(())
     }
 }
