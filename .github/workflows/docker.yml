@@ -75,6 +75,20 @@ jobs:
           tags: |
             type=raw,value=latest
             type=raw,value=b${{ github.run_number }}
+          # metadata-action derives these from repo metadata, which would
+          # override the Dockerfile LABELs: description from the repo blurb,
+          # licenses from GitHub's detection (Apache-2.0 only), version from
+          # the first tag (latest). Keep them in sync with the Dockerfile.
+          labels: |
+            org.opencontainers.image.description=${{ env.IMAGE_DESCRIPTION }}
+            org.opencontainers.image.licenses=MIT OR Apache-2.0
+            org.opencontainers.image.version=b${{ github.run_number }}
+          annotations: |
+            org.opencontainers.image.description=${{ env.IMAGE_DESCRIPTION }}
+            org.opencontainers.image.licenses=MIT OR Apache-2.0
+            org.opencontainers.image.version=b${{ github.run_number }}
+        env:
+          IMAGE_DESCRIPTION: "A Twitch bot for one channel, with a mind of its own: the 13:37 race, AI chat, flight tracking, alerts and a web dashboard. One static Rust binary, FROM scratch."
 
       - name: Set image created timestamp
         run: echo "CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
@@ -93,6 +107,9 @@ jobs:
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # GHCR reads the package description from manifest annotations,
+          # not config labels, for OCI manifests.
+          annotations: ${{ steps.meta.outputs.annotations }}
           build-args: |
             GIT_SHA=${{ env.GIT_SHA }}
             BUILD_NUM=${{ env.BUILD_NUM }}

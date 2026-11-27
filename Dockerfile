@@ -83,7 +83,7 @@ ARG BUILD_NUM=dev
 ARG CREATED=
 
 LABEL org.opencontainers.image.title="twitch-1337" \
-  org.opencontainers.image.description="Opinionated personal Rust Twitch bot with a mind of its own — in a tiny static binary." \
+  org.opencontainers.image.description="A Twitch bot for one channel, with a mind of its own: the 13:37 race, AI chat, flight tracking, alerts and a web dashboard. One static Rust binary, FROM scratch." \
   org.opencontainers.image.source="https://github.com/Chronophylos/twitch-1337" \
   org.opencontainers.image.url="https://github.com/Chronophylos/twitch-1337" \
   org.opencontainers.image.documentation="https://github.com/Chronophylos/twitch-1337#readme" \
