@@ -477,6 +477,18 @@ impl DreamerExecutor {
             unseen_user_ids: opts.unseen_user_ids,
         }
     }
+
+    /// The unseen sheet a `write_file` call targets, if any.
+    fn unseen_target(&self, call: &ToolCall) -> Option<String> {
+        if call.name != "write_file" {
+            return None;
+        }
+        let args: WriteFileArgs = call.parse_args().ok()?;
+        match parse_write_path(&args.path).ok()? {
+            WritePath::User { user_id } if self.unseen_user_ids.contains(&user_id) => Some(user_id),
+            _ => None,
+        }
+    }
 }
 
 #[async_trait]
@@ -1101,5 +1113,49 @@ mod exec_tests {
                 .await;
             assert_eq!(r.content, "ok", "dreamer write {path}");
         }
+    }
+
+    #[tokio::test]
+    async fn dreamer_refuses_a_sheet_whose_body_it_was_not_shown() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        let sheet = FileKind::User {
+            user_id: "77".into(),
+        };
+        store
+            .write(&sheet, "years of history", UserIdentity::of("bob", "Bob"))
+            .await
+            .unwrap();
+        let exec = DreamerExecutor::new(DreamerExecutorOpts {
+            store: store.clone(),
+            max_writes_per_turn: 32,
+            known_user_ids: BTreeSet::from(["77".to_string(), "78".to_string()]),
+            unseen_user_ids: BTreeSet::from(["77".to_string()]),
+        });
+
+        let r = exec
+            .execute(&call(
+                "write_file",
+                serde_json::json!({"path": "users/77.md", "body": "only today"}),
+            ))
+            .await;
+        assert!(
+            r.content.starts_with("sheet_not_loaded:"),
+            "got {}",
+            r.content
+        );
+        assert_eq!(
+            store.read_kind(&sheet).await.unwrap().body,
+            "years of history"
+        );
+
+        // A shown sheet and a newcomer still write.
+        let r = exec
+            .execute(&call(
+                "write_file",
+                serde_json::json!({"path": "users/78.md", "body": "x"}),
+            ))
+            .await;
+        assert_eq!(r.content, "ok");
     }
 }
