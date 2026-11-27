@@ -5,36 +5,15 @@ use tokio::sync::Mutex;
 
 use crate::settings::{Settings, SettingsHandle};
 
-/// Inner source of the cooldown duration — either a live settings handle or a
-/// fixed value (used by commands that aren't yet wired to `SettingsHandle`).
-enum CooldownSource {
-    Live {
-        settings: SettingsHandle,
-        getter: fn(&Settings) -> Duration,
-    },
-    Fixed(Duration),
-}
-
-impl CooldownSource {
-    fn duration(&self) -> Duration {
-        match self {
-            Self::Live { settings, getter } => getter(&settings.load()),
-            Self::Fixed(d) => *d,
-        }
-    }
-}
-
 /// Per-user cooldown tracker.
 ///
 /// Stores the last usage timestamp per user and checks whether the cooldown
-/// period has elapsed. Thread-safe via internal `Mutex`.
-///
-/// Use [`PerUserCooldown::live`] so that dashboard edits take effect on the
-/// next command invocation without a restart. The deprecated
-/// [`PerUserCooldown::fixed`] constructor is retained only for tests that
-/// don't need live updates.
+/// period has elapsed. Thread-safe via internal `Mutex`. The duration is read
+/// from settings on every check, so dashboard edits apply to the next
+/// invocation without a restart.
 pub struct PerUserCooldown {
-    source: CooldownSource,
+    settings: SettingsHandle,
+    getter: fn(&Settings) -> Duration,
     last_use: Mutex<HashMap<String, Instant>>,
 }
 
@@ -44,17 +23,8 @@ impl PerUserCooldown {
     /// turns; only the configured duration is re-read each call.
     pub fn live(settings: SettingsHandle, getter: fn(&Settings) -> Duration) -> Self {
         Self {
-            source: CooldownSource::Live { settings, getter },
-            last_use: Mutex::new(HashMap::new()),
-        }
-    }
-
-    /// Create a cooldown tracker with a fixed duration baked in at construction
-    /// time. Dashboard edits do not affect it until the bot restarts.
-    #[deprecated(note = "use ::live with SettingsHandle; remaining callers are test helpers")]
-    pub fn fixed(duration: Duration) -> Self {
-        Self {
-            source: CooldownSource::Fixed(duration),
+            settings,
+            getter,
             last_use: Mutex::new(HashMap::new()),
         }
     }
@@ -68,7 +38,7 @@ impl PerUserCooldown {
     /// needed for [`Self::refund`]) or the remaining wait while still on
     /// cooldown.
     pub async fn try_acquire(&self, user: &str) -> Result<Instant, Duration> {
-        let duration = self.source.duration();
+        let duration = (self.getter)(&self.settings.load());
         let mut guard = self.last_use.lock().await;
         let now = Instant::now();
         match guard.get_mut(user) {
