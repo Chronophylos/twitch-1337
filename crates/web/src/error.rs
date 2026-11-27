@@ -153,16 +153,19 @@ enum HtmxFallback {
 /// scheme, host, or CRLF is rejected so the redirect can't be turned
 /// into an open-redirect or header-splitting vector. Backslashes are
 /// rejected because browsers (per WHATWG URL spec) parse them as `/`,
-/// turning `/\evil.example/x` into a protocol-relative URL.
+/// turning `/\evil.example/x` into a protocol-relative URL. Only visible
+/// ASCII passes: browsers strip tab and newline from URLs, so `/\t/evil.example`
+/// would become `//evil.example`, and NUL is not a valid header value.
 ///
 /// Public so test binaries (in `crates/web/tests/`) can pin the validator
 /// directly — they link as separate crates against the public API.
 pub fn is_safe_redirect(path: &str) -> bool {
     path.starts_with('/')
         && path.len() <= 256
+        && path.bytes().all(|b| b.is_ascii_graphic())
         && !path.starts_with("//")
         && !path.contains("://")
-        && !path.contains(['\r', '\n', '\\'])
+        && !path.contains('\\')
 }
 
 fn render<T: Template>(status: StatusCode, tpl: &T) -> Response {

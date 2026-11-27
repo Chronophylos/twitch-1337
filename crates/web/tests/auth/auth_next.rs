@@ -44,6 +44,9 @@ fn safe_redirect_rejects_scheme_and_host() {
     assert!(!is_safe_redirect("/\\evil.example/x"));
     assert!(!is_safe_redirect("/foo\\bar"));
     assert!(!is_safe_redirect(&"/".repeat(257)));
+    assert!(!is_safe_redirect("/\t/evil.example"));
+    assert!(!is_safe_redirect("/\u{0}"));
+    assert!(!is_safe_redirect("/ /evil.example"));
 }
 
 #[tokio::test]
