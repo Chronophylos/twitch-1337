@@ -138,14 +138,14 @@ fn format_line(
             let berlin = crate::util::to_berlin(ts);
             format!(
                 "{}, {} um {} Uhr",
-                weekday_de(berlin.weekday()),
+                super::weekday_de(berlin.weekday()),
                 berlin.strftime("%d.%m.%Y"),
                 berlin.strftime("%H:%M"),
             )
         }
         None => format!(
             "{}, {}",
-            weekday_de(date.weekday()),
+            super::weekday_de(date.weekday()),
             date.strftime("%d.%m.%Y"),
         ),
     };
@@ -173,18 +173,6 @@ fn place(circuit: Option<&Circuit>) -> Option<String> {
         (Some(n), false) => Some(format!("{n} ({})", loc.join(", "))),
         (None, false) => Some(loc.join(", ")),
         (None, true) => None,
-    }
-}
-
-fn weekday_de(wd: civil::Weekday) -> &'static str {
-    match wd {
-        civil::Weekday::Monday => "Montag",
-        civil::Weekday::Tuesday => "Dienstag",
-        civil::Weekday::Wednesday => "Mittwoch",
-        civil::Weekday::Thursday => "Donnerstag",
-        civil::Weekday::Friday => "Freitag",
-        civil::Weekday::Saturday => "Samstag",
-        civil::Weekday::Sunday => "Sonntag",
     }
 }
 

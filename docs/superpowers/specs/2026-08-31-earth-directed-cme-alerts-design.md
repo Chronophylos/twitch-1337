@@ -129,16 +129,17 @@ changed a deque. Log line on load includes `cme = state.cme.len()`.
 
 ## Message copy
 
-German, one line, no URL. Arrival in `Europe/Berlin`. Speed is the
+German, one line, no URL. Arrival in `Europe/Berlin` with weekday and
+date, because the forecast is often days out. Speed is the
 most-accurate `cmeInputs` entry (`isMostAccurate == true`, else first)
 rounded to nearest integer km/s. Omit the speed clause (and its comma)
 when no speed is present or the value is non-finite / non-positive. If both `isEarthGB` and `isEarthMinorImpact`
 are set, glancing wins.
 
 ```
-☄️ Koronaler Massenauswurf trifft die Erde ca. 08:00 Uhr, 650 km/s
-☄️ Koronaler Massenauswurf trifft die Erde schwach ca. 08:00 Uhr, 650 km/s
-☄️ Koronaler Massenauswurf streift die Erde ca. 08:00 Uhr, 650 km/s
+☄️ Koronaler Massenauswurf trifft die Erde ca. Freitag, 28.08. um 08:00 Uhr, 650 km/s
+☄️ Koronaler Massenauswurf trifft die Erde schwach ca. Freitag, 28.08. um 08:00 Uhr, 650 km/s
+☄️ Koronaler Massenauswurf streift die Erde ca. Freitag, 28.08. um 08:00 Uhr, 650 km/s
 ```
 
 `ca.` because ENLIL arrival is a forecast. Timestamp parse accepts

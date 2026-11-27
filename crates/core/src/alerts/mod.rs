@@ -33,6 +33,20 @@ pub struct Candidate {
     pub line: String,
 }
 
+/// German weekday name for chat lines.
+pub(crate) fn weekday_de(wd: jiff::civil::Weekday) -> &'static str {
+    use jiff::civil::Weekday;
+    match wd {
+        Weekday::Monday => "Montag",
+        Weekday::Tuesday => "Dienstag",
+        Weekday::Wednesday => "Mittwoch",
+        Weekday::Thursday => "Donnerstag",
+        Weekday::Friday => "Freitag",
+        Weekday::Saturday => "Samstag",
+        Weekday::Sunday => "Sonntag",
+    }
+}
+
 /// Decide what to announce from one poll's candidates.
 ///
 /// Every candidate is marked seen, whether or not it is announced. That is
