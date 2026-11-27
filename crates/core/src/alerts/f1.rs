@@ -3,10 +3,14 @@
 //!
 //! A Race Week is the Monday–Sunday week containing the official race date;
 //! its reminder is due at 18:00 Europe/Berlin on that Monday. The candidate's
-//! `at` is that due instant, so the shared freshness cutoff measures how late
-//! the reminder would be, not how far away the race is.
+//! `at` is that due instant.
+//!
+//! The feed owns its catch-up window instead of using the shared
+//! `alerts.max_age_secs`: a reminder stays announceable from its due instant
+//! until the race starts, so failed polls or a restart late in the Race Week
+//! post it late rather than drop it. The handler polls with `MAX_AGE`.
 
-use jiff::{Timestamp, ToSpan as _, civil};
+use jiff::{SignedDuration, Timestamp, ToSpan as _, civil};
 use serde::Deserialize;
 
 use super::Candidate;
@@ -20,6 +24,10 @@ pub(crate) const MAX_BODY_BYTES: u64 = 1024 * 1024;
 
 /// Berlin wall-clock hour of the reminder on the Race Week's Monday.
 const REMINDER_HOUR: i8 = 18;
+
+/// Age cutoff the handler applies to this feed: none, because [`parse`]
+/// already drops every reminder whose race has started.
+pub(crate) const MAX_AGE: SignedDuration = SignedDuration::MAX;
 
 #[derive(Debug, Deserialize)]
 struct Response {
@@ -71,37 +79,53 @@ struct Location {
     country: Option<String>,
 }
 
-/// Reminders already due at `now`. Future Race Weeks are dropped here, before
-/// dedupe, so a whole-season poll never marks an upcoming reminder seen.
-pub(crate) fn parse(body: &str, now: Timestamp) -> Result<Vec<Candidate>, serde_json::Error> {
-    let mut out = calendar(body)?;
-    out.retain(|c| c.at <= now);
-    Ok(out)
+/// A reminder candidate plus the instant it stops being worth posting.
+#[derive(Debug)]
+struct Reminder {
+    candidate: Candidate,
+    closes: Timestamp,
 }
 
-/// Every parseable race in the calendar as a reminder candidate.
-fn calendar(body: &str) -> Result<Vec<Candidate>, serde_json::Error> {
+/// Reminders due at `now` whose race has not started. Future Race Weeks are
+/// dropped here, before dedupe, so a whole-season poll never marks an
+/// upcoming reminder seen; past races are dropped so they never reach chat.
+pub(crate) fn parse(body: &str, now: Timestamp) -> Result<Vec<Candidate>, serde_json::Error> {
+    Ok(reminders(body)?
+        .into_iter()
+        .filter(|r| r.candidate.at <= now && now < r.closes)
+        .map(|r| r.candidate)
+        .collect())
+}
+
+/// Every parseable race in the calendar as a reminder.
+fn reminders(body: &str) -> Result<Vec<Reminder>, serde_json::Error> {
     let resp = serde_json::from_str::<Response>(body)?;
     Ok(resp
         .mr_data
         .race_table
         .races
         .into_iter()
-        .filter_map(candidate_from_race)
+        .filter_map(reminder_from_race)
         .collect())
 }
 
-fn candidate_from_race(race: Race) -> Option<Candidate> {
+fn reminder_from_race(race: Race) -> Option<Reminder> {
     let season = non_empty(race.season)?;
     let round = non_empty(race.round)?;
     let name = non_empty(race.race_name)?;
     let date = race.date.as_deref()?.trim().parse::<civil::Date>().ok()?;
     let at = reminder_due(date)?;
     let start = race.time.as_deref().and_then(|t| race_start(date, t));
-    Some(Candidate {
-        id: format!("{season}-{round}-{date}"),
-        at,
-        line: format_line(&name, race.circuit.as_ref(), date, start),
+    // Without a start time the race day itself closes the window.
+    let closes =
+        start.unwrap_or_else(|| crate::util::resolve_berlin_time(date.at(0, 0, 0, 0)).timestamp());
+    Some(Reminder {
+        candidate: Candidate {
+            id: format!("{season}-{round}-{date}"),
+            at,
+            line: format_line(&name, race.circuit.as_ref(), date, start),
+        },
+        closes,
     })
 }
 
@@ -138,14 +162,14 @@ fn format_line(
             let berlin = crate::util::to_berlin(ts);
             format!(
                 "{}, {} um {} Uhr",
-                weekday_de(berlin.weekday()),
+                super::weekday_de(berlin.weekday()),
                 berlin.strftime("%d.%m.%Y"),
                 berlin.strftime("%H:%M"),
             )
         }
         None => format!(
             "{}, {}",
-            weekday_de(date.weekday()),
+            super::weekday_de(date.weekday()),
             date.strftime("%d.%m.%Y"),
         ),
     };
@@ -176,25 +200,12 @@ fn place(circuit: Option<&Circuit>) -> Option<String> {
     }
 }
 
-fn weekday_de(wd: civil::Weekday) -> &'static str {
-    match wd {
-        civil::Weekday::Monday => "Montag",
-        civil::Weekday::Tuesday => "Dienstag",
-        civil::Weekday::Wednesday => "Mittwoch",
-        civil::Weekday::Thursday => "Donnerstag",
-        civil::Weekday::Friday => "Freitag",
-        civil::Weekday::Saturday => "Samstag",
-        civil::Weekday::Sunday => "Sonntag",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
 
-    use jiff::SignedDuration;
-
     use super::*;
+
     use crate::alerts::select_announcements;
 
     const FIXTURE: &str = include_str!("fixtures/jolpica-current.json");
@@ -203,8 +214,9 @@ mod tests {
         s.parse().unwrap()
     }
 
-    fn two_hours() -> SignedDuration {
-        SignedDuration::from_hours(2)
+    /// Every parseable race as a candidate, before the due/closed filter.
+    fn calendar(body: &str) -> Result<Vec<Candidate>, serde_json::Error> {
+        Ok(reminders(body)?.into_iter().map(|r| r.candidate).collect())
     }
 
     /// Minimal one-race calendar for date-change and missing-time cases.
@@ -303,7 +315,7 @@ mod tests {
         let now = ts("2026-11-16T17:30:00Z");
         let mut seen = VecDeque::new();
         let (lines, _) =
-            select_announcements(parse(FIXTURE, now).unwrap(), &mut seen, now, two_hours());
+            select_announcements(parse(FIXTURE, now).unwrap(), &mut seen, now, MAX_AGE);
         assert_eq!(
             lines.len(),
             1,
@@ -315,21 +327,39 @@ mod tests {
     }
 
     #[test]
-    fn stale_reminders_are_absorbed_silently() {
-        // First start mid-season, a day after the Las Vegas reminder was due.
+    fn late_reminder_still_posts_before_the_race() {
+        // First start mid-season, a day after the Las Vegas reminder was due:
+        // failed polls or downtime must not swallow it.
         let now = ts("2026-11-17T17:00:00Z");
         let mut seen = VecDeque::new();
-        let (lines, changed) =
-            select_announcements(parse(FIXTURE, now).unwrap(), &mut seen, now, two_hours());
-        assert!(lines.is_empty(), "no backlog in chat: {lines:?}");
-        assert!(changed, "the catch-up must be persisted");
-        for id in [
-            "2026-1-2026-03-08",
-            "2026-6-2026-06-07",
-            "2026-21-2026-11-22",
-        ] {
-            assert!(seen.contains(&id.to_owned()), "{id} marked seen");
+        let (lines, _) =
+            select_announcements(parse(FIXTURE, now).unwrap(), &mut seen, now, MAX_AGE);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("Las Vegas Grand Prix"));
+        for id in ["2026-1-2026-03-08", "2026-6-2026-06-07"] {
+            assert!(
+                !seen.contains(&id.to_owned()),
+                "past race {id} is no candidate"
+            );
         }
+    }
+
+    #[test]
+    fn reminder_closes_when_the_race_starts() {
+        // Las Vegas starts 2026-11-22T04:00Z.
+        let before = parse(FIXTURE, ts("2026-11-22T03:59:59Z")).unwrap();
+        assert!(before.iter().any(|c| c.id == "2026-21-2026-11-22"));
+        let at = parse(FIXTURE, ts("2026-11-22T04:00:00Z")).unwrap();
+        assert!(!at.iter().any(|c| c.id == "2026-21-2026-11-22"));
+    }
+
+    #[test]
+    fn reminder_without_start_time_closes_at_berlin_race_day() {
+        let body = one_race("2026-11-29", None);
+        // 23:30 Berlin on the Saturday before.
+        assert_eq!(parse(&body, ts("2026-11-28T22:30:00Z")).unwrap().len(), 1);
+        // 00:30 Berlin on race day.
+        assert!(parse(&body, ts("2026-11-28T23:30:00Z")).unwrap().is_empty());
     }
 
     #[test]
@@ -338,13 +368,9 @@ mod tests {
         let later = ts("2026-11-16T18:05:00Z");
         let mut seen = VecDeque::new();
         let (first, _) =
-            select_announcements(parse(FIXTURE, now).unwrap(), &mut seen, now, two_hours());
-        let (second, changed) = select_announcements(
-            parse(FIXTURE, later).unwrap(),
-            &mut seen,
-            later,
-            two_hours(),
-        );
+            select_announcements(parse(FIXTURE, now).unwrap(), &mut seen, now, MAX_AGE);
+        let (second, changed) =
+            select_announcements(parse(FIXTURE, later).unwrap(), &mut seen, later, MAX_AGE);
         assert_eq!(first.len(), 1);
         assert!(second.is_empty());
         assert!(!changed);
@@ -358,14 +384,13 @@ mod tests {
             parse(&one_race("2026-11-29", Some("16:00:00Z")), now).unwrap(),
             &mut seen,
             now,
-            two_hours(),
+            MAX_AGE,
         );
         assert_eq!(first.len(), 1);
 
         // Postponed one week: new identity, due on the following Monday.
         let moved = one_race("2026-12-06", Some("16:00:00Z"));
-        let (early, _) =
-            select_announcements(parse(&moved, now).unwrap(), &mut seen, now, two_hours());
+        let (early, _) = select_announcements(parse(&moved, now).unwrap(), &mut seen, now, MAX_AGE);
         assert!(early.is_empty(), "new Race Week is not due yet");
 
         let next_monday = ts("2026-11-30T17:10:00Z");
@@ -373,7 +398,7 @@ mod tests {
             parse(&moved, next_monday).unwrap(),
             &mut seen,
             next_monday,
-            two_hours(),
+            MAX_AGE,
         );
         assert_eq!(second.len(), 1);
         assert!(second[0].contains("06.12.2026"), "{}", second[0]);

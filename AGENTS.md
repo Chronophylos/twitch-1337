@@ -338,12 +338,16 @@ not flare class. `alerts.f1` has `enabled` (default **on**) + `poll_secs`
 (default 3600) and posts one German Race-Week Reminder per race, due at
 18:00 Europe/Berlin on the Monday of the Race Week (see CONTEXT.md): race
 name, circuit/location, and race date + start time in Berlin time (the time
-is left out when Jolpica has none). Reminders not yet due are filtered before
-dedupe, so a whole-season poll never marks future races seen; the identity is
+is left out when Jolpica has none). Reminders not yet due, and reminders
+whose race has started (race day in Berlin when there is no start time),
+are filtered before dedupe, so a whole-season poll never marks future races
+seen and a missed Monday posts late instead of never; the identity is
 `season-round-race_date`, so a race moved to another date gets a new
 reminder. It is an Alert, not a Schedule or a command. The shared
-`alerts.max_age_secs` is the catch-up cutoff; keep `alerts.f1.poll_secs`
-below it or a reminder is absorbed as stale. All apply live — no restart.
+`alerts.max_age_secs` is the catch-up cutoff for quake, solar and CME (F1
+ignores it); saving a quake/solar/CME `poll_secs` at or above it is
+rejected, because events would be absorbed as stale. All apply live — no
+restart.
 The Germany bounding box is a const in `crates/core/src/alerts/quake.rs`,
 deliberately not a setting.
 

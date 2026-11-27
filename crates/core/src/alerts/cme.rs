@@ -96,7 +96,14 @@ fn format_line(glancing: bool, minor: bool, at: Timestamp, speed: Option<u64>) -
     } else {
         "trifft die Erde"
     };
-    let when = crate::util::to_berlin(at).strftime("%H:%M");
+    // The arrival is a forecast, often days out, so the day is part of it.
+    let berlin = crate::util::to_berlin(at);
+    let when = format!(
+        "{}, {} um {}",
+        super::weekday_de(berlin.weekday()),
+        berlin.strftime("%d.%m."),
+        berlin.strftime("%H:%M"),
+    );
     match speed {
         Some(kms) => format!("☄️ Koronaler Massenauswurf {verb} ca. {when} Uhr, {kms} km/s"),
         None => format!("☄️ Koronaler Massenauswurf {verb} ca. {when} Uhr"),
@@ -148,27 +155,37 @@ mod tests {
     #[test]
     fn verb_matrix_and_speed() {
         let out = parse(FIXTURE).unwrap();
-        // 06:00Z in August is 08:00 Berlin (CEST)
+        // 06:00Z on Friday 2026-08-28 is 08:00 Berlin (CEST)
         assert_eq!(
             out[0].line,
-            "☄️ Koronaler Massenauswurf trifft die Erde ca. 08:00 Uhr, 650 km/s"
+            "☄️ Koronaler Massenauswurf trifft die Erde ca. Freitag, 28.08. um 08:00 Uhr, 650 km/s"
         );
         assert_eq!(
             out[2].line,
-            "☄️ Koronaler Massenauswurf streift die Erde ca. 10:00 Uhr, 406 km/s"
+            "☄️ Koronaler Massenauswurf streift die Erde ca. Dienstag, 04.08. um 10:00 Uhr, 406 km/s"
         );
         assert_eq!(
             out[3].line,
-            "☄️ Koronaler Massenauswurf trifft die Erde schwach ca. 09:00 Uhr, 500 km/s"
+            "☄️ Koronaler Massenauswurf trifft die Erde schwach ca. Sonntag, 30.08. um 09:00 Uhr, 500 km/s"
         );
         assert_eq!(
             out[4].line,
-            "☄️ Koronaler Massenauswurf streift die Erde ca. 14:00 Uhr, 300 km/s"
+            "☄️ Koronaler Massenauswurf streift die Erde ca. Donnerstag, 20.08. um 14:00 Uhr, 300 km/s"
         );
         // RFC 3339 with seconds, no speed → no comma clause. 12:56Z → 14:56 Berlin
         assert_eq!(
             out[5].line,
-            "☄️ Koronaler Massenauswurf trifft die Erde ca. 14:56 Uhr"
+            "☄️ Koronaler Massenauswurf trifft die Erde ca. Dienstag, 11.08. um 14:56 Uhr"
+        );
+    }
+
+    #[test]
+    fn arrival_after_berlin_midnight_shows_the_berlin_day() {
+        // 23:30Z on Thursday is 01:30 Friday in Berlin (CEST).
+        let at = "2026-08-27T23:30:00Z".parse().unwrap();
+        assert_eq!(
+            format_line(false, false, at, None),
+            "☄️ Koronaler Massenauswurf trifft die Erde ca. Freitag, 28.08. um 01:30 Uhr"
         );
     }
 

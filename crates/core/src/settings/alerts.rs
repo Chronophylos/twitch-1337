@@ -64,7 +64,8 @@ pub struct SolarAlerts {
     pub enabled: bool,
     #[knob(min = 60, max = 86_400)]
     pub poll_secs: u64,
-    /// Minimum GOES X-ray flare class letter: `A`, `B`, `C`, `M` or `X`.
+    /// Minimum GOES X-ray flare class: a letter `A`, `B`, `C`, `M` or `X`,
+    /// optionally with a magnitude (`M6`, `M6.5`); see [`class_rank`].
     /// Flares are a whole-sun event, so there is no region to configure.
     pub min_class: String,
 }

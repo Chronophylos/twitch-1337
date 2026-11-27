@@ -35,12 +35,19 @@ impl SeenState {
     /// which is not worth refusing to start over.
     pub fn load(data_dir: &Path) -> Self {
         let path = data_dir.join(FILENAME);
-        if !path.exists() {
-            info!("No alerts.ron found, starting with empty alert state");
-            return Self::default();
-        }
-        match std::fs::read_to_string(&path).map(|d| ron::from_str::<Self>(&d)) {
-            Ok(Ok(state)) => {
+        let data = match std::fs::read_to_string(&path) {
+            Ok(data) => data,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                info!("No alerts.ron found, starting with empty alert state");
+                return Self::default();
+            }
+            Err(error) => {
+                crate::log_handled!(warn, error, "alerts.ron could not be read, starting empty");
+                return Self::default();
+            }
+        };
+        match ron::from_str::<Self>(&data) {
+            Ok(state) => {
                 info!(
                     quake = state.quake.len(),
                     solar = state.solar.len(),
@@ -50,12 +57,8 @@ impl SeenState {
                 );
                 state
             }
-            Ok(Err(error)) => {
-                crate::log_handled!(warn, error, "alerts.ron did not parse, starting empty");
-                Self::default()
-            }
             Err(error) => {
-                crate::log_handled!(warn, error, "alerts.ron could not be read, starting empty");
+                crate::log_handled!(warn, error, "alerts.ron did not parse, starting empty");
                 Self::default()
             }
         }
@@ -73,14 +76,16 @@ impl SeenState {
 }
 
 /// Record `id` as seen, evicting the oldest id once the cap is reached.
-pub fn mark(feed: &mut VecDeque<String>, id: String) {
+/// Returns `false` when it was already seen.
+pub fn mark(feed: &mut VecDeque<String>, id: String) -> bool {
     if feed.contains(&id) {
-        return;
+        return false;
     }
     feed.push_back(id);
     while feed.len() > MAX_SEEN {
         feed.pop_front();
     }
+    true
 }
 
 #[cfg(test)]

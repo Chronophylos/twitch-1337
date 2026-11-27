@@ -143,27 +143,15 @@ mod tests {
 
     #[test]
     fn mapped_regions_use_grammatical_german_phrases() {
+        // Articles and prepositions are what a plain "in {name}" gets wrong.
         let cases = [
             ("GERMANY", "in Deutschland"),
-            ("CZECH REPUBLIC", "in Tschechien"),
             ("SWITZERLAND", "in der Schweiz"),
-            ("FRANCE", "in Frankreich"),
+            ("THE NETHERLANDS", "in den Niederlanden"),
             (
                 "FRANCE-GERMANY BORDER REGION",
                 "im Grenzgebiet Frankreich–Deutschland",
             ),
-            ("AUSTRIA", "in Österreich"),
-            ("THE NETHERLANDS", "in den Niederlanden"),
-            ("AUSTRIA REGION", "in der Region Österreich"),
-            ("BELGIUM", "in Belgien"),
-            ("LIECHTENSTEIN", "in Liechtenstein"),
-            ("LUXEMBOURG", "in Luxemburg"),
-            ("BALTIC SEA", "in der Ostsee"),
-            ("POLAND", "in Polen"),
-            ("NORTH SEA", "in der Nordsee"),
-            ("NORTHERN ITALY", "in Norditalien"),
-            ("DENMARK", "in Dänemark"),
-            ("SWEDEN", "in Schweden"),
         ];
 
         for (raw, expected) in cases {

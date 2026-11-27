@@ -3,7 +3,7 @@
 //! Reminders (Jolpica). All are poll-a-JSON-feed, filter, announce-once,
 //! so they share one handler task and one seen-id store.
 //!
-//! ponytail: four feeds share `poll_feed`, not a trait.
+//! ponytail: four feeds are rows of the `Feed` table, not a trait.
 
 pub mod cme;
 pub mod f1;
@@ -11,17 +11,19 @@ pub mod quake;
 pub mod solar;
 pub mod state;
 
-pub use crate::settings::alerts::class_rank;
-
+use std::borrow::Cow;
 use std::collections::VecDeque;
-use std::future::Future;
 use std::sync::Arc;
 
+use eyre::WrapErr as _;
 use jiff::{SignedDuration, Timestamp};
 use tracing::{Instrument as _, info_span};
 
 use crate::lifecycle::Lifecycle;
+use crate::settings::AlertsSettings;
+use crate::settings::alerts::class_rank;
 use crate::util::http::SendTraced as _;
+use state::SeenState;
 
 /// One event that survived parsing and threshold filtering, already
 /// rendered into the exact line that would go to chat. Whether it is
@@ -31,6 +33,20 @@ pub struct Candidate {
     pub id: String,
     pub at: Timestamp,
     pub line: String,
+}
+
+/// German weekday name for chat lines.
+pub(crate) fn weekday_de(wd: jiff::civil::Weekday) -> &'static str {
+    use jiff::civil::Weekday;
+    match wd {
+        Weekday::Monday => "Montag",
+        Weekday::Tuesday => "Dienstag",
+        Weekday::Wednesday => "Mittwoch",
+        Weekday::Thursday => "Donnerstag",
+        Weekday::Friday => "Freitag",
+        Weekday::Saturday => "Samstag",
+        Weekday::Sunday => "Sonntag",
+    }
 }
 
 /// Decide what to announce from one poll's candidates.
@@ -52,17 +68,100 @@ pub(crate) fn select_announcements(
     let mut out = Vec::new();
     let mut changed = false;
     for c in candidates {
-        if seen.contains(&c.id) {
+        if !state::mark(seen, c.id) {
             continue;
         }
-        let fresh = now - c.at <= max_age;
-        state::mark(seen, c.id);
         changed = true;
-        if fresh {
+        if now - c.at <= max_age {
             out.push(c.line);
         }
     }
     (out, changed)
+}
+
+/// The alert feeds, in poll order. Every per-feed fact is one `match`, so a
+/// fifth feed is one row in each instead of another copy of the poll block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Feed {
+    Quake,
+    Solar,
+    Cme,
+    F1,
+}
+
+impl Feed {
+    const ALL: [Self; 4] = [Self::Quake, Self::Solar, Self::Cme, Self::F1];
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Quake => "quake",
+            Self::Solar => "solar",
+            Self::Cme => "cme",
+            Self::F1 => "f1",
+        }
+    }
+
+    /// Poll interval, or `None` when the feed is disabled.
+    fn poll_secs(self, cfg: &AlertsSettings) -> Option<u64> {
+        let (enabled, poll_secs) = match self {
+            Self::Quake => (cfg.quake.enabled, cfg.quake.poll_secs),
+            Self::Solar => (cfg.solar.enabled, cfg.solar.poll_secs),
+            Self::Cme => (cfg.cme.enabled, cfg.cme.poll_secs),
+            Self::F1 => (cfg.f1.enabled, cfg.f1.poll_secs),
+        };
+        enabled.then_some(poll_secs)
+    }
+
+    fn url(self, cfg: &AlertsSettings) -> Cow<'static, str> {
+        match self {
+            Self::Quake => quake::url(quake::DEFAULT_BASE_URL, cfg.quake.min_mag_tenths).into(),
+            Self::Solar => solar::DEFAULT_URL.into(),
+            Self::Cme => cme::DEFAULT_URL.into(),
+            Self::F1 => f1::DEFAULT_URL.into(),
+        }
+    }
+
+    fn max_bytes(self) -> u64 {
+        match self {
+            Self::Quake => quake::MAX_BODY_BYTES,
+            Self::Solar => solar::MAX_BODY_BYTES,
+            Self::Cme => cme::MAX_BODY_BYTES,
+            Self::F1 => f1::MAX_BODY_BYTES,
+        }
+    }
+
+    /// Catch-up cutoff for unseen events. F1 owns its window, see [`f1`].
+    fn max_age(self, cfg: &AlertsSettings) -> SignedDuration {
+        match self {
+            Self::F1 => f1::MAX_AGE,
+            Self::Quake | Self::Solar | Self::Cme => {
+                SignedDuration::from_secs(i64::try_from(cfg.max_age_secs).unwrap_or(i64::MAX))
+            }
+        }
+    }
+
+    fn parse(
+        self,
+        body: &str,
+        cfg: &AlertsSettings,
+        now: Timestamp,
+    ) -> Result<Vec<Candidate>, serde_json::Error> {
+        match self {
+            Self::Quake => quake::parse(body),
+            Self::Solar => solar::parse(body, class_rank(&cfg.solar.min_class).unwrap_or((3, 0.0))),
+            Self::Cme => cme::parse(body),
+            Self::F1 => f1::parse(body, now),
+        }
+    }
+
+    fn seen(self, state: &mut SeenState) -> &mut VecDeque<String> {
+        match self {
+            Self::Quake => &mut state.quake,
+            Self::Solar => &mut state.solar,
+            Self::Cme => &mut state.cme,
+            Self::F1 => &mut state.f1,
+        }
+    }
 }
 
 /// Per-feed poll gate. Tracked on the wall clock rather than a tokio
@@ -95,10 +194,13 @@ impl Due {
 /// drives ad-hoc handles, whose change signal never fires (e.g. tests).
 const TICK: std::time::Duration = std::time::Duration::from_secs(60);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum PollStep {
-    Complete { lines: Vec<String>, dirty: bool },
-    Cancelled,
+/// Outcome of one completed feed poll: lines to announce, and whether the
+/// seen-set grew (a stale-only catch-up must persist with nothing to say).
+/// A failed fetch or parse is the empty default.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Polled {
+    lines: Vec<String>,
+    dirty: bool,
 }
 
 /// Poll the earthquake, solar flare, Earth-directed CME, and F1 calendar
@@ -106,8 +208,8 @@ enum PollStep {
 ///
 /// One task, four independent cadences. Every failure mode degrades to
 /// "skip this tick" — the next poll is the retry. Feed failures are not task
-/// faults; an optional-client build failure returns visibly to the supervisor,
-/// and lifecycle cancellation returns only after the current atomic step.
+/// faults; a client build failure returns `Err` to the supervisor, and
+/// lifecycle cancellation returns only after the current atomic step.
 pub async fn run_alerts_handler<T, L>(
     sender: Arc<crate::twitch::ChatSender<T, L>>,
     channel: String,
@@ -115,149 +217,67 @@ pub async fn run_alerts_handler<T, L>(
     data_dir: std::path::PathBuf,
     clock: Arc<dyn crate::util::clock::Clock>,
     lifecycle: Lifecycle,
-) where
+) -> eyre::Result<()>
+where
     T: twitch_irc::transport::Transport,
     L: twitch_irc::login::LoginCredentials,
 {
-    let http = match http_client() {
-        Ok(c) => c,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                "Failed to build alerts HTTP client; alerts task exiting"
-            );
-            return;
-        }
-    };
+    let http = http_client().wrap_err("failed to build alerts HTTP client")?;
 
-    let mut seen = state::SeenState::load(&data_dir);
-    let mut quake_due = Due::default();
-    let mut solar_due = Due::default();
-    let mut cme_due = Due::default();
-    let mut f1_due = Due::default();
+    let sender: &crate::twitch::ChatSender<T, L> = &sender;
+    let channel: &str = &channel;
+    let mut seen = SeenState::load(&data_dir);
+    let mut due: [Due; Feed::ALL.len()] = Default::default();
     let mut changes = settings.subscribe();
     tracing::info!("Alerts handler started");
 
     loop {
         tokio::select! {
             biased;
-            _ = lifecycle.wait_for_cancellation() => return,
+            _ = lifecycle.wait_for_cancellation() => return Ok(()),
             _ = tokio::time::sleep(TICK) => {}
             _ = changes.next() => {}
         }
-        if lifecycle.is_cancelled() {
-            return;
-        }
         let now = clock.now_utc();
         let cfg = settings.load().alerts.clone();
-        let max_age =
-            SignedDuration::from_secs(i64::try_from(cfg.max_age_secs).unwrap_or(i64::MAX));
 
-        // One root trace per feed poll: fetch, dedupe, save, and announce of
-        // that feed. The wait above stays outside every trace.
-        if lifecycle.is_cancelled() {
-            return;
-        }
-        if cfg.quake.enabled && quake_due.ready(now, cfg.quake.poll_secs) {
-            let url = quake::url(quake::DEFAULT_BASE_URL, cfg.quake.min_mag_tenths);
+        for (feed, due) in Feed::ALL.into_iter().zip(&mut due) {
+            if lifecycle.is_cancelled() {
+                return Ok(());
+            }
+            let Some(poll_secs) = feed.poll_secs(&cfg) else {
+                continue;
+            };
+            if !due.ready(now, poll_secs) {
+                continue;
+            }
+            // One root trace per feed poll: fetch, dedupe, save, and announce
+            // of that feed. The wait above stays outside every trace.
             let completed = async {
-                let step = poll_feed(
+                let Some(polled) = poll_feed(
                     &http,
-                    "quake",
-                    &url,
-                    quake::MAX_BODY_BYTES,
-                    quake::parse,
-                    &mut seen.quake,
+                    feed,
+                    &feed.url(&cfg),
+                    &cfg,
+                    &mut seen,
                     now,
-                    max_age,
                     &lifecycle,
                 )
-                .await;
-                settle_feed(step, &seen, &data_dir, &lifecycle, &sender, &channel).await
+                .await
+                else {
+                    return false;
+                };
+                save_then_announce(&seen, &data_dir, polled, &lifecycle, |line| {
+                    tracing::info!(alert = %line, "Alert announced");
+                    let channel = channel.to_owned();
+                    async move { sender.say(channel, line).await }
+                })
+                .await
             }
-            .instrument(info_span!(parent: None, "alerts.poll", alerts.feed = "quake"))
+            .instrument(info_span!(parent: None, "alerts.poll", alerts.feed = feed.name()))
             .await;
             if !completed {
-                return;
-            }
-        }
-
-        if lifecycle.is_cancelled() {
-            return;
-        }
-        if cfg.solar.enabled && solar_due.ready(now, cfg.solar.poll_secs) {
-            let min_rank = class_rank(&cfg.solar.min_class).unwrap_or((3, 0.0));
-            let completed = async {
-                let step = poll_feed(
-                    &http,
-                    "solar",
-                    solar::DEFAULT_URL,
-                    solar::MAX_BODY_BYTES,
-                    |body| solar::parse(body, min_rank),
-                    &mut seen.solar,
-                    now,
-                    max_age,
-                    &lifecycle,
-                )
-                .await;
-                settle_feed(step, &seen, &data_dir, &lifecycle, &sender, &channel).await
-            }
-            .instrument(info_span!(parent: None, "alerts.poll", alerts.feed = "solar"))
-            .await;
-            if !completed {
-                return;
-            }
-        }
-
-        if lifecycle.is_cancelled() {
-            return;
-        }
-        if cfg.cme.enabled && cme_due.ready(now, cfg.cme.poll_secs) {
-            let completed = async {
-                let step = poll_feed(
-                    &http,
-                    "cme",
-                    cme::DEFAULT_URL,
-                    cme::MAX_BODY_BYTES,
-                    cme::parse,
-                    &mut seen.cme,
-                    now,
-                    max_age,
-                    &lifecycle,
-                )
-                .await;
-                settle_feed(step, &seen, &data_dir, &lifecycle, &sender, &channel).await
-            }
-            .instrument(info_span!(parent: None, "alerts.poll", alerts.feed = "cme"))
-            .await;
-            if !completed {
-                return;
-            }
-        }
-
-        if lifecycle.is_cancelled() {
-            return;
-        }
-        if cfg.f1.enabled && f1_due.ready(now, cfg.f1.poll_secs) {
-            let completed = async {
-                let step = poll_feed(
-                    &http,
-                    "f1",
-                    f1::DEFAULT_URL,
-                    f1::MAX_BODY_BYTES,
-                    |body| f1::parse(body, now),
-                    &mut seen.f1,
-                    now,
-                    max_age,
-                    &lifecycle,
-                )
-                .await;
-                settle_feed(step, &seen, &data_dir, &lifecycle, &sender, &channel).await
-            }
-            .instrument(info_span!(parent: None, "alerts.poll", alerts.feed = "f1"))
-            .await;
-            if !completed {
-                return;
+                return Ok(());
             }
         }
     }
@@ -272,129 +292,73 @@ fn http_client() -> reqwest::Result<reqwest::Client> {
         .build()
 }
 
-/// Finish one feed's poll inside its `alerts.poll` trace: persist the
-/// seen-set, then announce. Returns `false` when cancelled.
-async fn settle_feed<T, L>(
-    step: PollStep,
-    seen: &state::SeenState,
-    data_dir: &std::path::Path,
-    lifecycle: &Lifecycle,
-    sender: &crate::twitch::ChatSender<T, L>,
-    channel: &str,
-) -> bool
-where
-    T: twitch_irc::transport::Transport,
-    L: twitch_irc::login::LoginCredentials,
-{
-    let PollStep::Complete { lines, dirty } = step else {
-        return false;
-    };
-    save_then_announce(seen, dirty, data_dir, lines, lifecycle, |line| {
-        let channel = channel.to_owned();
-        tracing::info!(alert = %line, "Alert announced");
-        async move { sender.say(channel, line).await }
-    })
-    .await
-}
-
 /// Persist the seen-set before announcing, so a crash or restart mid-announce
 /// cannot replay an alert. At-most-once: a shutdown between save and say
 /// drops the rest of this tick's lines. Returns `false` when cancelled.
 async fn save_then_announce<F, Fut>(
-    seen: &state::SeenState,
-    dirty: bool,
+    seen: &SeenState,
     data_dir: &std::path::Path,
-    lines: Vec<String>,
+    polled: Polled,
     lifecycle: &Lifecycle,
-    effect: F,
+    mut say: F,
 ) -> bool
 where
     F: FnMut(String) -> Fut,
     Fut: Future<Output = ()>,
 {
-    if dirty {
+    if polled.dirty {
         seen.save(data_dir).await;
     }
-    announce_while_running(lines, lifecycle, effect).await
-}
-
-/// Parse a feed body. Any failure logs and yields `None`; the caller skips
-/// this tick so a 200 with HTML (or a shape change) never looks like "no events."
-fn parsed_or_skip<E: std::fmt::Display + std::fmt::Debug>(
-    feed: &'static str,
-    parsed: Result<Vec<Candidate>, E>,
-) -> Option<Vec<Candidate>> {
-    match parsed {
-        Ok(v) => Some(v),
-        Err(error) => {
-            crate::log_handled!(
-                warn,
-                error,
-                alerts.feed = feed,
-                "alerts feed body could not be parsed"
-            );
-            None
-        }
-    }
-}
-
-async fn announce_while_running<F, Fut>(
-    lines: Vec<String>,
-    lifecycle: &Lifecycle,
-    mut effect: F,
-) -> bool
-where
-    F: FnMut(String) -> Fut,
-    Fut: Future<Output = ()>,
-{
-    for line in lines {
+    for line in polled.lines {
         if lifecycle.is_cancelled() {
             return false;
         }
-        effect(line).await;
+        say(line).await;
     }
     true
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one-shot poll: fetch, parse, dedupe"
-)]
-async fn poll_feed<E: std::fmt::Display + std::fmt::Debug>(
+/// Fetch, parse, and dedupe one feed. `None` when cancelled. A failed fetch
+/// or a body that does not parse logs and yields an empty [`Polled`], so a
+/// 200 with HTML (or a shape change) never looks like "no events" and the
+/// tick moves on to the next feed.
+async fn poll_feed(
     http: &reqwest::Client,
-    feed: &'static str,
+    feed: Feed,
     url: &str,
-    max_bytes: u64,
-    parse: impl FnOnce(&str) -> Result<Vec<Candidate>, E>,
-    seen: &mut VecDeque<String>,
+    cfg: &AlertsSettings,
+    seen: &mut SeenState,
     now: Timestamp,
-    max_age: SignedDuration,
     lifecycle: &Lifecycle,
-) -> PollStep {
+) -> Option<Polled> {
+    let name = feed.name();
     // A hung feed must not hold shutdown past the drain window: the request
     // timeout (15 s) is longer than the supervisor's 5 s cooperative drain.
     let fetched = tokio::select! {
         biased;
-        _ = lifecycle.wait_for_cancellation() => return PollStep::Cancelled,
-        fetched = fetch(http, feed, url, max_bytes) => fetched,
+        _ = lifecycle.wait_for_cancellation() => return None,
+        fetched = fetch(http, name, url, feed.max_bytes()) => fetched,
     };
     let Some(body) = fetched else {
-        return PollStep::Complete {
-            lines: Vec::new(),
-            dirty: false,
-        };
+        return Some(Polled::default());
     };
     if lifecycle.is_cancelled() {
-        return PollStep::Cancelled;
+        return None;
     }
-    let Some(cands) = parsed_or_skip(feed, parse(&body)) else {
-        return PollStep::Complete {
-            lines: Vec::new(),
-            dirty: false,
-        };
+    let candidates = match feed.parse(&body, cfg, now) {
+        Ok(candidates) => candidates,
+        Err(error) => {
+            crate::log_handled!(
+                warn,
+                error,
+                alerts.feed = name,
+                "alerts feed body could not be parsed"
+            );
+            return Some(Polled::default());
+        }
     };
-    let (lines, dirty) = select_announcements(cands, seen, now, max_age);
-    PollStep::Complete { lines, dirty }
+    let (lines, dirty) = select_announcements(candidates, feed.seen(seen), now, feed.max_age(cfg));
+    Some(Polled { lines, dirty })
 }
 
 /// Fetch a feed body of at most `max_bytes`. Any failure, an oversized body
@@ -583,16 +547,25 @@ mod tests {
         let lifecycle = Lifecycle::new();
         let sent = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
-        let completed =
-            announce_while_running(vec!["first".into(), "second".into()], &lifecycle, |_line| {
+        let polled = Polled {
+            lines: vec!["first".into(), "second".into()],
+            dirty: false,
+        };
+        let completed = save_then_announce(
+            &SeenState::default(),
+            std::path::Path::new("unused-when-clean"),
+            polled,
+            &lifecycle,
+            |_line| {
                 let sent = sent.clone();
                 let lifecycle = lifecycle.clone();
                 async move {
                     sent.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     lifecycle.request_graceful_stop();
                 }
-            })
-            .await;
+            },
+        )
+        .await;
 
         assert!(!completed);
         assert_eq!(
@@ -614,15 +587,15 @@ mod tests {
         );
         let on_disk_at_say = std::sync::Arc::new(std::sync::Mutex::new(None));
 
-        let completed =
-            save_then_announce(&seen, dirty, dir.path(), lines, &Lifecycle::new(), |_| {
-                let on_disk_at_say = on_disk_at_say.clone();
-                let path = dir.path().to_owned();
-                async move {
-                    *on_disk_at_say.lock().unwrap() = Some(state::SeenState::load(&path));
-                }
-            })
-            .await;
+        let polled = Polled { lines, dirty };
+        let completed = save_then_announce(&seen, dir.path(), polled, &Lifecycle::new(), |_| {
+            let on_disk_at_say = on_disk_at_say.clone();
+            let path = dir.path().to_owned();
+            async move {
+                *on_disk_at_say.lock().unwrap() = Some(state::SeenState::load(&path));
+            }
+        })
+        .await;
 
         assert!(completed);
         let loaded = on_disk_at_say.lock().unwrap().take().expect("announced");
@@ -654,18 +627,16 @@ mod tests {
     const F1_PATH: &str = "/ergast/f1/current.json";
     const F1_FIXTURE: &str = include_str!("fixtures/jolpica-current.json");
 
-    async fn poll_f1(server: &wiremock::MockServer, seen: &mut VecDeque<String>) -> PollStep {
+    async fn poll_f1(server: &wiremock::MockServer, seen: &mut SeenState) -> Option<Polled> {
         crate::install_crypto_provider();
         let at = "2026-11-16T17:30:00Z".parse::<Timestamp>().unwrap();
         poll_feed(
             &http_client().expect("client builds"),
-            "f1",
+            Feed::F1,
             &format!("{}{F1_PATH}?limit=100", server.uri()),
-            f1::MAX_BODY_BYTES,
-            |body| f1::parse(body, at),
+            &AlertsSettings::default(),
             seen,
             at,
-            SignedDuration::from_hours(2),
             &Lifecycle::new(),
         )
         .await
@@ -686,15 +657,15 @@ mod tests {
             .mount(&server)
             .await;
 
-        let mut seen = VecDeque::new();
-        let PollStep::Complete { lines, dirty } = poll_f1(&server, &mut seen).await else {
-            panic!("poll was not cancelled");
-        };
+        let mut seen = SeenState::default();
+        let Polled { lines, dirty } = poll_f1(&server, &mut seen)
+            .await
+            .expect("poll was not cancelled");
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert!(lines[0].contains("Las Vegas Grand Prix"));
         assert!(dirty);
         assert!(
-            !seen.contains(&"2026-22-2026-11-29".to_owned()),
+            !seen.f1.contains(&"2026-22-2026-11-29".to_owned()),
             "future Race Weeks stay unseen"
         );
 
@@ -726,17 +697,15 @@ mod tests {
                 .respond_with(response)
                 .mount(&server)
                 .await;
-            let mut seen = VecDeque::from(["kept".to_owned()]);
+            let mut seen = SeenState::default();
+            seen.f1.push_back("kept".to_owned());
             let step = poll_f1(&server, &mut seen).await;
             assert_eq!(
                 step,
-                PollStep::Complete {
-                    lines: Vec::new(),
-                    dirty: false
-                },
+                Some(Polled::default()),
                 "a failed feed completes the tick so the next feed still runs"
             );
-            assert_eq!(seen, VecDeque::from(["kept".to_owned()]));
+            assert_eq!(seen.f1, VecDeque::from(["kept".to_owned()]));
         }
     }
 
@@ -760,25 +729,23 @@ mod tests {
             stopper.request_graceful_stop();
         });
 
-        let mut seen = VecDeque::new();
+        let mut seen = SeenState::default();
         let at = "2026-11-16T17:30:00Z".parse::<Timestamp>().unwrap();
         let step = tokio::time::timeout(
             std::time::Duration::from_secs(3),
             poll_feed(
                 &http_client().expect("client builds"),
-                "f1",
+                Feed::F1,
                 &server.uri(),
-                f1::MAX_BODY_BYTES,
-                |body| f1::parse(body, at),
+                &AlertsSettings::default(),
                 &mut seen,
                 at,
-                SignedDuration::from_hours(2),
                 &lifecycle,
             ),
         )
         .await
         .expect("cancellation must end the in-flight request well inside the drain window");
-        assert_eq!(step, PollStep::Cancelled);
-        assert!(seen.is_empty());
+        assert_eq!(step, None);
+        assert_eq!(seen, SeenState::default());
     }
 }

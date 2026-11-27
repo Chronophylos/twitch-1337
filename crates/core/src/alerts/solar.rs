@@ -46,7 +46,7 @@ pub(crate) fn parse(body: &str, min: (u8, f64)) -> Result<Vec<Candidate>, serde_
                 id: format!("{begin}-{sat}"),
                 at,
                 line: format!(
-                    "🌞 Die Sonne hat gezündt: {} um {} Uhr, gemessen von GOES-{}",
+                    "🌞 Die Sonne hat gezündet: {} um {} Uhr, gemessen von GOES-{}",
                     class,
                     crate::util::to_berlin(at).strftime("%H:%M"),
                     sat
@@ -71,11 +71,11 @@ mod tests {
         // 14:07 UTC in August is 16:07 Berlin (CEST, UTC+2)
         assert_eq!(
             out[0].line,
-            "🌞 Die Sonne hat gezündt: M2.1 um 16:07 Uhr, gemessen von GOES-18"
+            "🌞 Die Sonne hat gezündet: M2.1 um 16:07 Uhr, gemessen von GOES-18"
         );
         assert_eq!(
             out[1].line,
-            "🌞 Die Sonne hat gezündt: X1.8 um 17:07 Uhr, gemessen von GOES-19"
+            "🌞 Die Sonne hat gezündet: X1.8 um 17:07 Uhr, gemessen von GOES-19"
         );
     }
 
