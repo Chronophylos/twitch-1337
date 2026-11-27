@@ -21,15 +21,16 @@ impl Settings {
     pub fn validate(&self, ctx: &ValidationContext) -> Result<(), Vec<FieldError>> {
         let mut errs = self.validate_with(ctx, true).err().unwrap_or_default();
         validate_alert_poll_intervals(&self.alerts, &mut errs);
-        validate_schedule_windows(&self.schedules, &mut errs);
+        validate_schedule_saves(&self.schedules, &mut errs);
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
 
     /// Boot-time validation keeps rejecting malformed values but tolerates
     /// agent pointers whose profile row disappeared, alert poll intervals at
-    /// or above `alerts.max_age_secs`, and interval schedules with no slot in
-    /// their active window (a file saved before those rules must not be
-    /// quarantined). Runtime resolution skips only that agent; every save
+    /// or above `alerts.max_age_secs`, and interval schedules over 24 h or
+    /// with no slot in their active window (a file saved before those rules
+    /// must not be quarantined; humantime wrote `"2days"`). Runtime
+    /// resolution skips only that agent; every save
     /// still uses [`Self::validate`] as the hard gate.
     pub(crate) fn validate_for_load(&self, ctx: &ValidationContext) -> Result<(), Vec<FieldError>> {
         self.validate_with(ctx, false)
@@ -582,10 +583,19 @@ fn validate_alert_poll_intervals(a: &crate::settings::AlertsSettings, errs: &mut
     }
 }
 
-/// Save-time only, see [`Settings::validate_for_load`]. An interval whose
-/// slots all fall outside its active window would never fire.
-fn validate_schedule_windows(schedules: &[crate::schedule::Schedule], errs: &mut Vec<FieldError>) {
+/// Save-time only, see [`Settings::validate_for_load`]: an interval whose
+/// slots all fall outside its active window would never fire, and one over
+/// [`crate::schedule::MAX_INTERVAL`] only has the midnight slot.
+fn validate_schedule_saves(schedules: &[crate::schedule::Schedule], errs: &mut Vec<FieldError>) {
     for (idx, sc) in schedules.iter().enumerate() {
+        if let crate::schedule::Trigger::Interval { every, .. } = sc.trigger
+            && every > crate::schedule::MAX_INTERVAL
+        {
+            errs.push(FieldError {
+                field: format!("schedules[{idx}].trigger.every"),
+                message: format!("must be at most 24 h (got {}s)", every.as_secs()),
+            });
+        }
         if !sc.trigger.has_slot_in_window() {
             errs.push(FieldError {
                 field: format!("schedules[{idx}].trigger.active_from"),
@@ -1506,6 +1516,27 @@ mod tests {
         assert_eq!(fields, ["schedules[1].trigger.active_from"]);
         s.validate_for_load(&ctx())
             .expect("a file saved before the rule still loads");
+    }
+
+    #[test]
+    fn interval_over_a_day_is_rejected_on_save_only() {
+        let mut s = Settings::compiled_defaults();
+        let mut daily = schedule("daily");
+        let mut two_days = schedule("two-days");
+        for (sc, secs) in [(&mut daily, 86_400), (&mut two_days, 172_800)] {
+            sc.trigger = crate::schedule::Trigger::Interval {
+                every: std::time::Duration::from_secs(secs),
+                days: crate::schedule::WeekdaySet::default(),
+                active_from: None,
+                active_to: None,
+            };
+        }
+        s.schedules = vec![daily, two_days];
+        let errs = s.validate(&ctx()).expect_err("must fail");
+        let fields: Vec<&str> = errs.iter().map(|e| e.field.as_str()).collect();
+        assert_eq!(fields, ["schedules[1].trigger.every"]);
+        s.validate_for_load(&ctx())
+            .expect("a humantime \"2days\" file still loads");
     }
 
     #[test]

@@ -15,7 +15,7 @@ use axum::extract::{Extension, Path, Query, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
-use jiff::civil::{Date, Time, Weekday};
+use jiff::civil::{Date, Time};
 use jiff::{Timestamp, ZonedDateTime};
 use serde::Deserialize;
 use tower_cookies::Cookies;
@@ -316,7 +316,7 @@ fn parse_interval(hours: &str, minutes: &str) -> Result<u64, (&'static str, Stri
         )
     })?;
     let secs = h.saturating_mul(3600).saturating_add(m * 60);
-    if secs > 86_400 {
+    if secs > twitch_1337_core::schedule::MAX_INTERVAL.as_secs() {
         return Err((
             "interval",
             format!("must be at most 24 h (got {h} h {m} min)"),
@@ -334,13 +334,7 @@ fn parse_date(s: &str) -> Option<Date> {
 }
 
 fn parse_weekdays(values: &[String]) -> WeekdaySet {
-    let mut out = WeekdaySet::default();
-    for v in values {
-        if let Some(d) = parse_weekday(v) {
-            out.0.insert(d);
-        }
-    }
-    out
+    values.iter().filter_map(|v| parse_weekday(v)).collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -465,12 +459,7 @@ fn trigger_human(t: &Trigger) -> (String, Option<String>) {
 }
 
 fn weekdays_short(days: &WeekdaySet) -> String {
-    let mut wds: Vec<Weekday> = days.0.iter().copied().collect();
-    wds.sort_by_key(|d| d.to_monday_zero_offset());
-    wds.iter()
-        .map(|d| weekday_abbr(*d))
-        .collect::<Vec<_>>()
-        .join("·")
+    days.iter().map(weekday_abbr).collect::<Vec<_>>().join("·")
 }
 
 fn form_state_from_schedule(s: &Schedule) -> FormState {
@@ -506,12 +495,12 @@ fn form_state_from_schedule(s: &Schedule) -> FormState {
             fs.interval_active_to = active_to
                 .map(|t| t.strftime("%H:%M").to_string())
                 .unwrap_or_default();
-            fs.interval_days = days.0.iter().map(|d| weekday_abbr(*d).to_owned()).collect();
+            fs.interval_days = days.iter().map(|d| weekday_abbr(d).to_owned()).collect();
         }
         Trigger::Calendar { days, at } => {
             fs.kind = "calendar".into();
             fs.calendar_at = at.strftime("%H:%M").to_string();
-            fs.calendar_days = days.0.iter().map(|d| weekday_abbr(*d).to_owned()).collect();
+            fs.calendar_days = days.iter().map(|d| weekday_abbr(d).to_owned()).collect();
         }
     }
     fs
@@ -985,9 +974,9 @@ mod try_into_schedule_tests {
     fn parse_weekdays_helper() {
         let days = parse_weekdays(&["Mon".to_owned(), "Wed".to_owned()]);
         use jiff::civil::Weekday;
-        assert!(days.0.contains(&Weekday::Monday));
-        assert!(days.0.contains(&Weekday::Wednesday));
-        assert!(!days.0.contains(&Weekday::Friday));
+        assert!(days.contains(Weekday::Monday));
+        assert!(days.contains(Weekday::Wednesday));
+        assert!(!days.contains(Weekday::Friday));
     }
 }
 

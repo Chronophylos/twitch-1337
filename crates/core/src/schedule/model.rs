@@ -138,7 +138,7 @@ mod validate_tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::schedule::weekday::WeekdaySet;
+    use crate::schedule::WeekdaySet;
 
     fn ok() -> Schedule {
         Schedule {
@@ -220,7 +220,7 @@ mod validate_tests {
 #[cfg(test)]
 mod next_active_fire_tests {
     use super::*;
-    use crate::schedule::weekday::WeekdaySet;
+    use crate::schedule::WeekdaySet;
 
     fn now_berlin(y: i16, mo: i8, d: i8, h: i8, mi: i8) -> ZonedDateTime {
         jiff::civil::date(y, mo, d)
