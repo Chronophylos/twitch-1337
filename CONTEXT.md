@@ -84,7 +84,7 @@ The Monday–Sunday calendar week containing an official Formula 1 race date.
 _Avoid_: seven days before the race, race weekend
 
 **Race-Week Reminder**:
-An Alert announcing a specific race at 18:00 Europe/Berlin on the Monday of its Race Week. A race moved to another Race Week gets a new reminder.
+An Alert announcing a specific race at 18:00 Europe/Berlin on the Monday of its Race Week. Missed then (outage, failed polls), it is posted late, up to the race start. A race moved to another Race Week gets a new reminder.
 _Avoid_: F1 command, schedule
 
 ## AI memory, scratch, transcripts, and recap

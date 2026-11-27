@@ -262,7 +262,7 @@ pub async fn run_alerts_handler<T, L>(
                     |body| f1::parse(body, now),
                     &mut seen.f1,
                     now,
-                    max_age,
+                    f1::MAX_AGE,
                     &lifecycle,
                 )
                 .await;
@@ -679,7 +679,7 @@ mod tests {
             |body| f1::parse(body, at),
             seen,
             at,
-            SignedDuration::from_hours(2),
+            f1::MAX_AGE,
             &Lifecycle::new(),
         )
         .await

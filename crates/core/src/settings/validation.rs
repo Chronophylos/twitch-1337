@@ -19,13 +19,16 @@ pub struct ValidationContext {
 
 impl Settings {
     pub fn validate(&self, ctx: &ValidationContext) -> Result<(), Vec<FieldError>> {
-        self.validate_with(ctx, true)
+        let mut errs = self.validate_with(ctx, true).err().unwrap_or_default();
+        validate_alert_poll_intervals(&self.alerts, &mut errs);
+        if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
 
     /// Boot-time validation keeps rejecting malformed values but tolerates
-    /// agent pointers whose profile row disappeared. Runtime resolution skips
-    /// only that agent; every save still uses [`Self::validate`] as the hard
-    /// referential-integrity gate.
+    /// agent pointers whose profile row disappeared, and alert poll intervals
+    /// at or above `alerts.max_age_secs` (a file saved before that rule must
+    /// not be quarantined). Runtime resolution skips only that agent; every
+    /// save still uses [`Self::validate`] as the hard gate.
     pub(crate) fn validate_for_load(&self, ctx: &ValidationContext) -> Result<(), Vec<FieldError>> {
         self.validate_with(ctx, false)
     }
@@ -551,6 +554,29 @@ fn validate_alerts(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldErro
                 a.solar.min_class
             ),
         });
+    }
+}
+
+/// Save-time only, see [`Settings::validate_for_load`]. An event can be a full
+/// interval old when its poll sees it; at or above the cutoff it would be
+/// marked seen without ever reaching chat. F1 is exempt: it keeps its own
+/// window up to the race start.
+fn validate_alert_poll_intervals(a: &crate::settings::AlertsSettings, errs: &mut Vec<FieldError>) {
+    for (field, poll_secs) in [
+        ("alerts.quake.poll_secs", a.quake.poll_secs),
+        ("alerts.solar.poll_secs", a.solar.poll_secs),
+        ("alerts.cme.poll_secs", a.cme.poll_secs),
+    ] {
+        if poll_secs >= a.max_age_secs {
+            errs.push(FieldError {
+                field: field.into(),
+                message: format!(
+                    "must be below alerts.max_age_secs ({} s), or events are absorbed \
+                     as stale before they are announced (got {poll_secs})",
+                    a.max_age_secs
+                ),
+            });
+        }
     }
 }
 
@@ -1431,6 +1457,20 @@ mod tests {
         assert!(fields.contains(&"alerts.quake.min_mag_tenths"));
         assert!(fields.contains(&"alerts.quake.poll_secs"));
         assert!(fields.contains(&"alerts.cme.poll_secs"));
+    }
+
+    #[test]
+    fn alerts_poll_interval_must_stay_below_max_age() {
+        let mut s = Settings::compiled_defaults();
+        s.alerts.max_age_secs = 600;
+        s.alerts.quake.poll_secs = 600;
+        s.alerts.solar.poll_secs = 599;
+        s.alerts.f1.poll_secs = 3_600;
+        let errs = s.validate(&ctx()).expect_err("must fail");
+        let fields: Vec<&str> = errs.iter().map(|e| e.field.as_str()).collect();
+        assert_eq!(fields, ["alerts.quake.poll_secs", "alerts.cme.poll_secs"]);
+        s.validate_for_load(&ctx())
+            .expect("a file saved before the rule still loads");
     }
 
     #[test]

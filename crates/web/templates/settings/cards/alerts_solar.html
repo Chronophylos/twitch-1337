@@ -24,7 +24,7 @@
        "Minimum class: A, B, C, M or X — optionally with a magnitude, e.g. M6 or M6.5.",
        current.alerts.solar.min_class, defaults.alerts.solar.min_class, defaults.alerts.solar.min_class) %}{% endcall %}
     {% call m::num_row("alerts_solar", self.knob("alerts.max_age_secs"),
-       "Events older than this are marked seen silently instead of announced. Applies to all alert feeds.",
+       "Events older than this are marked seen silently instead of announced. Applies to earthquakes, solar flares and CMEs; each of their poll intervals must stay below it.",
        current.alerts.max_age_secs, defaults.alerts.max_age_secs, "s") %}{% endcall %}
   </div>
 </section>
