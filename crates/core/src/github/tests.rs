@@ -181,7 +181,6 @@ async fn create_issue_sends_type_and_labels() {
         IssueRef {
             number: 12,
             html_url: "https://github.com/o/r/issues/12".to_owned(),
-            open: true,
         }
     );
 }
@@ -325,8 +324,7 @@ async fn missing_issue_and_pull_request_are_not_found() {
         client.get_issue(8).await,
         Err(GithubError::NotFound)
     ));
-    let closed = client.get_issue(9).await.expect("closed issue");
-    assert!(!closed.open);
+    client.get_issue(9).await.expect("closed issue");
 }
 
 #[tokio::test]
@@ -425,8 +423,13 @@ async fn closed_since_paginates_and_skips_pull_requests() {
 }
 
 #[tokio::test]
-async fn find_marker_builds_the_search_query() {
+async fn find_marker_only_accepts_the_exact_hidden_comment() {
     let (server, client) = setup().await;
+    let with_body = |n: u64, body: &str| {
+        let mut issue = issue_json(n, "open");
+        issue["body"] = json!(body);
+        issue
+    };
     Mock::given(method("GET"))
         .and(path("/search/issues"))
         .and(query_param(
@@ -434,15 +437,20 @@ async fn find_marker_builds_the_search_query() {
             r#"repo:o/r is:issue "twitch-1337-feedback:F42" in:body"#,
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "total_count": 2,
+            "total_count": 4,
             "items": [
                 {
                     "number": 6,
                     "html_url": "https://github.com/o/r/pull/6",
                     "state": "open",
+                    "body": "<!-- twitch-1337-feedback:F42 -->",
                     "pull_request": { "url": "https://api.github.com/repos/o/r/pulls/6" },
                 },
-                issue_json(7, "open"),
+                // A viewer quoting the marker in another case, and another
+                // entry whose marker merely starts with F42's.
+                with_body(4, "```text\nTWITCH-1337-FEEDBACK:F42\n```\n<!-- twitch-1337-feedback:F5 -->"),
+                with_body(5, "<!-- twitch-1337-feedback:F420 -->"),
+                with_body(7, "---\n\n<!-- twitch-1337-feedback:F42 -->\n"),
             ],
         })))
         .mount(&server)
@@ -453,9 +461,26 @@ async fn find_marker_builds_the_search_query() {
             "q",
             r#"repo:o/r is:issue "twitch-1337-feedback:F43" in:comments"#,
         ))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total_count": 2,
+            "items": [issue_json(8, "open"), issue_json(9, "open")],
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/issues/8/comments"))
         .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({ "total_count": 0, "items": [] })),
+            ResponseTemplate::new(200)
+                .set_body_json(json!([{ "body": "twitch 1337 feedback F43, lol" }])),
         )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/issues/9/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            { "body": "unrelated" },
+            { "body": "+1\n\n<!-- twitch-1337-feedback:F43 -->\n" },
+        ])))
         .mount(&server)
         .await;
 
@@ -471,7 +496,7 @@ async fn find_marker_builds_the_search_query() {
             .find_marker("twitch-1337-feedback:F43", MarkerScope::Comments)
             .await
             .expect("search"),
-        None
+        Some(9)
     );
 }
 
@@ -569,7 +594,6 @@ fn error_message_is_sanitized_and_truncated() {
 fn issue_url_points_at_github() {
     crate::install_crypto_provider();
     let client = GithubClient::new(&bootstrap("Chronophylos/twitch-1337")).expect("client");
-    assert_eq!(client.repo(), "Chronophylos/twitch-1337");
     assert_eq!(
         client.issue_url(775),
         "https://github.com/Chronophylos/twitch-1337/issues/775"

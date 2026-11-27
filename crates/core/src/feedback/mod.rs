@@ -370,19 +370,22 @@ impl FeedbackHub {
         self.save_logged(snap).await;
     }
 
-    /// New | PromoteUnknown | AttachUnknown → Dismissed.
+    /// New → Dismissed. A *Unknown entry must be resolved first (retry or
+    /// manual link): Restore returns to New, which would drop the pending
+    /// marker check and let the next Promote file a second issue.
     pub async fn dismiss(&self, id: EntryId, by: &str) -> Result<(), ActionError> {
         let now = Timestamp::now();
         let ((), snap) = self.mutate(|inbox| {
             let e = inbox.entry_mut(id).ok_or(ActionError::NotFound)?;
             match e.state {
-                EntryState::New
-                | EntryState::PromoteUnknown { .. }
-                | EntryState::AttachUnknown { .. } => {}
+                EntryState::New => {}
                 EntryState::Promoting { .. } | EntryState::Attaching { .. } => {
                     return Err(ActionError::Busy);
                 }
-                EntryState::Dismissed { .. } | EntryState::Linked { .. } => {
+                EntryState::PromoteUnknown { .. }
+                | EntryState::AttachUnknown { .. }
+                | EntryState::Dismissed { .. }
+                | EntryState::Linked { .. } => {
                     return Err(ActionError::InvalidState);
                 }
             }
@@ -397,7 +400,7 @@ impl FeedbackHub {
     }
 
     /// Dismissed → New.
-    pub async fn restore(&self, id: EntryId, _by: &str) -> Result<(), ActionError> {
+    pub async fn restore(&self, id: EntryId) -> Result<(), ActionError> {
         let ((), snap) = self.mutate(|inbox| {
             let e = inbox.entry_mut(id).ok_or(ActionError::NotFound)?;
             if !matches!(e.state, EntryState::Dismissed { .. }) {
@@ -566,7 +569,8 @@ impl FeedbackHub {
         let target = match gh.get_issue(issue).await {
             Ok(target) => target,
             Err(GithubError::NotFound) => {
-                self.set_state(id, EntryState::New).await;
+                // Keep a pending *Unknown: its marker check must still run.
+                self.set_state(id, prev).await;
                 return Err(ActionError::IssueNotFound);
             }
             Err(error) => {

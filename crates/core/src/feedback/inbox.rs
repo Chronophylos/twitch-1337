@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 use super::{Classification, CloseInfo, EntryId, EntryState, FeedbackEntry, Kind, SubmitError};
 use crate::github::{CloseReason, ClosedIssue};
 
-/// Dismissed entries are deleted this long after their dismissal.
+/// Dismissed entries, and linked entries whose issue was closed as
+/// completed, are deleted this long after the dismissal or close.
 pub const DISMISSED_RETENTION: SignedDuration = SignedDuration::from_hours(30 * 24);
 /// A close first seen later than this after `closed_at` is not announced.
 pub(crate) const CLOSE_ANNOUNCE_WINDOW: SignedDuration = SignedDuration::from_hours(24);
@@ -121,11 +122,21 @@ impl Inbox {
         Some(dismiss)
     }
 
-    /// Delete Dismissed entries older than [`DISMISSED_RETENTION`].
+    /// Delete Dismissed and completed Linked entries older than
+    /// [`DISMISSED_RETENTION`]; the issue itself stays on GitHub.
     pub(crate) fn prune(&mut self, now: Timestamp) -> usize {
         let before = self.entries.len();
         self.entries.retain(|e| match &e.state {
-            EntryState::Dismissed { at, .. } => now.duration_since(*at) <= DISMISSED_RETENTION,
+            EntryState::Dismissed { at, .. }
+            | EntryState::Linked {
+                close:
+                    Some(CloseInfo {
+                        at,
+                        completed: true,
+                        ..
+                    }),
+                ..
+            } => now.duration_since(*at) <= DISMISSED_RETENTION,
             _ => true,
         });
         before - self.entries.len()
@@ -341,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_drops_dismissed_after_30_days() {
+    fn prune_drops_dismissed_and_completed_links_after_30_days() {
         let mut inbox = Inbox::default();
         let now = ts("2026-11-26T10:00:00Z");
         let old = inbox.submit("u", "a", "x", now, 0).unwrap();
@@ -355,12 +366,43 @@ mod tests {
             at: ts("2026-10-28T10:00:00Z"),
             by: None,
         };
-        assert_eq!(inbox.prune(now), 1);
+        let linked_with = |inbox: &mut Inbox, close: Option<CloseInfo>| {
+            let id = linked(inbox, "u", "a", 9);
+            if let EntryState::Linked { close: c, .. } = &mut inbox.entry_mut(id).unwrap().state {
+                *c = close;
+            }
+            id
+        };
+        let long_ago = ts("2026-10-01T00:00:00Z");
+        let done_old = linked_with(
+            &mut inbox,
+            Some(CloseInfo {
+                at: long_ago,
+                completed: true,
+                notified: true,
+            }),
+        );
+        let not_planned_old = linked_with(
+            &mut inbox,
+            Some(CloseInfo {
+                at: long_ago,
+                completed: false,
+                notified: false,
+            }),
+        );
+        let open = linked_with(&mut inbox, None);
+        assert_eq!(inbox.prune(now), 2);
         assert!(inbox.entry(old).is_none());
+        assert!(inbox.entry(done_old).is_none());
         assert!(inbox.entry(recent).is_some());
         assert!(inbox.entry(fresh_new).is_some());
+        assert!(
+            inbox.entry(not_planned_old).is_some(),
+            "a not-planned close may still be reopened and completed"
+        );
+        assert!(inbox.entry(open).is_some());
         // Ids are never reused.
-        assert_eq!(inbox.submit("u", "a", "x", now, 0).unwrap(), 4);
+        assert_eq!(inbox.submit("u", "a", "x", now, 0).unwrap(), 7);
     }
 
     #[test]

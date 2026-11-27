@@ -145,7 +145,8 @@
     {% endif %}
   {% endif %}
 
-  {% if card.actionable() || card.state == "dismissed" %}
+  {# Unknown entries are resolved by retry or manual link, never dismissed. #}
+  {% if card.state == "new" || card.state == "dismissed" %}
   <footer class="card-footer">
     {% if card.state == "dismissed" %}
     <form method="post" action="/feedback/{{ card.id }}/restore"

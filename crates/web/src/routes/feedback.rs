@@ -895,7 +895,7 @@ async fn restore(
     if !csrf::verify(&form._csrf, &session.csrf_value) {
         return Err(WebError::CsrfMismatch);
     }
-    let result = state.feedback.restore(id, &session.user_login).await;
+    let result = state.feedback.restore(id).await;
     log_outcome(&session, "feedback_restore", id, result.as_ref().err());
     let outcome = result
         .map(|()| format!("F{id} restored to New."))

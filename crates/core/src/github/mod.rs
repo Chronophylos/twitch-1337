@@ -83,7 +83,6 @@ pub struct NewIssue {
 pub struct IssueRef {
     pub number: u64,
     pub html_url: String,
-    pub open: bool,
 }
 
 /// Where [`GithubClient::find_marker`] looks for the marker.
@@ -270,10 +269,6 @@ impl GithubClient {
         self
     }
 
-    pub fn repo(&self) -> &str {
-        &self.repo
-    }
-
     pub fn issue_url(&self, number: u64) -> String {
         format!("https://github.com/{}/issues/{number}", self.repo)
     }
@@ -329,10 +324,14 @@ impl GithubClient {
         self.api(request).await.map(drop)
     }
 
-    /// Search `"{marker}" in:body` or `in:comments` in this repo; first issue number.
+    /// Search `"{marker}" in:body` or `in:comments` in this repo; the first
+    /// issue that really carries the hidden `<!-- {marker} -->` comment the
+    /// feedback renderer writes.
     ///
-    /// Search is eventually consistent: an issue created seconds ago may not
-    /// be indexed yet.
+    /// Search ignores case and punctuation, so viewer text quoted in another
+    /// issue (`TWITCH 1337 FEEDBACK F8`) can match the phrase; only the exact
+    /// comment counts. Search is also eventually consistent: an issue created
+    /// seconds ago may not be indexed yet.
     #[instrument(skip_all, name = "github.find_marker")]
     pub async fn find_marker(
         &self,
@@ -344,11 +343,43 @@ impl GithubClient {
             ("per_page", "10"),
         ]);
         let wire: WireSearch = parse(&self.api(request).await?.body)?;
-        Ok(wire
-            .items
-            .into_iter()
-            .find(|item| item.pull_request.is_none())
-            .map(|item| item.number))
+        let exact = format!("<!-- {marker} -->");
+        for item in wire.items {
+            if item.pull_request.is_some() {
+                continue;
+            }
+            let carries = match scope {
+                MarkerScope::Body => item.body.as_deref().is_some_and(|b| b.contains(&exact)),
+                MarkerScope::Comments => self.comments_contain(item.number, &exact).await?,
+            };
+            if carries {
+                return Ok(Some(item.number));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Whether any comment on issue `number` contains `needle`.
+    async fn comments_contain(&self, number: u64, needle: &str) -> Result<bool, GithubError> {
+        let path = format!("/repos/{}/issues/{number}/comments", self.repo);
+        for page in 1..=MAX_PAGES {
+            let request = self
+                .request(Method::GET, &path)
+                .query(&[("per_page", PER_PAGE)])
+                .query(&[("page", page)]);
+            let reply = self.api(request).await?;
+            let comments: Vec<WireComment> = parse(&reply.body)?;
+            if comments
+                .iter()
+                .any(|c| c.body.as_deref().is_some_and(|b| b.contains(needle)))
+            {
+                return Ok(true);
+            }
+            if !reply.has_next {
+                break;
+            }
+        }
+        Ok(false)
     }
 
     /// Closed issues (PRs excluded) updated at/after `since`, all pages (per_page=100, sort=updated, direction=asc).
@@ -681,13 +712,20 @@ struct WireIssue {
     /// Present (an object) only on pull requests.
     #[serde(default)]
     pull_request: Option<IgnoredAny>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct WireComment {
+    #[serde(default)]
+    body: Option<String>,
 }
 
 impl WireIssue {
     fn into_ref(self) -> IssueRef {
         IssueRef {
             number: self.number,
-            open: self.state == "open",
             html_url: self.html_url,
         }
     }

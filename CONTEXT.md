@@ -307,7 +307,8 @@ _Avoid_: ticket, report, issue (reserve for the GitHub issue).
 The set of Feedback Entries awaiting or past review, kept in
 `$DATA_DIR/feedback.ron` and reviewed by Mods on `/feedback`. Promote turns an
 entry into a new GitHub issue; Attach adds it to an existing one as a `+1`
-comment; Dismiss hides it (deleted after 30 days).
+comment; Dismiss hides it (deleted after 30 days). A linked entry is deleted
+30 days after its issue is closed as completed.
 _Avoid_: queue (the command execution queue), backlog.
 
 ## Dashboard access
