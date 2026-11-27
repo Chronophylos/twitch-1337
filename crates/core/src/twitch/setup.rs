@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use eyre::{Context as _, Result, bail};
 use secrecy::ExposeSecret as _;
 use tokio::{sync::mpsc::UnboundedReceiver, time::Duration};
-use tracing::{Instrument as _, debug, debug_span, error, info, trace};
+use tracing::{Instrument as _, debug, debug_span, error, info, trace, warn};
 use twitch_irc::{
     ClientConfig, SecureTCPTransport, TwitchIRCClient,
     login::{LoginCredentials as _, RefreshingLoginCredentials},
@@ -75,10 +75,21 @@ pub async fn setup_and_verify_twitch_client(
 
     let mut channels: HashSet<String> = [config.twitch.channel.clone()].into();
     for extra in extra_channels {
-        if !extra.is_empty() {
-            debug!(channel = %extra, "Joining extra channel");
-            channels.insert(extra.clone());
+        if extra.is_empty() {
+            continue;
         }
+        // `set_wanted_channels` rejects the whole set for one bad login, which
+        // would turn a settings typo into a boot loop.
+        if let Err(error) = twitch_irc::validate::validate_login(extra) {
+            warn!(
+                ?error,
+                channel = %extra,
+                "Not joining extra channel, it is not a Twitch login; fix twitch.admin_channel at /settings"
+            );
+            continue;
+        }
+        debug!(channel = %extra, "Joining extra channel");
+        channels.insert(extra.clone());
     }
 
     info!(channels = ?channels, "Setting wanted channels");

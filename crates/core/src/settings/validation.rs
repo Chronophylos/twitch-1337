@@ -22,6 +22,7 @@ impl Settings {
         let mut errs = self.validate_with(ctx, true).err().unwrap_or_default();
         validate_alert_poll_intervals(&self.alerts, &mut errs);
         validate_schedule_saves(&self.schedules, &mut errs);
+        validate_admin_channel_login(self.twitch.admin_channel.as_deref(), &mut errs);
         if errs.is_empty() { Ok(()) } else { Err(errs) }
     }
 
@@ -153,6 +154,22 @@ impl Settings {
         validate_command_execution(&self.commands.execution, &mut errs);
         validate_observability(&self.observability, &mut errs);
         if errs.is_empty() { Ok(()) } else { Err(errs) }
+    }
+}
+
+/// Save-only: the IRC client refuses to join anything that is not a Twitch
+/// login, and `admin_channel` is applied at the next start, so a bad value
+/// would only surface as a failed boot. Not part of the load check, so a file
+/// saved before this rule still boots (startup skips the channel instead).
+fn validate_admin_channel_login(admin_channel: Option<&str>, errs: &mut Vec<FieldError>) {
+    let Some(v) = admin_channel.filter(|v| !v.trim().is_empty()) else {
+        return;
+    };
+    if twitch_irc::validate::validate_login(v).is_err() {
+        errs.push(FieldError {
+            field: "twitch.admin_channel".into(),
+            message: "must be a Twitch login: 1-25 of a-z, 0-9, _ (no #, no uppercase)".into(),
+        });
     }
 }
 
@@ -1142,6 +1159,22 @@ mod tests {
         s.twitch.admin_channel = Some("test".into());
         let errs = s.validate(&ctx()).expect_err("must fail");
         assert!(errs.iter().any(|e| e.field == "twitch.admin_channel"));
+    }
+
+    #[test]
+    fn validate_rejects_admin_channel_that_is_not_a_login() {
+        for bad in ["#admins", "Admins", " admins", "a".repeat(26).as_str()] {
+            let mut s = Settings::compiled_defaults();
+            s.twitch.admin_channel = Some(bad.into());
+            let errs = s.validate(&ctx()).expect_err("must fail");
+            assert!(
+                errs.iter().any(|e| e.field == "twitch.admin_channel"),
+                "{bad:?}: {errs:?}"
+            );
+        }
+        let mut s = Settings::compiled_defaults();
+        s.twitch.admin_channel = Some("admin_chan42".into());
+        s.validate(&ctx()).expect("a valid login saves");
     }
 
     #[test]
