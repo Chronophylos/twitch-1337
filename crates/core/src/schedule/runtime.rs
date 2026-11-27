@@ -12,7 +12,9 @@ use std::time::Duration;
 use jiff::{Timestamp, civil::Date};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::warn;
+use tracing::info;
+
+use super::Schedule;
 
 use crate::util::{persist::atomic_save_ron_async, to_berlin};
 
@@ -59,11 +61,29 @@ impl ScheduleRuntimeStore {
     pub fn open(data_dir: &std::path::Path) -> Arc<Self> {
         let path = data_dir.join(FILE_NAME);
         let map = match std::fs::read_to_string(&path) {
-            Ok(s) => ron::from_str::<HashMap<String, ScheduleRuntime>>(&s).unwrap_or_else(|e| {
-                warn!(?e, "schedule runtime file unparseable; starting empty");
+            Ok(s) => match ron::from_str::<HashMap<String, ScheduleRuntime>>(&s) {
+                Ok(map) => map,
+                Err(error) => {
+                    crate::log_handled!(
+                        warn,
+                        error,
+                        "schedule runtime file unparseable; starting empty"
+                    );
+                    HashMap::new()
+                }
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                info!("No schedule_runtime.ron found, starting empty");
                 HashMap::new()
-            }),
-            Err(_) => HashMap::new(),
+            }
+            Err(error) => {
+                crate::log_handled!(
+                    warn,
+                    error,
+                    "schedule runtime file unreadable; starting empty"
+                );
+                HashMap::new()
+            }
         };
         Arc::new(Self {
             path,
@@ -100,6 +120,19 @@ impl ScheduleRuntimeStore {
         }
     }
 
+    /// Drop counters of schedules that no longer exist, so deleted or renamed
+    /// schedules do not accumulate in the file. Counters are keyed by name, so
+    /// a renamed schedule starts from zero. Written with the next flush.
+    pub async fn retain_schedules(&self, schedules: &[Schedule]) {
+        let mut g = self.data.lock().await;
+        let before = g.map.len();
+        g.map
+            .retain(|name, _| schedules.iter().any(|schedule| &schedule.name == name));
+        if g.map.len() != before {
+            g.dirty = true;
+        }
+    }
+
     /// Force-flush any pending writes. Call from graceful shutdown.
     pub async fn flush(&self) {
         let mut g = self.data.lock().await;
@@ -108,9 +141,9 @@ impl ScheduleRuntimeStore {
         }
     }
 
-    /// Writes while the caller holds the state lock, so concurrent schedule
-    /// children never race on the shared `.tmp` path or land an older
-    /// snapshot over a newer one.
+    /// Writes while the caller holds the state lock, so a flush never races
+    /// another on the shared `.tmp` path or lands an older snapshot over a
+    /// newer one.
     // ponytail: dashboard snapshot reads wait on the disk write; it is a
     // small file at most every 5s.
     async fn write(path: &std::path::Path, g: &mut RuntimeState, what: &'static str) {
@@ -119,7 +152,9 @@ impl ScheduleRuntimeStore {
                 g.dirty = false;
                 g.last_flush = std::time::Instant::now();
             }
-            Err(e) => warn!(?e, "{what}"),
+            Err(error) => {
+                crate::log_handled!(warn, error, failure = what, "schedule runtime write failed");
+            }
         }
     }
 }
@@ -184,5 +219,36 @@ mod tests {
         assert!(dir.path().join("schedule_runtime.ron").exists());
         let s2 = ScheduleRuntimeStore::open(dir.path());
         assert!(s2.snapshot(Timestamp::now()).await.contains_key("a"));
+    }
+
+    #[tokio::test]
+    async fn deleted_schedules_are_pruned_from_disk() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let now = Timestamp::now();
+        {
+            let s = ScheduleRuntimeStore::open(dir.path());
+            s.record_fire("kept", now).await;
+            s.record_fire("deleted", now).await;
+            let kept = Schedule {
+                name: "kept".into(),
+                message: "hi".into(),
+                trigger: crate::schedule::Trigger::Calendar {
+                    days: crate::schedule::WeekdaySet::default(),
+                    at: jiff::civil::time(9, 0, 0, 0),
+                },
+                start_date: None,
+                end_date: None,
+                enabled: false,
+                ping: None,
+            };
+            s.retain_schedules(&[kept]).await;
+            s.flush().await;
+        }
+        let snap = ScheduleRuntimeStore::open(dir.path()).snapshot(now).await;
+        assert!(
+            snap.contains_key("kept"),
+            "disabled schedules keep counters"
+        );
+        assert!(!snap.contains_key("deleted"));
     }
 }

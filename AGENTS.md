@@ -467,11 +467,15 @@ active-time window; or a calendar time of day), optional weekdays, an
 optional ISO 8601 date range, an optional ping name (fired as a second
 message after the schedule message, respects the ping's cooldown, a missing
 ping just warns and skips), and an enabled toggle. Validation runs on save
-(unique non-blank names, interval ≥ 1 minute, paired active-time fields, and
-at least one interval slot inside the active window). Changes apply at once:
-the scheduler subscribes to the `SettingsHandle` change-`Notify`. Fire
-counters live in `$DATA_DIR/schedule_runtime.ron`. A leftover legacy
-`[[schedules]]` in config.toml is ignored.
+(unique non-blank names, interval between 1 minute and 24 h, paired
+active-time fields, and at least one interval slot inside the active
+window; the 24 h cap and the window check run on save only, so an older
+file still loads). Changes
+apply at once: the scheduler subscribes to the `SettingsHandle`
+change-`Notify`. Fire counters live in `$DATA_DIR/schedule_runtime.ron`,
+keyed by schedule name and pruned when a schedule is deleted (a rename
+starts from zero). A leftover legacy `[[schedules]]` in config.toml is
+ignored.
 
 AI profile edits (provider, base URL, model, timeout, reasoning_effort,
 service_tier) apply live via `SettingsHandle` and `LlmRegistry` — no restart,

@@ -92,6 +92,7 @@ pub async fn run_scheduler<T, L>(
     // Slots at or before `cursor` are done: fired, or passed before startup
     // or before the edit that introduced them.
     let mut cursor = clock.now_utc();
+    runtime.retain_schedules(&settings.load().schedules).await;
 
     'run: loop {
         let next = upcoming(&settings.load().schedules, cursor)
@@ -111,6 +112,7 @@ pub async fn run_scheduler<T, L>(
                 // Count from now, so an added or edited schedule never fires
                 // for a slot that already passed.
                 cursor = clock.now_utc();
+                runtime.retain_schedules(&settings.load().schedules).await;
                 continue;
             }
         }
