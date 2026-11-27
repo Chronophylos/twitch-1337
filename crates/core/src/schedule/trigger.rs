@@ -3,8 +3,8 @@
 //! Two variants:
 //! - `Interval` — fires every `every` at wall-clock multiples, restarting
 //!   at each Berlin midnight, optionally restricted to a within-day window
-//!   and a set of weekdays. An `every` over 24h only has the midnight slot;
-//!   the dashboard refuses to save one.
+//!   and a set of weekdays. An `every` over [`MAX_INTERVAL`] only has the
+//!   midnight slot; saving refuses one.
 //! - `Calendar` — fires at a fixed `at` on each listed weekday (empty
 //!   set means every day).
 
@@ -23,6 +23,9 @@ use crate::util::{BERLIN, to_berlin};
 const SECS_PER_DAY: i64 = 86_400;
 /// Length of the repeated hour when Berlin leaves summer time.
 const FOLD_LENGTH: Duration = Duration::from_secs(3600);
+/// Longest `Interval::every` a save accepts: past a day only the midnight
+/// slot is left, which a `Calendar` trigger says plainly.
+pub const MAX_INTERVAL: Duration = Duration::from_secs(86_400);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -46,8 +49,10 @@ pub enum Trigger {
 
 impl Trigger {
     /// Next instant strictly > `now` when this trigger should fire, or `None`
-    /// when the next slot falls outside jiff's supported date range (e.g. a
-    /// user-entered `start_date` at the end of time).
+    /// when it never fires again: the next slot falls outside jiff's supported
+    /// date range (e.g. a user-entered `start_date` at the end of time), or an
+    /// `Interval` has no slot inside its active window (see
+    /// [`Self::has_slot_in_window`], which saving enforces).
     /// All arithmetic is Berlin-local; the returned `ZonedDateTime` is
     /// always in Europe/Berlin.
     ///
@@ -62,8 +67,32 @@ impl Trigger {
                 days,
                 active_from,
                 active_to,
-            } => next_interval(now, *every, days, *active_from, *active_to),
-            Trigger::Calendar { days, at } => next_calendar(now, days, *at),
+            } => next_interval(now, *every, *days, *active_from, *active_to),
+            Trigger::Calendar { days, at } => next_calendar(now, *days, *at),
+        }
+    }
+
+    /// Whether an `Interval` has any wall-clock slot inside its active window
+    /// (every 12h with 08:00–10:00 has none: its slots are 00:00 and 12:00).
+    /// `Calendar` always has one. Counted on the local clock, like
+    /// [`Self::next_fire_after`], without DST shifts.
+    pub fn has_slot_in_window(&self) -> bool {
+        match self {
+            Trigger::Interval {
+                every,
+                active_from,
+                active_to,
+                ..
+            } => (0..SECS_PER_DAY)
+                .step_by(usize::try_from(every.as_secs().max(1)).unwrap_or(usize::MAX))
+                .any(|slot| {
+                    in_window(
+                        Time::MIN.wrapping_add(SignedDuration::from_secs(slot)),
+                        *active_from,
+                        *active_to,
+                    )
+                }),
+            Trigger::Calendar { .. } => true,
         }
     }
 }
@@ -71,7 +100,7 @@ impl Trigger {
 fn next_interval(
     now: ZonedDateTime,
     every: Duration,
-    days: &WeekdaySet,
+    days: WeekdaySet,
     active_from: Option<Time>,
     active_to: Option<Time>,
 ) -> Option<ZonedDateTime> {
@@ -96,12 +125,10 @@ fn next_interval(
             return Some(next);
         }
     }
-    // No slot ever lands in the window (e.g. every 12h, 08:00-10:00). Push it
-    // far out rather than fire outside the window.
-    now.checked_add(SignedDuration::from_secs(
-        every.as_secs() as i64 * 14 * 1440,
-    ))
-    .ok()
+    // Every allowed weekday was scanned and no slot landed in the window, so
+    // none ever will (e.g. every 12h, 08:00-10:00). Saving rejects this; a
+    // file written before that rule just never fires.
+    None
 }
 
 /// Real instants for one local slot. In the autumn fold a slot exists twice;
@@ -134,13 +161,6 @@ impl Local {
             Local::None => None,
         }
     }
-
-    fn single(self) -> Option<ZonedDateTime> {
-        match self {
-            Local::Single(t) => Some(t),
-            Local::Ambiguous(..) | Local::None => None,
-        }
-    }
 }
 
 fn berlin_local(naive: DateTime) -> Local {
@@ -155,35 +175,21 @@ fn berlin_local(naive: DateTime) -> Local {
     }
 }
 
-fn next_calendar(now: ZonedDateTime, days: &WeekdaySet, at: Time) -> Option<ZonedDateTime> {
-    let base_date = now.date();
+fn next_calendar(now: ZonedDateTime, days: WeekdaySet, at: Time) -> Option<ZonedDateTime> {
+    // Day +7 is today's weekday again with a later instant, so any allowed
+    // weekday yields a slot inside the scan.
     for offset in 0..=7 {
-        let date = base_date.checked_add(offset.days()).ok()?;
-        let wd = date.weekday();
-        if !days.allows(wd) {
+        let date = now.date().checked_add(offset.days()).ok()?;
+        if !days.allows(date.weekday()) {
             continue;
         }
-        let naive = date.to_datetime(at);
-        let candidate = match berlin_local(naive) {
-            Local::Single(t) => t,
-            Local::Ambiguous(t1, _t2) => t1,
-            Local::None => {
-                // Spring-forward gap: pick post-gap by adding 1h.
-                let bumped = naive + SignedDuration::from_hours(1);
-                berlin_local(bumped).single().unwrap_or_else(|| now.clone())
-            }
-        };
-        if candidate > now {
-            return Some(candidate);
+        if let [Some(t), _] = slot_instants(date.to_datetime(at), false)
+            && t > now
+        {
+            return Some(t);
         }
     }
-    // Fallback: 7 days from now at `at`.
-    let date = base_date.checked_add(7.days()).ok()?;
-    let naive = date.to_datetime(at);
-    match berlin_local(naive).single() {
-        Some(t) => Some(t),
-        None => now.checked_add(SignedDuration::from_hours(7 * 24)).ok(),
-    }
+    None
 }
 
 fn in_window(t: Time, from: Option<Time>, to: Option<Time>) -> bool {
@@ -221,7 +227,7 @@ mod ser_de_tests {
     #[test]
     fn calendar_round_trips_in_ron() {
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Thursday);
+        days.insert(Weekday::Thursday);
         let t = Trigger::Calendar {
             days,
             at: jiff::civil::time(20, 0, 0, 0),
@@ -368,8 +374,8 @@ mod interval_filter_tests {
         // now 17:30 -> 18:00 should still fire today (Thu).
         let now = now_berlin(2026, 5, 28, 17, 30);
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Tuesday);
-        days.0.insert(Weekday::Thursday);
+        days.insert(Weekday::Tuesday);
+        days.insert(Weekday::Thursday);
         let trig = Trigger::Interval {
             every: Duration::from_secs(3600),
             days,
@@ -387,8 +393,8 @@ mod interval_filter_tests {
         // 2026-05-29 is a Friday; days = {Tue, Thu}; should roll to Tue.
         let now = now_berlin(2026, 5, 29, 9, 0);
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Tuesday);
-        days.0.insert(Weekday::Thursday);
+        days.insert(Weekday::Tuesday);
+        days.insert(Weekday::Thursday);
         let trig = Trigger::Interval {
             every: Duration::from_secs(3600),
             days,
@@ -404,8 +410,8 @@ mod interval_filter_tests {
         // Tue/Thu, 18:00–23:00, every 30m, now Fri 10:00 -> Tue 18:00.
         let now = now_berlin(2026, 5, 29, 10, 0);
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Tuesday);
-        days.0.insert(Weekday::Thursday);
+        days.insert(Weekday::Tuesday);
+        days.insert(Weekday::Thursday);
         let trig = Trigger::Interval {
             every: Duration::from_secs(1800),
             days,
@@ -416,6 +422,27 @@ mod interval_filter_tests {
         assert_eq!(next.weekday(), Weekday::Tuesday);
         assert_eq!(next.hour(), 18);
         assert_eq!(next.minute(), 0);
+    }
+
+    #[test]
+    fn interval_with_no_slot_in_window_never_fires() {
+        // every 12h has slots 00:00 and 12:00; neither is in 08:00-10:00.
+        let trig = Trigger::Interval {
+            every: Duration::from_secs(12 * 3600),
+            days: WeekdaySet::default(),
+            active_from: Some(jiff::civil::time(8, 0, 0, 0)),
+            active_to: Some(jiff::civil::time(10, 0, 0, 0)),
+        };
+        assert!(!trig.has_slot_in_window());
+        assert_eq!(trig.next_fire_after(now_berlin(2026, 5, 28, 6, 0)), None);
+
+        let every_2h = Trigger::Interval {
+            every: Duration::from_secs(2 * 3600),
+            days: WeekdaySet::default(),
+            active_from: Some(jiff::civil::time(8, 0, 0, 0)),
+            active_to: Some(jiff::civil::time(10, 0, 0, 0)),
+        };
+        assert!(every_2h.has_slot_in_window());
     }
 }
 
@@ -462,7 +489,7 @@ mod calendar_tests {
         // Thu 19:00, days={Thu}, at 20:00 -> today 20:00.
         let now = now_berlin(2026, 5, 28, 19, 0);
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Thursday);
+        days.insert(Weekday::Thursday);
         let trig = Trigger::Calendar {
             days,
             at: jiff::civil::time(20, 0, 0, 0),
@@ -477,7 +504,7 @@ mod calendar_tests {
         // Thu 21:00, days={Thu}, at 20:00 -> next Thu 4 June 2026.
         let now = now_berlin(2026, 5, 28, 21, 0);
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Thursday);
+        days.insert(Weekday::Thursday);
         let trig = Trigger::Calendar {
             days,
             at: jiff::civil::time(20, 0, 0, 0),
@@ -493,9 +520,9 @@ mod calendar_tests {
         // days={Mon, Wed, Fri}, at 09:00, now Tue 10:00 -> Wed 09:00.
         let now = now_berlin(2026, 5, 26, 10, 0); // Tue 2026-05-26
         let mut days = WeekdaySet::default();
-        days.0.insert(Weekday::Monday);
-        days.0.insert(Weekday::Wednesday);
-        days.0.insert(Weekday::Friday);
+        days.insert(Weekday::Monday);
+        days.insert(Weekday::Wednesday);
+        days.insert(Weekday::Friday);
         let trig = Trigger::Calendar {
             days,
             at: jiff::civil::time(9, 0, 0, 0),

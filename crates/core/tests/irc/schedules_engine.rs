@@ -1,16 +1,10 @@
-//! End-to-end integration tests for the schedule orchestrator.
+//! End-to-end integration tests for the scheduler.
 //!
-//! Two tests at different depths:
-//!
-//! 1. `settings_save_signals_subscription` (variant c) — proves save→change
-//!    signal fires (via `SettingsHandle::subscribe()`) and the new typed
-//!    `Schedule` round-trips through `SettingsStore` without spawning the
-//!    full bot.
-//!
-//! 2. `schedule_fires_after_clock_advance` (variant a) — spawns the full bot
-//!    via `TestBotBuilder` with a `FakeClock`, pre-seeds an interval schedule,
-//!    advances the fake clock past the first fire point, and asserts the
-//!    scheduled message appears on the transport + the fire is recorded.
+//! - `settings_save_signals_subscription` proves save → change signal fires
+//!   (via `SettingsHandle::subscribe()`) and the typed `Schedule` round-trips
+//!   through `SettingsStore` without spawning the full bot.
+//! - The rest spawn the full bot via `TestBotBuilder` with a `FakeClock`,
+//!   advance the clock, and assert what reaches the transport.
 
 use super::common;
 
@@ -116,11 +110,9 @@ async fn schedule_fires_after_clock_advance() {
         .spawn()
         .await;
 
-    // The orchestrator performs an initial reconcile on startup and spawns the
-    // per-schedule task immediately. The task calls clock.sleep_until() for
-    // the first interval-aligned fire (11:01 Berlin = +60s from start).
-    //
-    // Give the spawned task a moment to register its sleep_until waiter.
+    // The scheduler computes the first interval-aligned fire on startup
+    // (11:01 Berlin = +60s from start) and sleeps until it. Give it a moment
+    // to register its sleep_until waiter.
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Advance 2 minutes: moves clock past 11:01, waking the sleeper.
@@ -197,6 +189,86 @@ async fn schedule_with_ping_sends_message_then_ping_respecting_cooldown() {
     tokio::time::sleep(Duration::from_millis(50)).await;
     bot.clock.advance(SignedDuration::from_mins(1));
     assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, "raid time");
+    bot.expect_silent(Duration::from_millis(300)).await;
+
+    bot.shutdown().await;
+}
+
+fn every_minute(name: &str, message: &str, enabled: bool) -> Schedule {
+    Schedule {
+        ping: None,
+        name: name.into(),
+        message: message.into(),
+        trigger: Trigger::Interval {
+            every: std::time::Duration::from_secs(60),
+            days: WeekdaySet::default(),
+            active_from: None,
+            active_to: None,
+        },
+        start_date: None,
+        end_date: None,
+        enabled,
+    }
+}
+
+fn berlin(h: i8, m: i8, s: i8) -> jiff::Timestamp {
+    jiff::civil::date(2026, 4, 18)
+        .at(h, m, s, 0)
+        .in_tz("Europe/Berlin")
+        .unwrap()
+        .timestamp()
+}
+
+async fn save_schedules(bot: &common::TestBot, schedules: Vec<Schedule>) {
+    bot.settings_store
+        .apply(
+            SettingsOverrides {
+                schedules: Some(schedules),
+                ..Default::default()
+            },
+            Actor {
+                user_id: "1".into(),
+                user_login: "tester".into(),
+            },
+        )
+        .await
+        .expect("apply");
+    // Let the scheduler observe the change and re-arm its sleep.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+}
+
+/// Disabling a schedule on the dashboard stops it before its next slot.
+#[tokio::test]
+async fn disabled_schedule_stops_at_once() {
+    let mut bot = TestBotBuilder::new()
+        .at(berlin(11, 0, 0))
+        .with_settings(|o| o.schedules = Some(vec![every_minute("tick", "tick", true)]))
+        .spawn()
+        .await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    save_schedules(&bot, vec![every_minute("tick", "tick", false)]).await;
+    bot.clock.advance(SignedDuration::from_mins(2));
+    bot.expect_silent(Duration::from_millis(300)).await;
+
+    bot.shutdown().await;
+}
+
+/// A schedule added after one of its slots passed waits for the next slot
+/// instead of firing for the missed one.
+#[tokio::test]
+async fn added_schedule_does_not_fire_for_a_passed_slot() {
+    let mut bot = TestBotBuilder::new().at(berlin(10, 59, 50)).spawn().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // 11:00:00 passes while there is no schedule.
+    bot.clock.advance(SignedDuration::from_secs(40));
+    save_schedules(&bot, vec![every_minute("late", "late", true)]).await;
+    bot.expect_silent(Duration::from_millis(300)).await;
+
+    // 11:00:30 → 11:01:30 crosses the 11:01 slot.
+    bot.clock.advance(SignedDuration::from_mins(1));
+    assert_eq!(bot.expect_reply(Duration::from_secs(2)).await, "late");
     bot.expect_silent(Duration::from_millis(300)).await;
 
     bot.shutdown().await;

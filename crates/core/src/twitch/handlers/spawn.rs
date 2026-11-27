@@ -31,7 +31,7 @@ use crate::{
             latency::run_latency_handler,
             link_correction::run_link_correction_handler,
             router::run_message_router,
-            schedule_runner::{SchedulePing, run_orchestrator},
+            schedule_runner::{SchedulePing, run_scheduler},
             tracker_1337::run_1337_handler,
         },
     },
@@ -350,8 +350,7 @@ fn register_lifecycle_loop<F>(
 /// Register a loop that still exposes its domain-specific one-shot shutdown
 /// seam. The supervisor latches cancellation, sends the retained `Notify`
 /// permit, and then waits for the existing task to finish. This preserves the
-/// schedule orchestrator's in-flight `say()` drain and the recap batcher's
-/// graceful return.
+/// recap batcher's graceful return.
 fn register_notify_loop<F>(
     supervisor: &mut TaskSupervisor,
     lifecycle: Lifecycle,
@@ -470,27 +469,21 @@ pub(crate) fn spawn_handlers<T, L>(
         ),
     );
 
-    // Schedules keeps its explicit child-task ownership API and is joined after
-    // the lifecycle-to-Notify bridge sends its shutdown permit.
-    let schedule_shutdown = Arc::new(Notify::new());
     {
         let services = services.clone();
         let sender = chat_sender.clone();
-        let shutdown = schedule_shutdown.clone();
-        let schedule_lifecycle = lifecycle.clone();
-        register_notify_loop(
+        let scheduler_lifecycle = lifecycle.clone();
+        register_lifecycle_loop(
             supervisor,
             lifecycle.clone(),
             "scheduled messages",
-            shutdown,
-            run_orchestrator(
+            run_scheduler(
                 sender,
                 services.settings.clone(),
                 services.schedule_runtime.clone(),
                 services.channel.clone(),
-                schedule_shutdown,
                 services.clock.clone(),
-                schedule_lifecycle,
+                scheduler_lifecycle,
                 SchedulePing {
                     handle: services.ping.clone(),
                     settings: services.settings.clone(),

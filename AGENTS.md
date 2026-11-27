@@ -461,14 +461,21 @@ recheck fails closed: if Twitch errors or the token is rejected, the session is
 dropped and the user logs in again.
 
 Schedules live in `settings.ron`, managed via `/schedules` (mod-gated). Each
-row carries name, message, an interval (hours + minutes inputs), optional ISO 8601 date range, optional
-HH:MM active-time window, an optional ping name (fired as a second
+row carries name, message, a trigger (an interval of hours + minutes, at most
+24 h, counted from Berlin midnight on the wall clock, with an optional HH:MM
+active-time window; or a calendar time of day), optional weekdays, an
+optional ISO 8601 date range, an optional ping name (fired as a second
 message after the schedule message, respects the ping's cooldown, a missing
 ping just warns and skips), and an enabled toggle. Validation runs on save
-(unique non-blank names, parseable interval, paired active-time fields).
-Changes apply within ~30s via a `SettingsHandle` change-`Notify` signal that
-the `ScheduleCache` sync task subscribes to. A leftover legacy `[[schedules]]`
-in config.toml is ignored.
+(unique non-blank names, interval between 1 minute and 24 h, paired
+active-time fields, and at least one interval slot inside the active
+window; the 24 h cap and the window check run on save only, so an older
+file still loads). Changes
+apply at once: the scheduler subscribes to the `SettingsHandle`
+change-`Notify`. Fire counters live in `$DATA_DIR/schedule_runtime.ron`,
+keyed by schedule name and pruned when a schedule is deleted (a rename
+starts from zero). A leftover legacy `[[schedules]]` in config.toml is
+ignored.
 
 AI profile edits (provider, base URL, model, timeout, reasoning_effort,
 service_tier) apply live via `SettingsHandle` and `LlmRegistry` — no restart,
@@ -522,7 +529,7 @@ Lookup airports and PLZ are trimmed and packed in `build.rs` as flat little-endi
 - AI memory (v2): per-user character sheets + chat LORE + bot SOUL as markdown under $DATA_DIR/memories/. Single-loop !ai turn drives the model with write_file/write_scratch/delete_scratch tools (run_agent in the llm crate); the model's final assistant text is sent to chat verbatim. Daily dreamer ritual rewrites files from yesterday's transcript at the dashboard-configured `ai.dreamer.run_at` (Berlin local). Per ADR-0003, Memory (SOUL/LORE/users) and Scratch (`memories/scratch/`) are siblings, not tiers of one thing; see CONTEXT.md. Bodies are byte-capped (SOUL/user 4 KiB, LORE 12 KiB, scratch 2 KiB by default; tunable via the dashboard `AI · Memory` card). `@grok` uses a separate baked head (`grok/core.md`) instead of Aurora's (`aurora/core.md`) and gets no injected memory bodies: its system message carries a paths-only manifest plus a grok-only `read_memory(path)` tool, allowlisted against the manifest paths. SOUL.md stays dreamer-only for both agents: it's never in grok's manifest, and no chat turn on either alias can write it. Grok has no write tools at all (read-only `read_memory`); in Aurora turns LORE.md needs moderator+, a regular may write only their own `users/<id>.md`, and scratch is regular-owned (regulars write/delete only scratch they created). `users/<id>.md` ids are never minted by the model: `write_file` refuses an id that is neither the speaker's, in this turn's chat history, nor an existing sheet (the dreamer additionally accepts ids carried by the transcript, whose lines are `HH:MM:SS  login#<user-id>: text`). Without that guard the dreamer invented plausible ids for logins it read in the transcript, producing duplicate sheets under ids no Twitch account owns. Recap is not Memory — paraphrased chat notes live in `$DATA_DIR/chat-recap.ron` and are injected nonce-fenced into the user message just before Recent Chat, never the system message, because viewers steer their content; see `docs/superpowers/specs/2026-08-25-ai-chat-recap-design.md`.
 - AI clients are resolved per call through `LlmRegistry` (`crates/core/src/llm_factory.rs`), keyed by (provider, base_url, key name). Editing a profile's model or changing an agent's profile selection takes effect on the next turn; changing a provider or base URL builds a new cached client, still no restart. Secrets never leave config.toml — a profile stores a key name, not the key.
 - AI mouths speak over Helix `POST /helix/chat/messages` and never join IRC, so their messages come back in over the normal broadcast channel. `EchoGuard` (`crates/core/src/twitch/echo.rs`) keeps them out of the bot's own input. Two mechanisms, both needed: the Helix `message_id` of every sent reply is registered and peeked on the way back (30s TTL, 512 cap, peeked not removed), plus a mouth login/user-id identity backstop for when the id doesn't match. Handlers call `inbound.origin().await` at their point of use (never earlier: the Helix id is registered only after the send returns, so the echo may already be routed) and get a `ChatOrigin` (`Viewer`, `Mouth`, `PendingEcho`); they ask its named eligibilities and never query `EchoGuard` themselves. The policy table is on `ChatOrigin`: chat history, transcript and command dispatch skip both `Mouth` and `PendingEcho` (our own output is never fresh input); the 1337 tracker and link correction skip only `Mouth`, and emote usage flags only `Mouth` (identity only, so a stale pending id never filters a viewer). Chat-turn prompts name the mapping via a runtime Konten/Accounts system appendix; a reply parent from a Mouth is labeled `(self)` / the other agent, not an untrusted viewer.
-- Scheduled messages: list loaded from `settings.ron` into `ScheduleCache`; the `run_schedule_settings_sync` task subscribes to `SettingsStore`'s change-`Notify` and updates the cache when the dashboard saves. The message handler polls the cache every 30s. On Ctrl+C, main notifies `Arc<Notify>`; children finish in-flight `say()` then exit; main awaits handler with 5s timeout.
+- Scheduled messages (`twitch/handlers/schedule_runner.rs`): one `run_scheduler` task sleeps until the earliest `Schedule::next_active_fire` of any enabled schedule, a settings change-`Notify`, or lifecycle cancellation, then fires what is due in time order (message, recorded fire, optional ping). Every wake reads the current settings, so edits apply at once; a cursor makes each slot fire at most once, never catches up missed slots, and resets on a settings change so a new or edited schedule never fires for a slot that already passed. Shutdown lets an in-flight `say()` finish, stops before the next fire, and flushes the runtime counters.
 - Alerts: one handler task, four feeds, wall-clock due-gates per feed so
   `poll_secs` edits apply within a tick. Seen ids persist to
   `$DATA_DIR/alerts.ron` (FIFO, 500/feed, including `cme` and `f1`). An unseen event older than

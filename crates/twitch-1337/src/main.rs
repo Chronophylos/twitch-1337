@@ -425,7 +425,7 @@ async fn prepare(
         (None, None)
     };
 
-    // Build the schedule runtime store once so the IRC orchestrator and WebState share the same Arc.
+    // Build the schedule runtime store once so the IRC scheduler and WebState share the same Arc.
     let schedule_runtime = twitch_1337::schedule::ScheduleRuntimeStore::open(&get_data_dir());
 
     // Soft-fail: open/migrate error leaves None and disables the tracker only.

@@ -200,7 +200,7 @@ pub struct Services {
         Option<Arc<tokio::sync::Mutex<Option<crate::ai::chat_history::ChatHistory>>>>,
 
     /// Per-schedule runtime state. Constructed here and shared with both
-    /// the IRC `schedule_runner` orchestrator and `WebState` (via the web
+    /// the IRC scheduler (`schedule_runner`) and `WebState` (via the web
     /// spawner closure) so the dashboard reads live fire counters from the
     /// same in-memory map the bot writes.
     pub schedule_runtime: Arc<crate::schedule::ScheduleRuntimeStore>,
