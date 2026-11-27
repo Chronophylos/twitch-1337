@@ -8,7 +8,7 @@
 //! The feed owns its catch-up window instead of using the shared
 //! `alerts.max_age_secs`: a reminder stays announceable from its due instant
 //! until the race starts, so failed polls or a restart late in the Race Week
-//! post it late rather than drop it. The handler polls with [`MAX_AGE`].
+//! post it late rather than drop it. The handler polls with `MAX_AGE`.
 
 use jiff::{SignedDuration, Timestamp, ToSpan as _, civil};
 use serde::Deserialize;
