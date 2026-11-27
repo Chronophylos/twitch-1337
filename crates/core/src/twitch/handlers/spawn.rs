@@ -615,7 +615,7 @@ pub(crate) fn spawn_handlers<T, L>(
                     clk,
                     task_lifecycle,
                 )
-                .await;
+                .await
             },
         );
     }

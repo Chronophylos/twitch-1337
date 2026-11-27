@@ -11,17 +11,17 @@ pub mod quake;
 pub mod solar;
 pub mod state;
 
-pub use crate::settings::alerts::class_rank;
-
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+use eyre::WrapErr as _;
 use jiff::{SignedDuration, Timestamp};
 use tracing::{Instrument as _, info_span};
 
 use crate::lifecycle::Lifecycle;
 use crate::settings::AlertsSettings;
+use crate::settings::alerts::class_rank;
 use crate::util::http::SendTraced as _;
 use state::SeenState;
 
@@ -68,13 +68,11 @@ pub(crate) fn select_announcements(
     let mut out = Vec::new();
     let mut changed = false;
     for c in candidates {
-        if seen.contains(&c.id) {
+        if !state::mark(seen, c.id) {
             continue;
         }
-        let fresh = now - c.at <= max_age;
-        state::mark(seen, c.id);
         changed = true;
-        if fresh {
+        if now - c.at <= max_age {
             out.push(c.line);
         }
     }
@@ -210,8 +208,8 @@ struct Polled {
 ///
 /// One task, four independent cadences. Every failure mode degrades to
 /// "skip this tick" — the next poll is the retry. Feed failures are not task
-/// faults; an optional-client build failure returns visibly to the supervisor,
-/// and lifecycle cancellation returns only after the current atomic step.
+/// faults; a client build failure returns `Err` to the supervisor, and
+/// lifecycle cancellation returns only after the current atomic step.
 pub async fn run_alerts_handler<T, L>(
     sender: Arc<crate::twitch::ChatSender<T, L>>,
     channel: String,
@@ -219,20 +217,12 @@ pub async fn run_alerts_handler<T, L>(
     data_dir: std::path::PathBuf,
     clock: Arc<dyn crate::util::clock::Clock>,
     lifecycle: Lifecycle,
-) where
+) -> eyre::Result<()>
+where
     T: twitch_irc::transport::Transport,
     L: twitch_irc::login::LoginCredentials,
 {
-    let http = match http_client() {
-        Ok(c) => c,
-        Err(error) => {
-            tracing::error!(
-                ?error,
-                "Failed to build alerts HTTP client; alerts task exiting"
-            );
-            return;
-        }
-    };
+    let http = http_client().wrap_err("failed to build alerts HTTP client")?;
 
     let sender: &crate::twitch::ChatSender<T, L> = &sender;
     let channel: &str = &channel;
@@ -244,7 +234,7 @@ pub async fn run_alerts_handler<T, L>(
     loop {
         tokio::select! {
             biased;
-            _ = lifecycle.wait_for_cancellation() => return,
+            _ = lifecycle.wait_for_cancellation() => return Ok(()),
             _ = tokio::time::sleep(TICK) => {}
             _ = changes.next() => {}
         }
@@ -253,7 +243,7 @@ pub async fn run_alerts_handler<T, L>(
 
         for (feed, due) in Feed::ALL.into_iter().zip(&mut due) {
             if lifecycle.is_cancelled() {
-                return;
+                return Ok(());
             }
             let Some(poll_secs) = feed.poll_secs(&cfg) else {
                 continue;
@@ -287,7 +277,7 @@ pub async fn run_alerts_handler<T, L>(
             .instrument(info_span!(parent: None, "alerts.poll", alerts.feed = feed.name()))
             .await;
             if !completed {
-                return;
+                return Ok(());
             }
         }
     }
