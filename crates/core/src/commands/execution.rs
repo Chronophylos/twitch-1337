@@ -1,11 +1,12 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::Arc;
+use std::task::{Poll, Waker};
 
 use eyre::Result;
 use parking_lot::Mutex;
 use thiserror::Error;
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::{JoinError, JoinSet};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument as _, Span, debug, info, warn};
@@ -941,7 +942,6 @@ pub struct CommandTaskGroup {
 
 struct CommandTaskGroupInner {
     tasks: Mutex<CommandTasks>,
-    completed: Semaphore,
 }
 
 struct CommandTasks {
@@ -949,21 +949,25 @@ struct CommandTasks {
     blocking: JoinSet<()>,
     children: JoinSet<()>,
     closed: bool,
+    /// Waker of the pending [`CommandTaskGroup::join_next_event`]. A `JoinSet`
+    /// only wakes its poller for tasks it held when polled, so a spawn into a
+    /// set that was empty, or a close, has to wake the poller itself.
+    waker: Option<Waker>,
 }
 
-struct CompletionSignal(Arc<CommandTaskGroupInner>);
+impl CommandTasks {
+    fn wake(&mut self) {
+        if let Some(waker) = self.waker.take() {
+            waker.wake();
+        }
+    }
+}
 
 enum TaskGroupEvent {
     Command(Option<Result<TaskCompletion, JoinError>>),
     Blocking(Result<(), JoinError>),
     Child(Result<(), JoinError>),
     Closed,
-}
-
-impl Drop for CompletionSignal {
-    fn drop(&mut self) {
-        self.0.completed.add_permits(1);
-    }
 }
 
 impl Default for CommandTaskGroup {
@@ -975,8 +979,8 @@ impl Default for CommandTaskGroup {
                     blocking: JoinSet::new(),
                     children: JoinSet::new(),
                     closed: false,
+                    waker: None,
                 }),
-                completed: Semaphore::new(0),
             }),
         }
     }
@@ -1013,9 +1017,7 @@ impl CommandTaskGroup {
             span,
         } = invocation;
         let user_key = context.user_key.clone();
-        let completion_signal = self.inner.clone();
         let task = async move {
-            let _completion_signal = CompletionSignal(completion_signal);
             // `execute` consumes the context; keep what the fallback reply needs.
             let privmsg = context.privmsg.clone();
             let sender = context.sender.clone();
@@ -1046,6 +1048,7 @@ impl CommandTaskGroup {
             return Err(TaskGroupError::Closed);
         }
         tasks.active.spawn(task);
+        tasks.wake();
         Ok(())
     }
 
@@ -1065,13 +1068,12 @@ impl CommandTaskGroup {
         if tasks.closed {
             return Err(TaskGroupError::Closed);
         }
-        let completion_signal = CompletionSignal(self.inner.clone());
         // The blocking child is the command's work, so it stays in its span.
         let span = Span::current();
         tasks.blocking.spawn_blocking(move || {
-            let _completion_signal = completion_signal;
             span.in_scope(|| sender.send(task()).ok());
         });
+        tasks.wake();
         Ok(receiver)
     }
 
@@ -1089,14 +1091,13 @@ impl CommandTaskGroup {
         if tasks.closed {
             return Err(TaskGroupError::Closed);
         }
-        let completion_signal = CompletionSignal(self.inner.clone());
         tasks.children.spawn(
             async move {
-                let _completion_signal = completion_signal;
                 sender.send(task.await).ok();
             }
             .in_current_span(),
         );
+        tasks.wake();
         Ok(receiver)
     }
 
@@ -1117,7 +1118,7 @@ impl CommandTaskGroup {
         let mut tasks = self.inner.tasks.lock();
         if !tasks.closed {
             tasks.closed = true;
-            self.inner.completed.add_permits(1);
+            tasks.wake();
         }
     }
 
@@ -1143,48 +1144,30 @@ impl CommandTaskGroup {
     }
 
     async fn join_next_event(&self) -> TaskGroupEvent {
-        loop {
-            let (empty, closed) = {
-                let tasks = self.inner.tasks.lock();
-                (
-                    tasks.active.is_empty()
-                        && tasks.blocking.is_empty()
-                        && tasks.children.is_empty(),
-                    tasks.closed,
-                )
-            };
-            if empty {
-                return if closed {
-                    TaskGroupEvent::Closed
-                } else {
-                    std::future::pending().await
-                };
+        std::future::poll_fn(|cx| {
+            let mut tasks = self.inner.tasks.lock();
+            // An empty set answers `Ready(None)` without registering the
+            // waker; `CommandTasks::wake` on spawn covers that set.
+            if let Poll::Ready(Some(result)) = tasks.active.poll_join_next(cx) {
+                return Poll::Ready(TaskGroupEvent::Command(Some(result)));
             }
-            #[expect(
-                clippy::expect_used,
-                reason = "the completion semaphore is never closed"
-            )]
-            let permit = self
-                .inner
-                .completed
-                .acquire()
-                .await
-                .expect("command task semaphore is never closed");
-            let event = {
-                let mut tasks = self.inner.tasks.lock();
-                if let Some(result) = tasks.active.try_join_next() {
-                    Some(TaskGroupEvent::Command(Some(result)))
-                } else if let Some(result) = tasks.blocking.try_join_next() {
-                    Some(TaskGroupEvent::Blocking(result))
-                } else {
-                    tasks.children.try_join_next().map(TaskGroupEvent::Child)
-                }
-            };
-            drop(permit);
-            if let Some(event) = event {
-                return event;
+            if let Poll::Ready(Some(result)) = tasks.blocking.poll_join_next(cx) {
+                return Poll::Ready(TaskGroupEvent::Blocking(result));
             }
-        }
+            if let Poll::Ready(Some(result)) = tasks.children.poll_join_next(cx) {
+                return Poll::Ready(TaskGroupEvent::Child(result));
+            }
+            if tasks.closed
+                && tasks.active.is_empty()
+                && tasks.blocking.is_empty()
+                && tasks.children.is_empty()
+            {
+                return Poll::Ready(TaskGroupEvent::Closed);
+            }
+            tasks.waker = Some(cx.waker().clone());
+            Poll::Pending
+        })
+        .await
     }
 
     /// Close admission, then wait for every command and application-owned child.
@@ -1215,8 +1198,8 @@ impl CommandTaskGroup {
             std::mem::take(&mut tasks.blocking),
             std::mem::take(&mut tasks.children),
         );
+        tasks.wake();
         drop(tasks);
-        self.inner.completed.add_permits(1);
         sets
     }
 

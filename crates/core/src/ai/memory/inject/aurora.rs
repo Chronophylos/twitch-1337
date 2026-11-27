@@ -65,6 +65,8 @@ pub struct ChatTurnContext {
     pub recent_chat: String,
     pub memory: String,
     pub scratch: String,
+    /// Ids of the user sheets whose body made it into `memory`.
+    pub packed_user_ids: BTreeSet<String>,
 }
 
 /// Build the chat-turn injected context split into a recent-chat section and a
@@ -144,6 +146,7 @@ pub async fn build_chat_turn_context(
     // whatever budget is left over so heavy LORE/user nights don't crowd them
     // out entirely; remaining scratch still pops as oldest-first drops.
     let mut total: usize = memory_blocks.iter().map(String::len).sum();
+    let mut packed_user_ids = BTreeSet::new();
     for f in users.drain(..) {
         let FileKind::User { user_id } = &f.kind else {
             tracing::error!(?f.kind, "non-user file in user list, skipping");
@@ -165,6 +168,7 @@ pub async fn build_chat_turn_context(
         }
         total += block.len() + 1;
         memory_blocks.push(block);
+        packed_user_ids.insert(user_id.clone());
     }
 
     let mut scratch_blocks: Vec<String> = Vec::new();
@@ -188,5 +192,6 @@ pub async fn build_chat_turn_context(
         recent_chat,
         memory,
         scratch,
+        packed_user_ids,
     })
 }

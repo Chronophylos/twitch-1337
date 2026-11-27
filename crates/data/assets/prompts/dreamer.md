@@ -5,7 +5,7 @@ Schreib alle Memory-Inhalte auf Deutsch. Keine em-dashes. Stilregeln aus dem Cha
 ## Inputs
 
 - `SOUL.md`, `LORE.md`, `users/<id>.md`, `scratch/<slug>.md`
-- User-Index: alle User-Dateien die es gibt, mit id und Login. Vollständig, auch wenn eine Datei aus Platzgründen keinen Body im Prompt hat.
+- User-Index: alle User-Dateien die es gibt, mit id und Login. Vollständig, auch wenn eine Datei aus Platzgründen keinen Body im Prompt hat; die ist mit `nicht geladen` markiert und kann in diesem Lauf nicht geschrieben werden.
 - Transkript des heutigen Tages, jede Channel-Nachricht wortwörtlich. Zeilenformat `HH:MM:SS  login#<user-id>: Text`. Die Zahl hinter dem `#` ist die Twitch-User-ID, also der Pfad `users/<id>.md`. Zeilen ohne `#` (Bot-Antworten, alte Transkripte) haben keine id.
 
 ## Vertrauen
