@@ -53,7 +53,20 @@ impl TokenStorage for FileBasedTokenStorage {
                     path = %self.path.display(),
                     "Loading user access token from file"
                 );
-                let token: UserAccessToken = ron::from_str(&contents)?;
+                // A torn or empty file (crash mid-save) must not block login.
+                // The stored token is only used when it matches the config one,
+                // so falling back loses nothing that would have been used.
+                let token: UserAccessToken = match ron::from_str(&contents) {
+                    Ok(token) => token,
+                    Err(error) => {
+                        warn!(
+                            ?error,
+                            path = %self.path.display(),
+                            "Token file is unreadable, using refresh token from configuration"
+                        );
+                        return Ok(self.fresh_token_from_config());
+                    }
+                };
                 let config_token = self.initial_refresh_token.expose_secret();
                 if token.refresh_token != config_token {
                     warn!("Refresh token in config differs from stored token; using config token");
@@ -110,6 +123,21 @@ mod tests {
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "got {mode:o}");
         assert_eq!(storage.load_token().await.unwrap().access_token, "acc");
+    }
+
+    #[tokio::test]
+    async fn unparsable_token_file_falls_back_to_the_config_token() {
+        use twitch_irc::login::TokenStorage as _;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token.ron");
+        #[expect(clippy::disallowed_methods, reason = "test seeds a torn token file")]
+        std::fs::write(&path, "").unwrap();
+
+        let mut storage = super::FileBasedTokenStorage::with_path(path, "ref".into());
+        let token = storage.load_token().await.unwrap();
+        assert_eq!(token.refresh_token, "ref");
+        assert!(token.access_token.is_empty());
     }
 
     /// `token.ron` written by the chrono-era build must keep loading, or the

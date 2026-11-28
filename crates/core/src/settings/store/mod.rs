@@ -40,9 +40,10 @@ pub struct SettingsStore {
 impl SettingsStore {
     /// Open the store from `$DATA_DIR`. Reads the existing `settings.ron`
     /// (if any), resolves against compile-time defaults, validates, and
-    /// returns the `(store, handle)` pair. A corrupt or out-of-bound file
-    /// is renamed to `settings.ron.quarantine-<unix_ts>` and the load
-    /// falls back to compile defaults so the bot can still boot.
+    /// returns the `(store, handle)` pair. A knob outside its range falls
+    /// back to its default on its own. A corrupt file, or one that still
+    /// fails validation, is renamed to `settings.ron.quarantine-<unix_ts>`
+    /// and the load falls back to compile defaults so the bot can still boot.
     pub fn open(
         data_dir: &Path,
         audit: Arc<dyn AuditLog>,
@@ -50,7 +51,8 @@ impl SettingsStore {
     ) -> Result<(Arc<Self>, SettingsHandle), SettingsError> {
         let path = data_dir.join(FILE_NAME);
         let defaults = Settings::compiled_defaults();
-        let overrides = load_or_quarantine(&path)?;
+        let mut overrides = load_or_quarantine(&path)?;
+        drop_out_of_range_knobs(&mut overrides);
         let resolved = Settings::resolve(&defaults, &overrides);
         let ctx = super::ValidationContext {
             channel: boot_channel.to_owned(),
@@ -172,6 +174,9 @@ impl SettingsStore {
     {
         let _g = self.write_lock.lock().await;
         let mut current = load_overrides_async(&self.path).await?.unwrap_or_default();
+        // Same healing as `open`, so a knob dropped at boot does not reject
+        // every later save; this save then writes the file without it.
+        drop_out_of_range_knobs(&mut current);
         let prior_resolved = Settings::resolve(&self.defaults, &current);
         mutate(&mut current);
         let unresolved = Settings::resolve_knobs(&self.defaults, &current);
@@ -184,6 +189,21 @@ impl SettingsStore {
         let resolved = Settings::resolve(&self.defaults, &current);
         self.commit(&mut current, &prior_resolved, resolved, actor)
             .await
+    }
+}
+
+/// A release can tighten a knob's `min`/`max`. Reset just the knobs that no
+/// longer fit to their defaults instead of failing validation for the whole
+/// file, which would quarantine schedules, profiles and everything else.
+fn drop_out_of_range_knobs(overrides: &mut SettingsOverrides) {
+    let mut dropped = Vec::new();
+    Settings::drop_out_of_range(overrides, "", &mut dropped);
+    for e in dropped {
+        warn!(
+            field = %e.field,
+            reason = %e.message,
+            "settings.ron knob out of range, using its default"
+        );
     }
 }
 
