@@ -403,6 +403,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn out_of_range_knob_falls_back_alone_instead_of_quarantining() {
+        let mut overrides = SettingsOverrides::default();
+        overrides.cooldowns.ai = Some(99_999);
+        overrides.twitch.expected_latency = Some(250);
+        overrides.schedules = Some(vec![schedule("kept")]);
+        let (dir, store, handle) =
+            open_with_file(&ron::ser::to_string(&overrides).expect("serialize override"));
+
+        let loaded = handle.load();
+        assert_eq!(
+            loaded.cooldowns.ai,
+            Settings::compiled_defaults().cooldowns.ai
+        );
+        assert_eq!(loaded.twitch.expected_latency, 250);
+        assert_eq!(loaded.schedules.len(), 1);
+        assert!(!has_quarantine(dir.path()));
+
+        // An unrelated save must not trip over the dropped value.
+        let mut patch = SettingsOverrides::default();
+        patch.cooldowns.news = Some(42);
+        store.apply(patch, actor()).await.expect("save succeeds");
+        let body = std::fs::read_to_string(dir.path().join(FILE_NAME)).unwrap();
+        assert!(
+            !body.contains("99999"),
+            "dropped value must not be rewritten: {body}"
+        );
+        assert!(body.contains("250"));
+    }
+
+    #[tokio::test]
     async fn future_version_loads_but_refuses_to_save() {
         let body = format!(
             "(schema_version: {}, cooldowns: (ai: Some(15)), from_the_future: true)",
