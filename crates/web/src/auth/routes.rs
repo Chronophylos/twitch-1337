@@ -380,11 +380,17 @@ async fn callback(
         }
     };
 
-    // Only a Mod session needs the refresh token: its periodic recheck asks
-    // Twitch as the user. Owner and Viewer rechecks are local lookups.
+    // Only a Mod session whose recheck asks Twitch needs the refresh token.
+    // Owner and Viewer rechecks are local lookups, and so are the broadcaster
+    // and hidden admins, so their tokens are never stored.
     let refresh_token = match role {
-        crate::auth::role::Role::Mod => user_tokens.refresh_token,
-        crate::auth::role::Role::Owner | crate::auth::role::Role::Viewer => None,
+        crate::auth::role::Role::Mod
+            if crate::auth::role_check::shortcut(&me.id, &state.broadcaster_id, &hidden_admins)
+                .is_none() =>
+        {
+            user_tokens.refresh_token
+        }
+        _ => None,
     };
     let (sid, csrf_value) = state
         .sessions
@@ -620,7 +626,13 @@ async fn recheck_role(
     };
     match outcome {
         (GateOutcome::Allow, rotated) => {
+            // Twitch may revoke the old token once it rotates, so the new
+            // one goes to disk now rather than at the next periodic write.
+            let persist_now = rotated.is_some();
             state.sessions.record_role_check(sid, rotated);
+            if persist_now {
+                state.sessions.persist().await;
+            }
             Ok(())
         }
         (GateOutcome::Deny, _) => {
