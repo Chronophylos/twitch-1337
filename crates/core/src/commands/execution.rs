@@ -692,12 +692,18 @@ where
     fn refill_pending(&mut self) -> Result<(), ExecutionError> {
         let limits = self.limits();
         while self.active < limits.max_active {
-            let Some(invocation) = self.pending.front() else {
+            // The oldest invocation that may start now, not only the head: a
+            // head held back by its user's or its command's limit must not
+            // stall queued work from everyone else. Startable entries still
+            // start in FIFO order.
+            let Some((index, invocation)) = self
+                .pending
+                .iter()
+                .enumerate()
+                .find(|(_, invocation)| self.can_start(invocation, &limits))
+            else {
                 break;
             };
-            if !self.can_start(invocation, &limits) {
-                break;
-            }
 
             // Resolve before removing the accepted pending invocation. A lookup
             // failure must leave queue/counter ownership intact for cleanup.
@@ -711,12 +717,12 @@ where
             let command = entry.command().clone();
             #[expect(
                 clippy::expect_used,
-                reason = "front() returned Some above and nothing popped the queue since"
+                reason = "find() returned this index above and nothing touched the queue since"
             )]
             let invocation = self
                 .pending
-                .pop_front()
-                .expect("front was present after capacity checks");
+                .remove(index)
+                .expect("index found by the capacity scan");
             self.start(command, invocation, true)?;
         }
         Ok(())
@@ -1976,6 +1982,67 @@ mod tests {
             manager.refill_pending().unwrap();
         }
         assert_eq!(*started.lock().await, ["one", "two", "three"]);
+    }
+
+    /// A queue head held back by its user's limit must not stall a queued
+    /// invocation from someone else that could start.
+    #[tokio::test]
+    async fn blocked_queue_head_does_not_stall_other_users() {
+        let test_sender = test_sender();
+        let started = Arc::new(AsyncMutex::new(Vec::new()));
+        let notify = Arc::new(Notify::new());
+        let ai_gate = Arc::new(Semaphore::new(0));
+        let news_gate = Arc::new(Semaphore::new(0));
+        let ai = TestCommand::background(
+            "ai",
+            "!ai",
+            started.clone(),
+            notify.clone(),
+            Some(ai_gate.clone()),
+        );
+        let news = TestCommand::background(
+            "news",
+            "!news",
+            started.clone(),
+            notify.clone(),
+            Some(news_gate.clone()),
+        );
+        let limits = CommandExecutionSettings {
+            max_active: 2,
+            max_pending: 10,
+            max_active_per_user: 1,
+            max_pending_per_user: 10,
+            max_active_per_command: 10,
+            max_pending_per_command: 10,
+        };
+        let (_sender, mut manager) = make_manager(registry(vec![ai, news]), limits);
+        for (id, user, trigger) in [("ai", "alice", "a1"), ("news", "bob", "b1")] {
+            manager
+                .admit(invocation(test_sender.sender.clone(), id, user, trigger))
+                .await
+                .unwrap();
+            wait_started(&notify).await;
+        }
+        // alice is at her limit, then the global limit is full for carol.
+        for (user, trigger) in [("alice", "a2"), ("carol", "c1")] {
+            manager
+                .admit(invocation(test_sender.sender.clone(), "ai", user, trigger))
+                .await
+                .unwrap();
+        }
+        assert_eq!(manager.pending.len(), 2);
+
+        // bob finishes while alice's first command still runs.
+        news_gate.add_permits(1);
+        let completion = next_command_completion(&manager.task_group).await;
+        manager.finish(completion).unwrap();
+        manager.refill_pending().unwrap();
+        wait_started(&notify).await;
+
+        assert_eq!(*started.lock().await, ["a1", "b1", "c1"]);
+        assert_eq!(manager.pending.len(), 1);
+        ai_gate.add_permits(10);
+        manager.task_group.abort_and_join().await.unwrap();
     }
 
     #[tokio::test]
