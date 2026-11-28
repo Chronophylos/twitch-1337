@@ -40,7 +40,9 @@ use super::advance::{
     Emit, FlightUpdate, Observation, PollOutcome, RemovalReason, apply_route_outcome,
     candidate_callsign_matches_flight, format_emit, identifier_callsign, last_seen_age_secs,
 };
-use super::poll_cycle::{complete_poll_cycle, fetch_observation, fetch_route, plan_adsb_lookup};
+use super::poll_cycle::{
+    AdsbLookup, complete_poll_cycle, fetch_observation, fetch_route, plan_adsb_lookup,
+};
 use super::poll_decision::{PollPlan, poll_plan};
 use super::schedule::PollReadiness;
 
@@ -1103,19 +1105,10 @@ where
         poll_tasks
             .spawn(
                 format!("poll-{child_index}"),
-                async move {
-                    if cancellation.is_cancelled() {
-                        return None;
-                    }
-                    // This provider request is the atomic operation. Once started it is
-                    // allowed to finish (and is bounded by POLL_TIMEOUT); cancellation
-                    // prevents queued children and all later state/chat effects.
-                    let observation = fetch_observation(plan, &ac).await;
-                    Some((id, observation))
-                }
-                // Spawned tasks start detached; keep their HTTP spans under
-                // the caller's `tracker.poll_cycle`.
-                .in_current_span(),
+                poll_child(cancellation, id, plan, ac)
+                    // Spawned tasks start detached; keep their HTTP spans under
+                    // the caller's `tracker.poll_cycle`.
+                    .in_current_span(),
             )
             .await;
     }
@@ -1295,6 +1288,22 @@ where
 
 type PollAttempt = Option<(FlightIdentifier, Observation)>;
 
+/// One poll child. Cancellation drops an in-flight provider request too: the
+/// child has no side effects (results are applied by the parent), and one
+/// fetch can take 2 × `POLL_TIMEOUT`, longer than the shutdown drain, so
+/// letting it finish turned every deploy during a poll into a `DrainTimeout`.
+async fn poll_child<P: AdsbProvider>(
+    cancellation: tokio_util::sync::CancellationToken,
+    id: FlightIdentifier,
+    plan: AdsbLookup,
+    provider: P,
+) -> PollAttempt {
+    cancellation
+        .run_until_cancelled(fetch_observation(plan, &provider))
+        .await
+        .map(|observation| (id, observation))
+}
+
 fn collect_poll_results(
     completions: Vec<TaskCompletion<PollAttempt>>,
 ) -> Result<Vec<PollAttempt>, JoinError> {
@@ -1306,9 +1315,64 @@ fn collect_poll_results(
 
 #[cfg(test)]
 mod poll_task_group_tests {
-    use super::{Observation, PollOutcome, collect_poll_results};
+    use super::{AdsbLookup, Observation, PollOutcome, collect_poll_results, poll_child};
     use crate::aviation::tracker::FlightIdentifier;
     use crate::lifecycle::{Lifecycle, TaskGroup};
+
+    /// Never answers, like an upstream that hangs until the request timeout.
+    struct HangingAdsb;
+
+    #[async_trait::async_trait]
+    impl crate::aviation::AdsbProvider for HangingAdsb {
+        async fn get_aircraft_by_hex(
+            &self,
+            _hex: &str,
+        ) -> eyre::Result<Option<crate::aviation::NearbyAircraft>> {
+            std::future::pending().await
+        }
+        async fn get_aircraft_by_callsign(
+            &self,
+            _callsign: &str,
+            _preferred_hex: Option<&str>,
+        ) -> eyre::Result<Option<crate::aviation::NearbyAircraft>> {
+            std::future::pending().await
+        }
+        async fn get_flight_route(
+            &self,
+            _callsign: &str,
+        ) -> eyre::Result<Option<crate::aviation::types::FlightRoute>> {
+            std::future::pending().await
+        }
+        async fn resolve_callsign(&self, input: &str) -> String {
+            input.to_owned()
+        }
+        fn aviationstack_enabled(&self) -> bool {
+            false
+        }
+    }
+
+    /// Shutdown drains for 5 s while one fetch can take 20 s; a started
+    /// request must stop on cancellation instead of running to its timeout.
+    #[tokio::test]
+    async fn cancellation_stops_an_in_flight_provider_request() {
+        let cancellation = tokio_util::sync::CancellationToken::new();
+        let child = tokio::spawn(poll_child(
+            cancellation.clone(),
+            FlightIdentifier::Callsign("DLH1".to_owned()),
+            AdsbLookup::Hex {
+                hex: "3c6444".to_owned(),
+            },
+            HangingAdsb,
+        ));
+        tokio::task::yield_now().await;
+        cancellation.cancel();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), child)
+            .await
+            .expect("cancelled child must return well before POLL_TIMEOUT")
+            .unwrap();
+        assert!(result.is_none());
+    }
 
     #[tokio::test]
     async fn cancellation_prevents_a_queued_provider_child_from_starting() {

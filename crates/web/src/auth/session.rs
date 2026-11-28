@@ -102,10 +102,10 @@ pub struct SessionTable {
     /// in-memory (tests, web-dev bin) so they never touch disk.
     path: Option<PathBuf>,
     /// Serializes [`persist`](Self::persist) calls. `persist` is invoked from
-    /// three concurrent contexts (login, logout, the periodic snapshot task)
-    /// and `atomic_save_ron_private_async` always writes the same `.ron.tmp`
-    /// sibling — overlapping writes would tear that temp file. Holding this
-    /// across the whole snapshot+write makes the last writer win cleanly.
+    /// several concurrent contexts (login, logout, role rechecks, the periodic
+    /// snapshot task). Each save uses its own temp file, but without this an
+    /// older snapshot could be renamed over a newer one; holding the lock
+    /// across snapshot+write keeps the file in snapshot order.
     write_lock: tokio::sync::Mutex<()>,
     /// Serializes role rechecks. A Mod recheck spends the session's refresh
     /// token; two concurrent requests must not both spend it, or a rotated
@@ -168,7 +168,7 @@ impl SessionTable {
     /// is written owner-only (`0600`).
     ///
     /// The whole snapshot+write runs under `write_lock` so concurrent callers
-    /// (login, logout, the periodic task) can't tear the shared `.ron.tmp`.
+    /// can't land an older snapshot after a newer one.
     /// The snapshot is a quick clone under the `inner` read lock, which is
     /// released before the disk `await`, so only the (already serialized)
     /// writers wait — readers never block on IO.
@@ -250,6 +250,20 @@ impl SessionTable {
 
     pub fn drop_session(&self, id: &str) {
         self.inner.write().remove(id);
+    }
+
+    /// Drop every session idle for longer than `ttl`, the same rule
+    /// [`get_and_touch`](Self::get_and_touch) applies lazily. Returns how many
+    /// were removed.
+    pub fn sweep(&self, ttl: Duration) -> usize {
+        let now = self.clock.now();
+        let Ok(ttl) = SignedDuration::try_from(ttl) else {
+            return 0;
+        };
+        let mut g = self.inner.write();
+        let before = g.len();
+        g.retain(|_, s| now.duration_since(s.last_seen) <= ttl);
+        before - g.len()
     }
 
     /// Stamp a passed role recheck. `rotated` replaces the stored refresh
@@ -348,6 +362,20 @@ mod tests {
             table.get_and_touch("sid", huge_ttl).is_none(),
             "expired session must be removed from the table, not just rejected"
         );
+    }
+
+    #[test]
+    fn sweep_drops_only_sessions_past_the_ttl() {
+        let clock = TestClock::new();
+        let table = SessionTable::new(clock.clone());
+        table.insert_at("old", [0u8; 32], sample_session());
+        clock.advance(TTL);
+        table.insert_at("new", [0u8; 32], sample_session());
+        clock.advance(Duration::from_secs(1));
+
+        assert_eq!(table.sweep(TTL), 1);
+        assert!(table.get("old").is_none());
+        assert!(table.get("new").is_some());
     }
 
     #[test]

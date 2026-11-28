@@ -86,8 +86,9 @@ pub fn spawn_web_runtime(
     lifecycle: Lifecycle,
 ) -> twitch_1337_core::WebRuntimeTasks {
     let sessions = deps.state.sessions.clone();
+    let settings = deps.state.settings.clone();
     let app = build_router(deps.state);
-    let session_persistence = tokio::spawn(persist_sessions(sessions, lifecycle.clone()));
+    let session_persistence = tokio::spawn(persist_sessions(sessions, settings, lifecycle.clone()));
     let server = tokio::spawn(serve_app(listener, app, lifecycle));
     twitch_1337_core::WebRuntimeTasks {
         server,
@@ -97,24 +98,38 @@ pub fn spawn_web_runtime(
 
 /// Persist sliding session activity on the same lifecycle as the web server.
 /// The returned pre-spawned handle is part of [`WebRuntimeTasks`](twitch_1337_core::WebRuntimeTasks).
-async fn persist_sessions(sessions: Arc<auth::session::SessionTable>, lifecycle: Lifecycle) {
+///
+/// Each tick (the first fires at once, so also right after boot) drops
+/// sessions past the live `session_ttl_secs` before writing: an abandoned
+/// session is otherwise only removed when its cookie comes back, and its
+/// refresh token would sit in `sessions.ron` forever. Shutdown writes once
+/// more so activity and rotated tokens since the last tick survive a restart.
+async fn persist_sessions(
+    sessions: Arc<auth::session::SessionTable>,
+    settings: twitch_1337_core::settings::SettingsHandle,
+    lifecycle: Lifecycle,
+) {
     let mut tick = tokio::time::interval(SESSION_PERSIST_INTERVAL);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
             biased;
-            _ = lifecycle.wait_for_cancellation() => return,
+            _ = lifecycle.wait_for_cancellation() => break,
             _ = tick.tick() => {
                 // Operation boundary: lifecycle wins over a simultaneously
                 // ready tick. An already-started atomic persist is allowed to
                 // finish before this future returns.
                 if lifecycle.is_cancelled() {
-                    return;
+                    break;
                 }
+                let ttl = std::time::Duration::from_secs(settings.load().web.session_ttl_secs);
+                sessions.sweep(ttl);
                 sessions.persist().await;
             }
         }
     }
+    // One local atomic write, well inside the shutdown drain.
+    sessions.persist().await;
 }
 
 /// Serve a pre-built router with graceful shutdown.
@@ -222,4 +237,49 @@ pub fn build_router(state: WebState) -> Router {
             ))
         })
         .layer(TraceLayer::new_for_http())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use twitch_1337_core::lifecycle::Lifecycle;
+    use twitch_1337_core::settings::{Settings, SettingsHandle};
+
+    use crate::auth::role::Role;
+    use crate::auth::session::{NewSession, SessionTable};
+    use crate::clock::SystemClock;
+
+    /// A session created after the last periodic write must still be on disk
+    /// after a graceful stop, or every restart logs that user out.
+    #[tokio::test]
+    async fn shutdown_persists_sessions_created_since_the_last_tick() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.ron");
+        let sessions = Arc::new(SessionTable::load(Arc::new(SystemClock), path.clone()));
+        let lifecycle = Lifecycle::new();
+        let task = tokio::spawn(super::persist_sessions(
+            sessions.clone(),
+            SettingsHandle::from_settings(Settings::compiled_defaults()),
+            lifecycle.clone(),
+        ));
+        // Let the immediate first tick write the empty table.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let (sid, _) = sessions
+            .insert(NewSession {
+                user_id: "u1".to_owned(),
+                user_login: "mod1".to_owned(),
+                role: Role::Mod,
+                avatar_url: None,
+                is_broadcaster: false,
+                refresh_token: None,
+            })
+            .unwrap();
+
+        lifecycle.request_graceful_stop();
+        task.await.unwrap();
+
+        let restored = SessionTable::load(Arc::new(SystemClock), path);
+        assert!(restored.get(&sid).is_some(), "session lost across shutdown");
+    }
 }
