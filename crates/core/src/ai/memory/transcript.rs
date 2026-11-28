@@ -108,6 +108,36 @@ impl TranscriptWriter {
         self.transcripts_dir
             .join(format!("{}.md", date.strftime("%Y-%m-%d")))
     }
+
+    /// Delete dated transcripts (`<YYYY-MM-DD>.md`) older than `cutoff`.
+    /// `today.md` and anything else not named like a date stay. Returns how
+    /// many files were removed.
+    pub async fn prune_before(&self, cutoff: Date) -> Result<usize> {
+        let mut removed = 0;
+        let mut entries = tokio::fs::read_dir(&self.transcripts_dir)
+            .await
+            .wrap_err("read_dir transcripts")?;
+        while let Some(entry) = entries.next_entry().await.wrap_err("next_entry")? {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let Some(date) = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(|s| s.parse::<Date>().ok())
+            else {
+                continue;
+            };
+            if date < cutoff {
+                tokio::fs::remove_file(&path)
+                    .await
+                    .wrap_err_with(|| format!("remove {}", path.display()))?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]
