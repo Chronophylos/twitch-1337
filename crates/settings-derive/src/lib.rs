@@ -3,7 +3,8 @@
 //! Applied to an effective settings struct, it generates the sparse
 //! `*Overrides` mirror persisted in `settings.ron` plus an implementation of
 //! `crate::settings::knob::Knobs`: resolve, patch-merge, form parsing,
-//! constant range checks, and the `KnobMeta` table walk. The runtime half
+//! constant range checks (and dropping out-of-range overrides), and the
+//! `KnobMeta` table walk. The runtime half
 //! lives in `twitch-1337-core` (`settings/knob.rs`); generated code names it
 //! through `crate::settings::knob`, so the derive only works inside that crate.
 //!
@@ -99,6 +100,7 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
     let mut merge = Vec::new();
     let mut from_form = Vec::new();
     let mut ranges = Vec::new();
+    let mut drops = Vec::new();
     let mut visit = Vec::new();
 
     if attrs.presence {
@@ -193,6 +195,15 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     ranges.push(quote! {
                         #rt::check_range::<#ty>(prefix, #key, self.#ident, #min, #max, errs);
                     });
+                    drops.push(quote! {
+                        if let ::core::option::Option::Some(v) = o.#ident {
+                            let before = errs.len();
+                            #rt::check_range::<#ty>(prefix, #key, v, #min, #max, errs);
+                            if errs.len() > before {
+                                o.#ident = ::core::option::Option::None;
+                            }
+                        }
+                    });
                 }
                 visit.push(push_meta);
             }
@@ -213,6 +224,9 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 });
                 ranges.push(quote! {
                     #rt::Knobs::check_knob_ranges(&self.#ident, &#rt::join(prefix, #key), errs);
+                });
+                drops.push(quote! {
+                    <#ty as #rt::Knobs>::drop_out_of_range(&mut o.#ident, &#rt::join(prefix, #key), errs);
                 });
                 visit
                     .push(quote!(<#ty as #rt::Knobs>::visit_knobs(&#rt::join(prefix, #key), out);));
@@ -236,6 +250,9 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
                     if let ::core::option::Option::Some(v) = &self.#ident {
                         #rt::Knobs::check_knob_ranges(v, &#rt::join(prefix, #key), errs);
                     }
+                });
+                drops.push(quote! {
+                    <#inner as #rt::Knobs>::drop_out_of_range(&mut o.#ident, &#rt::join(prefix, #key), errs);
                 });
                 visit.push(quote! {
                     let path = #rt::join(prefix, #key);
@@ -327,6 +344,15 @@ fn expand(input: &DeriveInput) -> syn::Result<TokenStream2> {
             ) {
                 let _ = (prefix, &errs);
                 #(#ranges)*
+            }
+
+            fn drop_out_of_range(
+                o: &mut #overrides,
+                prefix: &str,
+                errs: &mut ::std::vec::Vec<crate::settings::FieldError>,
+            ) {
+                let _ = (&o, prefix, &errs);
+                #(#drops)*
             }
 
             fn visit_knobs(prefix: &str, out: &mut ::std::vec::Vec<#rt::KnobMeta>) {

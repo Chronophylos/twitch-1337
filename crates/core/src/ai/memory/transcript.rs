@@ -108,6 +108,36 @@ impl TranscriptWriter {
         self.transcripts_dir
             .join(format!("{}.md", date.strftime("%Y-%m-%d")))
     }
+
+    /// Delete dated transcripts (`<YYYY-MM-DD>.md`) older than `cutoff`.
+    /// `today.md` and anything else not named like a date stay. Returns how
+    /// many files were removed.
+    pub async fn prune_before(&self, cutoff: Date) -> Result<usize> {
+        let mut removed = 0;
+        let mut entries = tokio::fs::read_dir(&self.transcripts_dir)
+            .await
+            .wrap_err("read_dir transcripts")?;
+        while let Some(entry) = entries.next_entry().await.wrap_err("next_entry")? {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                continue;
+            }
+            let Some(date) = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(|s| s.parse::<Date>().ok())
+            else {
+                continue;
+            };
+            if date < cutoff {
+                tokio::fs::remove_file(&path)
+                    .await
+                    .wrap_err_with(|| format!("remove {}", path.display()))?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]
@@ -148,5 +178,30 @@ mod tests {
         assert_eq!(dest.file_name().unwrap().to_string_lossy(), "2026-04-27.md");
         assert!(dest.exists());
         assert!(memories.join("transcripts/today.md").exists()); // reopened empty
+    }
+
+    #[tokio::test]
+    async fn prune_removes_only_dated_files_before_the_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let memories = dir.path().join("memories");
+        let w = TranscriptWriter::open(&memories).await.unwrap();
+        let transcripts = memories.join("transcripts");
+        for name in [
+            "2026-01-01.md",
+            "2026-02-01.md",
+            "notes.md",
+            "2026-01-01.md.bak",
+        ] {
+            #[expect(clippy::disallowed_methods, reason = "test seeds transcript files")]
+            tokio::fs::write(transcripts.join(name), "x").await.unwrap();
+        }
+
+        let removed = w.prune_before(jiff::civil::date(2026, 2, 1)).await.unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!transcripts.join("2026-01-01.md").exists());
+        for kept in ["2026-02-01.md", "notes.md", "2026-01-01.md.bak", "today.md"] {
+            assert!(transcripts.join(kept).exists(), "{kept} must stay");
+        }
     }
 }

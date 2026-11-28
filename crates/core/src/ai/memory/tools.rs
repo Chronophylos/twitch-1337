@@ -49,6 +49,10 @@ fn map_write_err(err: WriteError) -> String {
         WriteError::NotOwner => {
             "permission_denied: regulars may only overwrite scratch files they created".into()
         }
+        // Only the dashboard sets identity overrides; kept for exhaustiveness.
+        WriteError::InvalidField { field } => {
+            format!("invalid_field: {field} must be a single line")
+        }
         WriteError::Io(error) => {
             tracing::error!(?error, "memory tool write failed");
             IO_ERROR_MSG.into()

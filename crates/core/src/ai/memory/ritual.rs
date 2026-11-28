@@ -30,6 +30,14 @@ use crate::settings::SettingsHandle;
 use crate::twitch::mouth::Agent;
 use crate::util::observability::{self, metrics};
 
+/// Newest part of the day the dreamer sees. A day bigger than the model's
+/// context would fail every round and, already rotated, never be dreamed.
+const MAX_DREAMER_TRANSCRIPT_BYTES: usize = 256 * 1024;
+
+/// Dated transcripts older than this are deleted after each rotation. The
+/// emotes agent samples the last 30 days, so this must stay above that.
+const TRANSCRIPT_RETENTION_DAYS: i64 = 90;
+
 /// Resolve `run_at` on `date` to a Berlin `ZonedDateTime`, bumping forward an
 /// hour when the requested local time is not unambiguous: across the
 /// spring-forward DST gap (02:00–03:00 on the last Sunday in March) or out of
@@ -97,6 +105,7 @@ pub fn spawn_ritual(
                     continue;
                 }
             };
+            let run_at_raw = ai.dreamer.run_at.clone();
             drop(snap); // do not hold a Guard across await
 
             let now = crate::util::to_berlin(Timestamp::now());
@@ -116,6 +125,14 @@ pub fn spawn_ritual(
                 biased;
                 _ = lifecycle.wait_for_cancellation() => return,
                 _ = tokio::time::sleep(wait) => {}
+            }
+            // The sleep can last a day. Disabling the dreamer or moving
+            // `run_at` during it applies now, not after one more stale run.
+            let snap = settings.load();
+            let still_due = snap.ai.dreamer.enabled && snap.ai.dreamer.run_at == run_at_raw;
+            drop(snap);
+            if !still_due {
+                continue;
             }
 
             // A wake-up can race cancellation. Do not enter the file/LLM
@@ -222,6 +239,21 @@ fn transcript_user_ids(text: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// Byte offset where the newest whole lines of `text` that fit in `max` bytes
+/// begin; `0` when everything fits. The cut always lands after a `\n`, so it
+/// is a char boundary.
+fn tail_start(text: &str, max: usize) -> usize {
+    let Some(cut) = text.len().checked_sub(max).filter(|c| *c > 0) else {
+        return 0;
+    };
+    // Search from the byte before the cut: if that is a `\n`, the cut
+    // already sits on a line start and that line is kept.
+    text.as_bytes()
+        .get(cut - 1..)
+        .and_then(|rest| rest.iter().position(|&b| b == b'\n'))
+        .map_or(text.len(), |i| cut + i)
+}
+
 pub async fn run_ritual(
     registry: &LlmRegistry,
     store: &MemoryStore,
@@ -269,12 +301,29 @@ async fn run_ritual_until(
     );
     drop(snap);
 
+    // A date is rotated once. When `run_at` moves later in the day, the next
+    // wake-up names the date that was just rotated, and renaming over it would
+    // replace the archived day with the hours since. today.md keeps growing
+    // and the next run rotates it under the following date.
+    let dated_path = transcript.dated_path_for(rotate_to);
+    if tokio::fs::try_exists(&dated_path).await.unwrap_or(false) {
+        warn!(path = %dated_path.display(), "dreamer skipped, this date was already rotated");
+        return Ok(());
+    }
+
     // Rotate first, then bail: a misconfigured model must not leave today.md
     // growing forever without a date boundary. Rotation is one atomic file
     // operation: cancellation observed during it is handled immediately after.
     let dated = transcript.rotate_to(rotate_to).await?;
     if lifecycle.is_cancelled() {
         return Ok(());
+    }
+    if let Ok(cutoff) = rotate_to.checked_sub(jiff::Span::new().days(TRANSCRIPT_RETENTION_DAYS)) {
+        match transcript.prune_before(cutoff).await {
+            Ok(0) => {}
+            Ok(removed) => info!(removed, "pruned old transcripts"),
+            Err(e) => crate::log_handled!(warn, e, "transcript prune failed"),
+        }
     }
     // Resolve fresh on every run, not once at spawn, so a dashboard profile
     // switch (or an edit to ai.dreamer.profile) applies to the next run.
@@ -289,7 +338,19 @@ async fn run_ritual_until(
         warn!("dreamer skipped, AI model is empty in settings");
         return Ok(());
     }
-    let transcript_text = tokio::fs::read_to_string(&dated).await.unwrap_or_default();
+    let full_text = tokio::fs::read_to_string(&dated).await.unwrap_or_default();
+    let start = tail_start(&full_text, MAX_DREAMER_TRANSCRIPT_BYTES);
+    let transcript_text = if start == 0 {
+        full_text
+    } else {
+        let kept = full_text.get(start..).unwrap_or_default();
+        info!(
+            kept_bytes = kept.len(),
+            total_bytes = full_text.len(),
+            "dreamer transcript capped to its newest lines"
+        );
+        format!("[ältere Zeilen des Tages ausgelassen]\n{kept}")
+    };
     // Today's chatters pack first: their sheets are the ones the dreamer
     // rewrites, and it may only rewrite a sheet whose body it was shown.
     let transcript_logins: BTreeSet<String> = transcript_speakers(&transcript_text)
@@ -901,5 +962,80 @@ not a transcript line
             transcript.dated_path_for(yesterday).exists(),
             "transcript must still rotate when the ritual skips the LLM",
         );
+    }
+
+    #[test]
+    fn tail_start_keeps_whole_newest_lines_under_the_cap() {
+        let text = "a\nbb\nccc\n";
+        assert_eq!(tail_start(text, 100), 0);
+        assert_eq!(tail_start(text, text.len()), 0);
+        assert_eq!(text.get(tail_start(text, 6)..), Some("ccc\n"));
+        // A cut that lands exactly on a line start keeps that line.
+        assert_eq!(text.get(tail_start(text, 7)..), Some("bb\nccc\n"));
+        // Multi-byte text never splits a character.
+        let umlauts = "ä\nöö\n";
+        assert_eq!(umlauts.get(tail_start(umlauts, 5)..), Some("öö\n"));
+    }
+
+    /// Moving `run_at` later makes the next wake-up name a date that was just
+    /// rotated. It must not rename today.md over the archived day.
+    #[tokio::test]
+    async fn a_date_already_rotated_is_not_overwritten() {
+        use std::sync::Arc;
+
+        use async_trait::async_trait;
+        use llm::{
+            ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse,
+        };
+
+        use crate::settings::{Settings, SettingsHandle};
+
+        struct Unused;
+        #[async_trait]
+        impl LlmClient for Unused {
+            async fn chat_completion(&self, _req: ChatCompletionRequest) -> llm::Result<String> {
+                unreachable!("empty model never reaches the provider");
+            }
+            async fn chat_completion_with_tools(
+                &self,
+                _req: ToolChatCompletionRequest,
+            ) -> llm::Result<ToolChatCompletionResponse> {
+                unreachable!("empty model never reaches the provider");
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let settings = SettingsHandle::from_settings(Settings::compiled_defaults());
+        let store = MemoryStore::open(dir.path(), settings.clone())
+            .await
+            .unwrap();
+        let transcript = TranscriptWriter::open(store.memories_dir()).await.unwrap();
+        let registry = LlmRegistry::fixed(Arc::new(Unused) as Arc<dyn LlmClient>, settings.clone());
+        let date = jiff::civil::date(2026, 4, 17);
+
+        transcript
+            .append_line(Timestamp::now(), "alice", None, "the whole day")
+            .await
+            .unwrap();
+        run_ritual(&registry, &store, &transcript, &settings, date)
+            .await
+            .unwrap();
+        transcript
+            .append_line(Timestamp::now(), "bob", None, "five more hours")
+            .await
+            .unwrap();
+        run_ritual(&registry, &store, &transcript, &settings, date)
+            .await
+            .unwrap();
+
+        let archived = tokio::fs::read_to_string(transcript.dated_path_for(date))
+            .await
+            .unwrap();
+        assert!(archived.contains("the whole day"), "got {archived}");
+        assert!(!archived.contains("five more hours"), "got {archived}");
+        let today = tokio::fs::read_to_string(store.memories_dir().join("transcripts/today.md"))
+            .await
+            .unwrap();
+        assert!(today.contains("five more hours"), "got {today}");
     }
 }

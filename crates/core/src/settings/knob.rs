@@ -45,6 +45,11 @@ pub trait Knobs: Sized {
     /// Push a `FieldError` for every knob outside its `min`/`max`.
     fn check_knob_ranges(&self, prefix: &str, errs: &mut Vec<FieldError>);
 
+    /// Unset every override outside its knob's `min`/`max`, so that knob falls
+    /// back to its default, and push a `FieldError` naming each one. A release
+    /// that tightens a range uses this to keep the rest of `settings.ron`.
+    fn drop_out_of_range(overrides: &mut Self::Overrides, prefix: &str, errs: &mut Vec<FieldError>);
+
     /// Append one [`KnobMeta`] per knob under `prefix`, in declaration order.
     fn visit_knobs(prefix: &str, out: &mut Vec<KnobMeta>);
 }
