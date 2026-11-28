@@ -617,6 +617,7 @@ impl MemoryStore {
         expected: Option<Mtime>,
         fm_override: FrontmatterOverride,
     ) -> Result<WriteOutcome, WriteError> {
+        check_identity_override(&fm_override)?;
         let rel = kind.relative_path();
         let lock = self.lock_for(&rel).await;
         let g = lock.lock().await;
@@ -759,7 +760,14 @@ impl MemoryStore {
                 None => continue,
             };
             let kind = kind_for(&stem);
-            out.push(self.read_kind(&kind).await?);
+            // One hand-edited or stray file must not take every AI turn and the
+            // dashboard list down with it.
+            match self.read_kind(&kind).await {
+                Ok(file) => out.push(file),
+                Err(error) => {
+                    warn!(?error, path = %path.display(), "skipping unreadable memory file");
+                }
+            }
         }
         out.sort_by_key(|f| std::cmp::Reverse(f.frontmatter.updated_at));
         Ok(out)
@@ -779,8 +787,29 @@ pub enum WriteError {
     /// The scratch file exists and was created by someone else.
     #[error("not_owner")]
     NotOwner,
+    /// A dashboard identity field holds a line break or other control
+    /// character, which would forge a frontmatter line.
+    #[error("invalid_field: {field}")]
+    InvalidField { field: &'static str },
     #[error("io: {0}")]
     Io(#[from] eyre::Report),
+}
+
+/// Frontmatter is one `key: value` line per field, so a control character in
+/// a dashboard-typed value (`x\nupdated_at: bad`) would write a second field
+/// and leave a sheet no reader can parse.
+fn check_identity_override(o: &FrontmatterOverride) -> Result<(), WriteError> {
+    let fields = [
+        ("username", o.username.as_deref()),
+        ("display_name", o.display_name.as_deref()),
+        ("created_by", o.created_by.as_deref()),
+    ];
+    for (field, value) in fields {
+        if value.is_some_and(|v| v.chars().any(char::is_control)) {
+            return Err(WriteError::InvalidField { field });
+        }
+    }
+    Ok(())
 }
 
 /// Count `*.md` entries in `memories/scratch/`. Used by `write_scratch` under
@@ -1372,6 +1401,66 @@ mod tests {
             .unwrap();
         let mf = store.read_kind(&kind).await.unwrap();
         assert_eq!(mf.frontmatter.created_by.as_deref(), Some("12345"));
+    }
+
+    #[tokio::test]
+    async fn write_with_guard_rejects_a_multiline_identity_field() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        let kind = FileKind::User {
+            user_id: "42".into(),
+        };
+        store
+            .write(&kind, "body", UserIdentity::of("alice", "Alice"))
+            .await
+            .unwrap();
+        let fm = FrontmatterOverride {
+            username: Some("x\nupdated_at: bad".into()),
+            ..FrontmatterOverride::default()
+        };
+        let err = store
+            .write_with_guard(kind.clone(), "body2", None, fm)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, WriteError::InvalidField { field: "username" }),
+            "got {err:?}"
+        );
+        let mf = store.read_kind(&kind).await.unwrap();
+        assert_eq!(mf.frontmatter.username.as_deref(), Some("alice"));
+        assert_eq!(mf.body, "body");
+    }
+
+    /// A hand-edited sheet without `updated_at` or a stray file must not fail
+    /// the listing every AI turn and the dashboard depend on.
+    #[tokio::test]
+    async fn listing_skips_unparsable_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MemoryStore::open(dir.path(), test_handle()).await.unwrap();
+        let good = FileKind::User {
+            user_id: "42".into(),
+        };
+        store
+            .write(&good, "body", UserIdentity::of("alice", "Alice"))
+            .await
+            .unwrap();
+        let users = store.memories_dir().join("users");
+        #[expect(clippy::disallowed_methods, reason = "test seeds broken files")]
+        {
+            std::fs::write(users.join("43.md"), "---\nusername: bob\n---\nno timestamp").unwrap();
+            std::fs::write(users.join("notes.md"), "just some notes").unwrap();
+            std::fs::write(store.memories_dir().join("scratch/Notes.md"), "x").unwrap();
+        }
+
+        let listed: Vec<_> = store
+            .list_users()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|f| f.kind)
+            .collect();
+        assert_eq!(listed, vec![good]);
+        assert!(store.list_scratch().await.unwrap().is_empty());
     }
 
     /// Store-level gate for every slug-taking scratch op; the full slug grammar

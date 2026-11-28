@@ -24,6 +24,9 @@ impl UserFacing for WriteError {
             WriteError::InvalidSlug => "invalid slug".to_owned(),
             WriteError::ReservedSlug => "reserved slug".to_owned(),
             WriteError::NotOwner => "scratch file belongs to someone else".to_owned(),
+            WriteError::InvalidField { field } => {
+                format!("{field} must be a single line without control characters")
+            }
             // `Io` should bubble via [`write_error_for_form`], not display.
             WriteError::Io(e) => format!("{e:#}"),
         }

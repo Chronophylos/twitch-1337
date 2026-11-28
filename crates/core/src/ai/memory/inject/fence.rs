@@ -81,7 +81,12 @@ pub(super) fn render_label_attrs(label: &FenceLabel<'_>) -> String {
             pronouns,
         } => {
             let mut s = format!("kind=user id={id}");
+            // Unquoted attribute: drop whitespace too, so a login can't add attributes.
             if let Some(l) = login.filter(|l| !l.is_empty()) {
+                let l: String = sanitize_attr_value(l)
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
                 s.push_str(&format!(" login={l}"));
             }
             if let Some(n) = display_name.filter(|n| !n.is_empty()) {
