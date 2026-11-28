@@ -963,4 +963,79 @@ not a transcript line
             "transcript must still rotate when the ritual skips the LLM",
         );
     }
+
+    #[test]
+    fn tail_start_keeps_whole_newest_lines_under_the_cap() {
+        let text = "a\nbb\nccc\n";
+        assert_eq!(tail_start(text, 100), 0);
+        assert_eq!(tail_start(text, text.len()), 0);
+        assert_eq!(text.get(tail_start(text, 6)..), Some("ccc\n"));
+        // A cut that lands exactly on a line start keeps that line.
+        assert_eq!(text.get(tail_start(text, 7)..), Some("bb\nccc\n"));
+        // Multi-byte text never splits a character.
+        let umlauts = "ä\nöö\n";
+        assert_eq!(umlauts.get(tail_start(umlauts, 5)..), Some("öö\n"));
+    }
+
+    /// Moving `run_at` later makes the next wake-up name a date that was just
+    /// rotated. It must not rename today.md over the archived day.
+    #[tokio::test]
+    async fn a_date_already_rotated_is_not_overwritten() {
+        use std::sync::Arc;
+
+        use async_trait::async_trait;
+        use llm::{
+            ChatCompletionRequest, LlmClient, ToolChatCompletionRequest, ToolChatCompletionResponse,
+        };
+
+        use crate::settings::{Settings, SettingsHandle};
+
+        struct Unused;
+        #[async_trait]
+        impl LlmClient for Unused {
+            async fn chat_completion(&self, _req: ChatCompletionRequest) -> llm::Result<String> {
+                unreachable!("empty model never reaches the provider");
+            }
+            async fn chat_completion_with_tools(
+                &self,
+                _req: ToolChatCompletionRequest,
+            ) -> llm::Result<ToolChatCompletionResponse> {
+                unreachable!("empty model never reaches the provider");
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let settings = SettingsHandle::from_settings(Settings::compiled_defaults());
+        let store = MemoryStore::open(dir.path(), settings.clone())
+            .await
+            .unwrap();
+        let transcript = TranscriptWriter::open(store.memories_dir()).await.unwrap();
+        let registry = LlmRegistry::fixed(Arc::new(Unused) as Arc<dyn LlmClient>, settings.clone());
+        let date = jiff::civil::date(2026, 4, 17);
+
+        transcript
+            .append_line(Timestamp::now(), "alice", None, "the whole day")
+            .await
+            .unwrap();
+        run_ritual(&registry, &store, &transcript, &settings, date)
+            .await
+            .unwrap();
+        transcript
+            .append_line(Timestamp::now(), "bob", None, "five more hours")
+            .await
+            .unwrap();
+        run_ritual(&registry, &store, &transcript, &settings, date)
+            .await
+            .unwrap();
+
+        let archived = tokio::fs::read_to_string(transcript.dated_path_for(date))
+            .await
+            .unwrap();
+        assert!(archived.contains("the whole day"), "got {archived}");
+        assert!(!archived.contains("five more hours"), "got {archived}");
+        let today = tokio::fs::read_to_string(store.memories_dir().join("transcripts/today.md"))
+            .await
+            .unwrap();
+        assert!(today.contains("five more hours"), "got {today}");
+    }
 }
